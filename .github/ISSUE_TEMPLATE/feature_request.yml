@@ -1,0 +1,15 @@
+name: Feature or new role
+description: Propose a feature, a new catalog role or a team
+labels: [enhancement]
+body:
+  - type: textarea
+    id: need
+    attributes:
+      label: What do you need and why
+    validations:
+      required: true
+  - type: textarea
+    id: role
+    attributes:
+      label: For a new role or team
+      description: Typical tasks, what "done" means, how the work is checked, tools it needs, actions that need approval.

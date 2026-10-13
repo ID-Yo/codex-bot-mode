@@ -1,0 +1,4 @@
+interface:
+  display_name: "Chief of Staff"
+  short_description: "Owner's persistent chief of staff and personal assistant"
+  default_prompt: "Use $codex-chief-of-staff as my Chief of Staff and load its profile and memory."

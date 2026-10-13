@@ -1,0 +1,43 @@
+role: null
+version: 1
+description: Empty agent built through an interview, for roles without a template.
+custom: true
+reports_to: manager
+permissions:
+  assign_work: none
+  product_writes: assigned-boundary
+  external_messages: owner-approval
+parameters:
+  role:
+    required: true
+    question: What is the role name (for example Copywriter)?
+  display_name:
+    default: inferred
+    question: What should this agent be called? Defaults to the role name.
+  purpose:
+    required: true
+    question: In one sentence, what is this agent for?
+  responsibilities:
+    required: true
+    question: What are its main responsibilities?
+  done_means:
+    required: true
+    question: When is one of its tasks done?
+  verification:
+    required: true
+    question: How should its work be checked?
+  tools:
+    default: Project files and the tools already connected in Codex.
+    question: Which tools may it use?
+  tone:
+    default: Concise, practical and accountable.
+    question: What character and tone should it have?
+  reports_to:
+    default: manager
+    question: Who does it report to?
+  model:
+    default: inherit
+    question: Which model should it use?
+  reasoning:
+    default: inherit
+    question: Which reasoning level should it use?

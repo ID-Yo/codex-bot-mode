@@ -1,0 +1,10 @@
+name: Development
+version: 3
+description: Manager, Developer, Code Reviewer, Designer and Verifier for software changes.
+roles: [manager, developer, code-reviewer, designer, verifier]
+section: "{{project}} · {{team}}"
+room: "{{team}}"
+parameters:
+  team_name:
+    default: Development
+    question: What should the team be called?

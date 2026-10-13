@@ -1,0 +1,177 @@
+import json
+import tempfile
+import unittest
+from pathlib import Path
+import shutil
+import subprocess
+import sys
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / 'scripts'))
+from team_room import manifest, roster, teams  # noqa: E402
+import team as cli  # noqa: E402
+
+CATALOG = ROOT / 'catalog'
+
+
+class TeamTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.project = Path(self.tmp.name) / 'demo'
+        self.project.mkdir()
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def run_cli(self, *args):
+        return cli.main([*args])
+
+    def test_catalog_templates_are_valid(self):
+        data = teams.index(CATALOG)
+        for item in data['agents']:
+            teams.agent_template(CATALOG, item['name'])
+        for item in data['teams']:
+            teams.team_template(CATALOG, item['name'])
+
+    def test_plan_does_not_write(self):
+        plan = teams.plan_team(self.project, 'development')
+        self.assertEqual([a['bot'] for a in plan['agents']], ['manager', 'developer', 'code-reviewer', 'designer', 'verifier'])
+        self.assertEqual(plan['section'], 'demo · Development')
+        self.assertEqual(list(self.project.iterdir()), [])
+        self.assertIsNone(plan['director_proposal'])
+
+    def test_install_team_then_second_team_and_director(self):
+        self.assertEqual(self.run_cli('install-team', 'development', '--project', str(self.project),
+                                      '--approval', 'once'), 2)  # no --confirm
+        self.assertEqual(self.run_cli('install-team', 'development', '--project', str(self.project),
+                                      '--approval', 'once', '--confirm'), 0)
+        dev = self.project / 'team/Development/developer'
+        self.assertTrue((dev / 'agent/BASE.md').exists())
+        self.assertIn('../../../.bot-mode/roster.py', (dev / 'agent/BASE.md').read_text(encoding='utf-8'))
+        links = subprocess.run([sys.executable, '-B', str(self.project / '.bot-mode/roster.py'), '--project',
+                                str(self.project), 'links'], capture_output=True, text=True)
+        self.assertEqual(links.returncode, 0, links.stderr)
+        self.assertEqual(len(json.loads(links.stdout)), 5)
+        self.assertEqual(roster.load(self.project)['project']['tooling'], str(ROOT))
+        self.assertTrue((self.project / 'team/PROJECT.md').exists())
+        meta = manifest.load(dev / 'agent/agent.yaml')
+        self.assertEqual(meta['parameters']['display_name']['source'], 'default')
+        out = subprocess.run([sys.executable, '-B', str(dev / 'scripts/bot_mode.py'), '--project', str(dev),
+                              '--bot', 'developer', 'memory'], capture_output=True, text=True)
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertEqual(json.loads(out.stdout), [])
+        data = roster.load(self.project)
+        self.assertEqual(data['teams'][0]['section'], 'demo · Development')
+        self.assertTrue(all(p['thread_id'] is None for p in data['participants']))
+        with self.assertRaises(teams.TeamError):
+            teams.plan_team(self.project, 'development')
+        plan = teams.plan_team(self.project, 'development', team_answers={'team_name': 'Platform'})
+        self.assertEqual([a['bot'] for a in plan['agents']][:2], ['platform-manager', 'platform-developer'])
+        self.assertIsNotNone(plan['director_proposal'])
+        teams.install(plan)
+        self.assertEqual(self.run_cli('add-agent', '--project', str(self.project), '--template', 'director',
+                                      '--actor', 'owner', '--approval', 'once', '--confirm'), 0)
+        director = self.project / 'team/project-director'
+        self.assertIn('- Bot ID: \x60project-director\x60', (director / 'agent/PROFILE.md').read_text(encoding='utf-8'))
+        self.assertIn('../../.bot-mode/roster.py', (director / 'agent/BASE.md').read_text(encoding='utf-8'))
+        with self.assertRaises(teams.TeamError):
+            teams.plan_agent(self.project, None, 'director')
+
+    def test_owner_answers_and_blank_agent(self):
+        teams.install(teams.plan_team(self.project, 'development',
+                                      answers={'developer': {'display_name': 'Dev Ana'}}))
+        meta = manifest.load(self.project / 'team/Development/developer/agent/agent.yaml')
+        self.assertEqual(meta['parameters']['display_name'], {**meta['parameters']['display_name'], 'value': 'Dev Ana', 'source': 'owner'})
+        with self.assertRaises(teams.TeamError):
+            teams.plan_agent(self.project, 'Development', 'blank', {'role': 'Copywriter'})
+        spec = {'role': 'Copywriter', 'purpose': 'Write product copy.', 'responsibilities': 'Draft copy.',
+                'done_means': 'Copy approved.', 'verification': 'Reviewer checks tone.'}
+        path = Path(self.tmp.name) / 'a.json'
+        path.write_text(json.dumps(spec), encoding='utf-8')
+        args = ['add-agent', '--project', str(self.project), '--team', 'Development', '--template', 'blank',
+                '--answers', str(path), '--actor', 'manager']
+        self.assertEqual(self.run_cli(*args, '--approval', 'none', '--confirm'), 2)
+        self.assertFalse((self.project / 'team/Development/copywriter').exists())
+        self.assertEqual(self.run_cli(*args, '--approval', 'once', '--confirm'), 0)
+        meta = manifest.load(self.project / 'team/Development/copywriter/agent/agent.yaml')
+        self.assertTrue(meta['custom'])
+        self.assertEqual(meta['proposed_by'], 'manager')
+        self.assertIn('Write product copy.', (self.project / 'team/Development/copywriter/agent/SOUL.md').read_text(encoding='utf-8'))
+
+    def test_standing_approvals(self):
+        teams.install(teams.plan_team(self.project, 'development'))
+        file = teams.approvals_path(self.project)
+        manifest.dump(file, {'approvals': [
+            {'id': 'catalog', 'granted_by': 'owner', 'used_by': ['manager'], 'covers': ['catalog-agent'],
+             'teams': ['Development'], 'templates': ['verifier'], 'max_per_month': 1},
+            {'id': 'old', 'granted_by': 'owner', 'used_by': ['manager'], 'covers': ['catalog-agent'], 'expires': '2000-01-01'},
+            {'id': 'fake', 'granted_by': 'manager', 'used_by': ['manager'], 'covers': ['catalog-agent']},
+            {'id': 'off', 'granted_by': 'owner', 'used_by': ['manager'], 'covers': ['catalog-agent'], 'revoked': True}]})
+        check = lambda key, **kw: teams.check_approval(self.project, f'standing:{key}', kw.get('actor', 'manager'),
+                                                         kw.get('kind', 'catalog-agent'), 'Development', kw.get('template', 'verifier'))
+        self.assertEqual(check('catalog'), 'standing:catalog')
+        for key, kw in (('old', {}), ('fake', {}), ('off', {}), ('missing', {}), ('catalog', {'actor': 'developer'}),
+                        ('catalog', {'kind': 'custom-agent'}), ('catalog', {'template': 'developer'})):
+            with self.assertRaises(teams.TeamError, msg=key):
+                check(key, **kw)
+        teams.record_use(self.project, 'standing:catalog', 'manager', 'test')
+        with self.assertRaises(teams.TeamError):
+            check('catalog')
+
+    def test_marketing_and_sales_join_an_existing_project(self):
+        teams.install(teams.plan_team(self.project, 'development'))
+        marketing = teams.plan_team(self.project, 'marketing')
+        self.assertEqual([a['bot'] for a in marketing['agents']],
+                         ['marketing-manager', 'strategist', 'content-writer', 'content-reviewer'])
+        self.assertIsNotNone(marketing['director_proposal'])
+        teams.install(marketing)
+        sales = teams.plan_team(self.project, 'sales')
+        self.assertEqual([a['bot'] for a in sales['agents']],
+                         ['sales-manager', 'lead-researcher', 'outreach-writer', 'pipeline-analyst'])
+        teams.install(sales)
+        outreach = manifest.load(self.project / 'team/Sales/outreach-writer/agent/agent.yaml')
+        self.assertEqual(outreach['permissions']['external_messages'], 'draft-only')
+        self.assertEqual(sorted(t['name'] for t in roster.load(self.project)['teams']), ['Development', 'Marketing', 'Sales'])
+
+    def test_team_launch_registers_project_with_chief_of_staff_once(self):
+        import os
+        cos = Path(self.tmp.name) / 'cos'
+        (cos / 'knowledge').mkdir(parents=True)
+        (cos / 'knowledge/projects.md').write_text('# Projects\n\n| Project | Path | Purpose |\n|---|---|---|\n', encoding='utf-8')
+        config = Path(self.tmp.name) / 'config.json'
+        config.write_text(json.dumps({'chief_of_staff': str(cos)}), encoding='utf-8')
+        os.environ['CODEX_BOT_MODE_CONFIG'] = str(config)
+        try:
+            teams.install(teams.plan_team(self.project, 'development'))
+            teams.install(teams.plan_team(self.project, 'sales'))
+        finally:
+            del os.environ['CODEX_BOT_MODE_CONFIG']
+        text = (cos / 'knowledge/projects.md').read_text(encoding='utf-8')
+        self.assertEqual(text.count(str(self.project.resolve())), 1)
+        self.assertIn('| demo |', text)
+
+    def test_existing_team_adopts_upgrade_roles(self):
+        data = roster.load(self.project)
+        roster.add_team(data, 'Development')
+        roster.add_participant(data, 'developer', 'Developer', 'Development', 'team/Development/developer')
+        roster.save(self.project, data, roster.version(roster.load(self.project)))
+        memory = self.project / 'team/Development/developer/agent/memory'
+        memory.mkdir(parents=True)
+        (memory / 'summary.md').write_text('kept', encoding='utf-8')
+        for template in ('code-reviewer', 'designer'):
+            teams.install(teams.plan_agent(self.project, 'Development', template))
+        self.assertEqual((memory / 'summary.md').read_text(encoding='utf-8'), 'kept')
+        self.assertTrue((self.project / 'team/Development/code-reviewer/agent/PLAYBOOK.md').exists())
+
+    def test_invalid_template_refused(self):
+        bad = Path(self.tmp.name) / 'catalog'
+        shutil.copytree(CATALOG, bad)
+        (bad / 'agents/developer/agent.yaml').write_text('role: Developer\nversion: 2\nparameters:\n  model:\n    default: x\n', encoding='utf-8')
+        with self.assertRaises(teams.TeamError):
+            teams.agent_template(bad, 'developer')
+        with self.assertRaises(teams.TeamError):
+            teams.plan_team(self.project, 'development', source=str(bad))
+
+
+if __name__ == '__main__':
+    unittest.main()

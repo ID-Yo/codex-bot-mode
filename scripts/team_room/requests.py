@@ -1,0 +1,194 @@
+"""Request ledger: every request between agents waits for its reply.
+
+One JSON file per project and computer (.bot-mode/local/requests.json): requests
+travel between the chats of one Codex Desktop. Agents open a request when they ask or assign something and close it
+with their reply. Overdue requests escalate: reminder to the recipient, then the
+requester's Manager or Director, then the owner. Standalone: stdlib only.
+"""
+from datetime import datetime, timedelta, timezone
+import hashlib
+import json
+import os
+from pathlib import Path
+import re
+import tempfile
+
+ID = re.compile(r'^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$')
+BOT = re.compile(r'^(owner|[a-z][a-z0-9-]{0,47})$')
+STEPS = ('reminder', 'manager', 'owner')
+
+
+class RequestError(ValueError):
+    pass
+
+
+def now():
+    return datetime.now(timezone.utc).replace(microsecond=0)
+
+
+def path(project):
+    return Path(project).resolve() / '.bot-mode' / 'local' / 'requests.json'
+
+
+def load(project):
+    file = path(project)
+    legacy = file.parent.parent / 'requests.json'
+    if not file.exists() and legacy.exists():
+        file = legacy
+    return json.loads(file.read_text(encoding='utf-8')) if file.exists() else {'schema': 1, 'requests': []}
+
+
+def version(data):
+    return hashlib.sha256(json.dumps(data, sort_keys=True).encode('utf-8')).hexdigest()
+
+
+def save(project, data, expected):
+    if version(load(project)) != expected:
+        raise RequestError('Requests changed since they were read. Reload and try again.')
+    file = path(project)
+    file.parent.mkdir(parents=True, exist_ok=True)
+    fd, temporary = tempfile.mkstemp(dir=file.parent, prefix='requests-', suffix='.tmp')
+    with os.fdopen(fd, 'w', encoding='utf-8', newline='\n') as handle:
+        json.dump(data, handle, ensure_ascii=False, indent=2)
+    os.replace(temporary, file)
+
+
+def _find(data, key):
+    found = next((r for r in data['requests'] if r['id'] == key), None)
+    if found is None:
+        raise RequestError(f'Unknown request {key}')
+    return found
+
+
+def open_request(data, key, sender, recipient, summary, link=None, due_minutes=60, at=None):
+    if not ID.match(key or ''):
+        raise RequestError('Request ID: letters, digits, dot, dash, underscore')
+    for value, field in ((sender, 'from'), (recipient, 'to')):
+        if not BOT.match(value or ''):
+            raise RequestError(f'{field} must be a bot ID or owner')
+    if sender == recipient:
+        raise RequestError('A request needs a different recipient')
+    if not isinstance(summary, str) or not 1 <= len(summary.strip()) <= 300:
+        raise RequestError('Summary must be 1-300 characters')
+    if any(r['id'] == key for r in data['requests']):
+        raise RequestError(f'Request {key} already exists')
+    at = at or now()
+    data['requests'].append({'id': key, 'from': sender, 'to': recipient, 'summary': summary.strip(),
+                             'link': link, 'opened': at.isoformat(),
+                             'due': (at + timedelta(minutes=int(due_minutes))).isoformat(),
+                             'state': 'open', 'escalations': []})
+    return data
+
+
+def reply(data, key, by, link=None, outcome='done', at=None):
+    item = _find(data, key)
+    if by != item['to']:
+        raise RequestError(f'Only {item["to"]} can reply to {key}')
+    if outcome not in ('done', 'blocked', 'failed', 'refused', 'partial'):
+        raise RequestError('Outcome must be done, blocked, failed, refused or partial')
+    item.update(state='answered', outcome=outcome, answered=(at or now()).isoformat(), reply_link=link)
+    return data
+
+
+def cancel(data, key, by, reason):
+    item = _find(data, key)
+    if by not in (item['from'], 'owner'):
+        raise RequestError('Only the requester or the owner can cancel')
+    item.update(state='cancelled', cancelled_reason=reason)
+    return data
+
+
+def due_steps(data, at=None):
+    """Next escalation step for each overdue open request: (request, step)."""
+    at = at or now()
+    out = []
+    for item in data['requests']:
+        if item['state'] != 'open':
+            continue
+        due = datetime.fromisoformat(item['due'])
+        done = [e['step'] for e in item['escalations']]
+        if len(done) >= len(STEPS):
+            continue
+        # Each further step waits one more full due interval.
+        interval = due - datetime.fromisoformat(item['opened'])
+        if at >= due + interval * len(done):
+            out.append((item, STEPS[len(done)]))
+    return out
+
+
+def record_escalation(data, key, step, target, outcome, at=None):
+    _find(data, key)['escalations'].append({'step': step, 'target': target, 'outcome': outcome,
+                                            'at': (at or now()).isoformat()})
+    return data
+
+
+def summary(data, at=None):
+    """Open and overdue counts per recipient."""
+    at = at or now()
+    out = {}
+    for item in data['requests']:
+        if item['state'] != 'open':
+            continue
+        row = out.setdefault(item['to'], {'open': 0, 'overdue': 0})
+        row['open'] += 1
+        row['overdue'] += datetime.fromisoformat(item['due']) <= at
+    return out
+
+
+def main(argv=None):
+    import argparse
+    import sys
+    sys.stdout.reconfigure(encoding='utf-8')
+    parser = argparse.ArgumentParser(description='Requests between agents and their replies.')
+    parser.add_argument('--project', default='.')
+    sub = parser.add_subparsers(dest='action', required=True)
+    o = sub.add_parser('open', help='Record a request you send.')
+    o.add_argument('id')
+    o.add_argument('--from', dest='sender', required=True)
+    o.add_argument('--to', required=True)
+    o.add_argument('--summary', required=True)
+    o.add_argument('--link')
+    o.add_argument('--due-minutes', type=int, default=60)
+    r = sub.add_parser('reply', help='Close a request addressed to you after sending the reply.')
+    r.add_argument('id')
+    r.add_argument('--by', required=True)
+    r.add_argument('--link')
+    r.add_argument('--outcome', default='done')
+    c = sub.add_parser('cancel')
+    c.add_argument('id')
+    c.add_argument('--by', required=True)
+    c.add_argument('--reason', required=True)
+    lst = sub.add_parser('list', help='Open requests, optionally only those for one bot.')
+    lst.add_argument('--to')
+    args = parser.parse_args(argv)
+    try:
+        data = load(args.project)
+        if args.action == 'list':
+            items = [i for i in data['requests'] if i['state'] == 'open' and (not args.to or i['to'] == args.to)]
+            print(json.dumps(items, ensure_ascii=False, indent=2))
+            return 0
+        expected = version(data)
+        if args.action == 'open':
+            open_request(data, args.id, args.sender, args.to, args.summary, args.link, args.due_minutes)
+        elif args.action == 'reply':
+            reply(data, args.id, args.by, args.link, args.outcome)
+        else:
+            cancel(data, args.id, args.by, args.reason)
+        save(args.project, data, expected)
+        print(json.dumps(_find(data, args.id), ensure_ascii=False, indent=2))
+        return 0
+    except (RequestError, ValueError) as error:
+        print(f'error: {error}', file=sys.stderr)
+        return 2
+
+
+def install_cli(project):
+    target = path(project).parent.parent / 'requests.py'
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(Path(__file__).read_bytes())
+    return target
+
+
+if __name__ == '__main__':
+    import sys
+    sys.exit(main())

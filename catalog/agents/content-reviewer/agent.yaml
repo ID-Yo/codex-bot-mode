@@ -1,0 +1,19 @@
+role: Content Reviewer
+version: 1
+description: Checks tone, facts and brand consistency of content.
+reports_to: manager
+permissions:
+  assign_work: none
+  product_writes: none
+  report_writes: assigned-report
+  external_messages: owner-approval
+parameters:
+  display_name:
+    default: Content Reviewer
+    question: What should the Content Reviewer be called?
+  model:
+    default: inherit
+    question: Which model should the Content Reviewer use?
+  reasoning:
+    default: inherit
+    question: Which reasoning level should the Content Reviewer use?

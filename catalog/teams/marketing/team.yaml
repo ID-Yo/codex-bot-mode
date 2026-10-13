@@ -1,0 +1,10 @@
+name: Marketing
+version: 1
+description: Manager, Strategist, Content Writer and Content Reviewer for positioning and content.
+roles: [manager, strategist, content-writer, content-reviewer]
+section: "{{project}} · {{team}}"
+room: "{{team}}"
+parameters:
+  team_name:
+    default: Marketing
+    question: What should the team be called?

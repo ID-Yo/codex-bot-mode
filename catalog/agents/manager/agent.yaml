@@ -1,0 +1,19 @@
+role: Manager
+version: 2
+description: Team Manager, the entry point for one team's work in a project.
+reports_to: director-or-owner
+permissions:
+  assign_work: own-team
+  product_writes: routine-reversible-within-scope
+  external_messages: owner-approval
+  appoint_agents: owner-or-standing-approval
+parameters:
+  display_name:
+    default: Manager
+    question: What should the Manager be called?
+  model:
+    default: inherit
+    question: Which model should the Manager use?
+  reasoning:
+    default: inherit
+    question: Which reasoning level should the Manager use?

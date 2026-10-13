@@ -1,0 +1,18 @@
+role: Developer
+version: 2
+description: Implements small, complete changes within an assigned boundary.
+reports_to: manager
+permissions:
+  assign_work: none
+  product_writes: assigned-boundary
+  external_messages: owner-approval
+parameters:
+  display_name:
+    default: Developer
+    question: What should the Developer be called?
+  model:
+    default: inherit
+    question: Which model should the Developer use?
+  reasoning:
+    default: inherit
+    question: Which reasoning level should the Developer use?

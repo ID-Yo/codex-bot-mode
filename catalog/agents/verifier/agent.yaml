@@ -1,0 +1,19 @@
+role: Verifier
+version: 2
+description: Independently checks a delivered artifact against acceptance criteria.
+reports_to: manager
+permissions:
+  assign_work: none
+  product_writes: none
+  report_writes: assigned-report
+  external_messages: owner-approval
+parameters:
+  display_name:
+    default: Verifier
+    question: What should the Verifier be called?
+  model:
+    default: inherit
+    question: Which model should the Verifier use?
+  reasoning:
+    default: inherit
+    question: Which reasoning level should the Verifier use?

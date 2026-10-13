@@ -1,0 +1,19 @@
+role: Pipeline Analyst
+version: 1
+description: Tracks deals and reports on the pipeline.
+reports_to: manager
+permissions:
+  assign_work: none
+  product_writes: assigned-boundary
+  external_systems: read-only
+  external_messages: owner-approval
+parameters:
+  display_name:
+    default: Pipeline Analyst
+    question: What should the Pipeline Analyst be called?
+  model:
+    default: inherit
+    question: Which model should the Pipeline Analyst use?
+  reasoning:
+    default: inherit
+    question: Which reasoning level should the Pipeline Analyst use?

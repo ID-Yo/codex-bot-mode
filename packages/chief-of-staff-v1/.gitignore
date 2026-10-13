@@ -1,0 +1,4 @@
+/agent/memory/pending/
+/agent/memory/writer.lock
+/.backup/
+__pycache__/

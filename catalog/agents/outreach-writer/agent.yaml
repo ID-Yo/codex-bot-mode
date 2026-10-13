@@ -1,0 +1,18 @@
+role: Outreach Writer
+version: 1
+description: Drafts outreach messages; never sends.
+reports_to: manager
+permissions:
+  assign_work: none
+  product_writes: assigned-boundary
+  external_messages: draft-only
+parameters:
+  display_name:
+    default: Outreach Writer
+    question: What should the Outreach Writer be called?
+  model:
+    default: inherit
+    question: Which model should the Outreach Writer use?
+  reasoning:
+    default: inherit
+    question: Which reasoning level should the Outreach Writer use?

@@ -1,0 +1,19 @@
+role: Strategist
+version: 1
+description: Positioning, audience and the marketing plan.
+reports_to: manager
+permissions:
+  assign_work: none
+  product_writes: assigned-boundary
+  publishing: owner-approval
+  external_messages: owner-approval
+parameters:
+  display_name:
+    default: Strategist
+    question: What should the Strategist be called?
+  model:
+    default: inherit
+    question: Which model should the Strategist use?
+  reasoning:
+    default: inherit
+    question: Which reasoning level should the Strategist use?

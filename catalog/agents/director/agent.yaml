@@ -1,0 +1,19 @@
+role: Project Director
+version: 1
+description: Entry point for a project with two or more teams; coordinates team Managers.
+reports_to: chief-of-staff-or-owner
+permissions:
+  assign_work: team-managers-only
+  product_writes: none
+  external_messages: owner-approval
+  appoint_agents: owner-or-standing-approval
+parameters:
+  display_name:
+    default: Project Director
+    question: What should the Project Director be called?
+  model:
+    default: inherit
+    question: Which model should the Director use?
+  reasoning:
+    default: inherit
+    question: Which reasoning level should the Director use?

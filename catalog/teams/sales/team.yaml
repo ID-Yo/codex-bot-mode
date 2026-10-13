@@ -1,0 +1,10 @@
+name: Sales
+version: 1
+description: Manager, Lead Researcher, Outreach Writer and Pipeline Analyst; drafts only, no sending without approval.
+roles: [manager, lead-researcher, outreach-writer, pipeline-analyst]
+section: "{{project}} · {{team}}"
+room: "{{team}}"
+parameters:
+  team_name:
+    default: Sales
+    question: What should the team be called?

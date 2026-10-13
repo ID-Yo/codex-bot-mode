@@ -1,0 +1,18 @@
+role: Designer
+version: 1
+description: UI and UX design for the product.
+reports_to: manager
+permissions:
+  assign_work: none
+  product_writes: assigned-boundary
+  external_messages: owner-approval
+parameters:
+  display_name:
+    default: Designer
+    question: What should the Designer be called?
+  model:
+    default: inherit
+    question: Which model should the Designer use?
+  reasoning:
+    default: inherit
+    question: Which reasoning level should the Designer use?

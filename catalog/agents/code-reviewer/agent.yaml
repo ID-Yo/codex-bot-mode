@@ -1,0 +1,19 @@
+role: Code Reviewer
+version: 1
+description: Reviews pull requests before verification.
+reports_to: manager
+permissions:
+  assign_work: none
+  product_writes: none
+  report_writes: assigned-review
+  external_messages: owner-approval
+parameters:
+  display_name:
+    default: Code Reviewer
+    question: What should the Code Reviewer be called?
+  model:
+    default: inherit
+    question: Which model should the Code Reviewer use?
+  reasoning:
+    default: inherit
+    question: Which reasoning level should the Code Reviewer use?

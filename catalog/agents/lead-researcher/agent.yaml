@@ -1,0 +1,18 @@
+role: Lead Researcher
+version: 1
+description: Finds and qualifies potential customers.
+reports_to: manager
+permissions:
+  assign_work: none
+  product_writes: assigned-boundary
+  external_messages: none
+parameters:
+  display_name:
+    default: Lead Researcher
+    question: What should the Lead Researcher be called?
+  model:
+    default: inherit
+    question: Which model should the Lead Researcher use?
+  reasoning:
+    default: inherit
+    question: Which reasoning level should the Lead Researcher use?

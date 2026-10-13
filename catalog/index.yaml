@@ -1,0 +1,52 @@
+catalog: codex-bot-mode
+version: 1
+agents:
+  - name: manager
+    version: 2
+    description: Team Manager, the entry point for one team's work in a project.
+  - name: developer
+    version: 2
+    description: Implements small, complete changes within an assigned boundary.
+  - name: verifier
+    version: 2
+    description: Independently checks a delivered artifact against acceptance criteria.
+  - name: director
+    version: 1
+    description: Project Director for projects with two or more teams.
+  - name: blank
+    version: 1
+    description: Empty agent built through an interview, for roles without a template.
+  - name: code-reviewer
+    version: 1
+    description: Reviews pull requests before verification.
+  - name: designer
+    version: 1
+    description: UI and UX design for the product.
+  - name: strategist
+    version: 1
+    description: Positioning, audience and the marketing plan.
+  - name: content-writer
+    version: 1
+    description: Texts, posts and pages from a brief.
+  - name: content-reviewer
+    version: 1
+    description: Checks tone, facts and brand consistency of content.
+  - name: lead-researcher
+    version: 1
+    description: Finds and qualifies potential customers.
+  - name: outreach-writer
+    version: 1
+    description: Drafts outreach messages; never sends.
+  - name: pipeline-analyst
+    version: 1
+    description: Tracks deals and reports on the pipeline.
+teams:
+  - name: development
+    version: 3
+    description: Manager, Developer, Code Reviewer, Designer and Verifier for software changes.
+  - name: marketing
+    version: 1
+    description: Manager, Strategist, Content Writer and Content Reviewer.
+  - name: sales
+    version: 1
+    description: Manager, Lead Researcher, Outreach Writer and Pipeline Analyst.

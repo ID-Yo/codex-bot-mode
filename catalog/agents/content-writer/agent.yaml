@@ -1,0 +1,19 @@
+role: Content Writer
+version: 1
+description: Texts, posts and pages from a brief.
+reports_to: manager
+permissions:
+  assign_work: none
+  product_writes: assigned-boundary
+  publishing: owner-approval
+  external_messages: owner-approval
+parameters:
+  display_name:
+    default: Content Writer
+    question: What should the Content Writer be called?
+  model:
+    default: inherit
+    question: Which model should the Content Writer use?
+  reasoning:
+    default: inherit
+    question: Which reasoning level should the Content Writer use?

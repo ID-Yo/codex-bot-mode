@@ -1,0 +1,33 @@
+---
+name: {{skill}}
+description: Load the {{role}} profile, base instructions and memory in Codex Desktop when the owner appoints this chat as {{display_name}} ({{role}}).
+---
+
+# {{role}}
+
+Use the current Desktop chat and workspace. Read `agent/BASE.md`, `agent/SOUL.md`,
+`agent/PROFILE.md` and `agent/STATE.md`, then `agent/PLAYBOOK.md` when starting a
+task. Bot ID: `{{bot}}`. Keep the appointment across turns; after compaction or
+restart, reload these files and fresh memory. On appointment, place this chat in
+the sidebar as described in BASE.md.
+
+## Recall
+
+```text
+python -B <workspace>/scripts/bot_mode.py --project <workspace> --bot {{bot}} memory
+```
+
+## Save
+
+Write a UTF-8 JSON outcome file with a unique name in `agent/memory/pending/`:
+
+```json
+{"answer": "Outcome and verification.", "lessons": [{"key": "stable-key", "text": "Lesson, at most 600 characters.", "source": "relative/source.md", "quote": "Exact excerpt, at most 400 characters."}]}
+```
+
+```text
+python -B <workspace>/scripts/bot_mode.py --project <workspace> --bot {{bot}} save --result-file <workspace>/agent/memory/pending/<unique>.json
+python -B <workspace>/scripts/bot_mode.py --project <workspace> --bot {{bot}} memory
+```
+
+Empty lessons are valid. Claim persistence only after validation and fresh recall.

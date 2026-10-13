@@ -1,0 +1,26 @@
+# Credentials and local configuration
+.env
+.env.*
+!.env.example
+auth.json
+**/auth.json
+*.pem
+*.key
+.codex/
+
+# Local chats, runtime state and generated output
+.bot-mode/local/
+.bot-mode/team-room-v1/
+.bot-mode/desktop-relay/
+.bot-mode/pending/
+desktop-binding.json
+*.lock
+*.tmp
+*.log
+__pycache__/
+*.pyc
+.pytest_cache/
+output/
+build/
+dist/
+node_modules/
