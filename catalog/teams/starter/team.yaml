@@ -1,0 +1,14 @@
+name: Starter
+version: 1
+description: Manager and one explicitly selected catalog specialist.
+roles: [manager]
+section: "{{project}} · {{team}}"
+room: "{{team}}"
+parameters:
+  team_name:
+    default: Starter
+    question: What should the team be called?
+  specialist:
+    required: true
+    question: Which existing catalog specialist should join the Manager?
+    choices: [developer, verifier, code-reviewer, designer, strategist, content-writer, content-reviewer, lead-researcher, outreach-writer, pipeline-analyst, business-analyst, research-analyst, product-manager, data-analyst, operations-specialist, knowledge-writer, support-specialist, learning-designer, career-advisor, financial-analyst]

@@ -1,0 +1,10 @@
+name: Content Studio
+version: 1
+description: Reviewed written material and scoped visual briefs.
+roles: [manager, content-writer, content-reviewer, designer]
+section: "{{project}} · {{team}}"
+room: "{{team}}"
+parameters:
+  team_name:
+    default: Content Studio
+    question: What should the team be called?

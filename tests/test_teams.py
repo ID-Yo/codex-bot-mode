@@ -38,6 +38,63 @@ class TeamTests(unittest.TestCase):
         self.assertIn('Implementation must have a recorded task',
                       (self.project / 'team/Development/strategist/agent/BASE.md').read_text())
 
+    def test_expanded_inventory_installs_every_bundle_and_new_individual(self):
+        inventory = teams.index(CATALOG)
+        self.assertEqual(len(inventory['agents']), 23)
+        self.assertEqual(len(inventory['teams']), 13)
+        new_roles = ['business-analyst', 'research-analyst', 'product-manager',
+                     'data-analyst', 'operations-specialist', 'knowledge-writer',
+                     'support-specialist', 'learning-designer', 'career-advisor',
+                     'financial-analyst']
+        self.assertNotIn('personal-assistant', [a['name'] for a in inventory['agents']])
+        for item in inventory['teams']:
+            root = self.project / item['name']
+            root.mkdir()
+            values = {'tracking_mode': 'local'}
+            if item['name'] == 'starter':
+                values['specialist'] = 'research-analyst'
+            plan = teams.plan_team(root, item['name'], team_answers=values)
+            self.assertEqual(list(root.iterdir()), [])
+            if item['name'] == 'starter':
+                self.assertEqual(len(plan['agents']), 2)
+            else:
+                self.assertTrue(3 <= len(plan['agents']) <= 5)
+            teams.install(plan)
+            self.assertTrue(all(p['thread_id'] is None for p in roster.load(root)['participants']))
+            with self.assertRaises(teams.TeamError):
+                teams.plan_team(root, item['name'], team_answers=values)
+        teams.install(teams.plan_team(self.project, 'development', team_answers={'tracking_mode': 'local'}))
+        for name in new_roles:
+            plan = teams.plan_agent(self.project, 'Development', name)
+            teams.install(plan)
+            root = self.project / plan['agents'][0]['workspace']
+            profile = (root / 'agent/PROFILE.md').read_text(encoding='utf-8')
+            playbook = (root / 'agent/PLAYBOOK.md').read_text(encoding='utf-8')
+            self.assertIn('Required:', profile)
+            self.assertIn('Optional:', profile)
+            self.assertIn('Synthetic exercise', playbook)
+            self.assertIn('Boundary exercise', playbook)
+            result = subprocess.run([sys.executable, '-B', str(root / 'scripts/bot_mode.py'),
+                                     '--project', str(root), '--bot', plan['agents'][0]['bot'], 'memory'],
+                                    capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(json.loads(result.stdout), [])
+        for item in inventory['agents']:
+            self.assertEqual(teams.agent_template(CATALOG, item['name'])[1]['version'], item['version'])
+        for item in inventory['teams']:
+            self.assertEqual(teams.team_template(CATALOG, item['name'])[1]['version'], item['version'])
+
+    def test_starter_requires_real_specialist_and_uses_its_identity(self):
+        for value in (None, 'blank', 'manager', 'director', 'made-up'):
+            with self.assertRaises(teams.TeamError):
+                teams.plan_team(self.project, 'starter', team_answers={
+                    'tracking_mode': 'local', 'specialist': value})
+            self.assertEqual(list(self.project.iterdir()), [])
+        plan = teams.plan_team(self.project, 'starter', team_answers={
+            'tracking_mode': 'local', 'specialist': 'product-manager'})
+        self.assertEqual([a['bot'] for a in plan['agents']], ['manager', 'product-manager'])
+        self.assertEqual([a['role'] for a in plan['agents']], ['Manager', 'Product Manager'])
+
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.project = Path(self.tmp.name) / 'demo'

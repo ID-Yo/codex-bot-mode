@@ -1,0 +1,10 @@
+name: Research
+version: 1
+description: Cited research brief with uncertainties and decision options.
+roles: [manager, research-analyst, content-reviewer]
+section: "{{project}} · {{team}}"
+room: "{{team}}"
+parameters:
+  team_name:
+    default: Research
+    question: What should the team be called?

@@ -1,5 +1,5 @@
 catalog: codex-bot-mode
-version: 1
+version: 2
 agents:
   - name: manager
     version: 2
@@ -40,6 +40,36 @@ agents:
   - name: pipeline-analyst
     version: 1
     description: Tracks deals and reports on the pipeline.
+  - name: business-analyst
+    version: 1
+    description: Translate business problems into requirements and a traceable business case.
+  - name: research-analyst
+    version: 1
+    description: Answer bounded questions with cited evidence and explicit uncertainty.
+  - name: product-manager
+    version: 1
+    description: "Define product outcomes, priorities and acceptance criteria."
+  - name: data-analyst
+    version: 1
+    description: Turn supplied data into checked findings and clear measurements.
+  - name: operations-specialist
+    version: 1
+    description: Improve repeatable workflows and prepare bounded automation.
+  - name: knowledge-writer
+    version: 1
+    description: Make verified information retrievable and maintainable.
+  - name: support-specialist
+    version: 1
+    description: Prepare source-grounded support triage and reply drafts.
+  - name: learning-designer
+    version: 1
+    description: "Design learning outcomes, lessons and assessments."
+  - name: career-advisor
+    version: 1
+    description: Help people present verified experience and assess opportunities.
+  - name: financial-analyst
+    version: 1
+    description: Prepare traceable business calculations and budget scenarios.
 teams:
   - name: development
     version: 3
@@ -50,3 +80,33 @@ teams:
   - name: sales
     version: 1
     description: Manager, Lead Researcher, Outreach Writer and Pipeline Analyst.
+  - name: startup
+    version: 1
+    description: "Opportunity brief, customer hypotheses and validation plan."
+  - name: product
+    version: 1
+    description: "Product brief, priorities, prototype direction and measurement plan."
+  - name: research
+    version: 1
+    description: Cited research brief with uncertainties and decision options.
+  - name: content-studio
+    version: 1
+    description: Reviewed written material and scoped visual briefs.
+  - name: operations
+    version: 1
+    description: "Documented workflow, knowledge and checked local automation."
+  - name: customer-support
+    version: 1
+    description: "Grounded support drafts, help articles and escalation notes."
+  - name: learning
+    version: 1
+    description: "Learning plans, exercises and reviewed assessments."
+  - name: career
+    version: 1
+    description: Truthful CV/application drafts and interview preparation.
+  - name: business-reporting
+    version: 1
+    description: "Reconciled reports, cash-flow scenarios and assumptions."
+  - name: starter
+    version: 1
+    description: Manager and one explicitly selected catalog specialist.

@@ -5,6 +5,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/). Versions follow [SemVer
 ## [Unreleased]
 
 ### Added
+- Ten specialist profiles and nine additional core teams: twelve main teams in total, plus a Manager-and-selected-specialist Starter.
+- Synthetic deliverable and boundary exercises for each new specialist, with explicit tool requirements and template/live-verification limits.
 - Explicit GitHub, local or combined team work tracking, with one authority for combined tracking and mandatory implementation records.
 - Catalog request and contribution form, profile acceptance exercises, MIT provenance guidance and identity-preserving update instructions.
 

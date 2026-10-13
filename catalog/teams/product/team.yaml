@@ -1,0 +1,10 @@
+name: Product
+version: 1
+description: "Product brief, priorities, prototype direction and measurement plan."
+roles: [manager, product-manager, research-analyst, designer, data-analyst]
+section: "{{project}} · {{team}}"
+room: "{{team}}"
+parameters:
+  team_name:
+    default: Product
+    question: What should the team be called?

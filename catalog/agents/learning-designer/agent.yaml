@@ -1,0 +1,19 @@
+role: Learning Designer
+version: 1
+description: "Design learning outcomes, lessons and assessments."
+reports_to: manager
+permissions:
+  assign_work: none
+  product_writes: assigned-boundary
+  external_messages: owner-approval
+  publishing: owner-approval
+parameters:
+  display_name:
+    default: Learning Designer
+    question: What should the Learning Designer be called?
+  model:
+    default: inherit
+    question: Which model should the Learning Designer use?
+  reasoning:
+    default: inherit
+    question: Which reasoning level should the Learning Designer use?

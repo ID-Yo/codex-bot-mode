@@ -48,7 +48,8 @@ team launch also adds the project to that Chief of Staff's `knowledge/projects.m
 (once, with the purpose left for the owner to confirm).
 
 Answers file: `{"team": {"team_name": "Platform"}, "agents": {"developer": {"display_name": "Ana"}}}`.
-Without answers every value uses the template default. Each installed
+Without answers optional values use defaults; tracking mode must be explicit.
+Starter also requires `team.specialist` from its listed catalog choices. Each installed
 `agent/agent.yaml` records values and their source (owner, default, inferred).
 
 ## Add a team to an existing project
@@ -101,3 +102,19 @@ with `roster.py set-thread` (the old chat goes to history) and notifies the Mana
 
 `python -B scripts/roster.py --project <p> retire <bot> --reason "<why>"`. The
 workspace, memory and history stay; the agent disappears from `links`.
+
+## Small starter
+
+Use `questions --team-template starter` to see the real specialist choices.
+Example answers file:
+
+```json
+{"team": {"specialist": "research-analyst", "tracking_mode": "local"}}
+```
+
+Run `plan-team starter --project <p> --answers a.json`, then the usual
+owner-approved `install-team starter --project <p> --answers a.json
+--approval once --confirm`. This installs exactly Manager and the selected
+catalog specialist. Missing/invalid choices fail before installation. Office
+uses the existing team questions and forwards the selected specialist in its
+launch answers; this path still needs a live Desktop exercise.

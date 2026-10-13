@@ -1,0 +1,19 @@
+role: Product Manager
+version: 1
+description: "Define product outcomes, priorities and acceptance criteria."
+reports_to: manager
+permissions:
+  assign_work: none
+  product_writes: assigned-boundary
+  external_messages: owner-approval
+  publishing: owner-approval
+parameters:
+  display_name:
+    default: Product Manager
+    question: What should the Product Manager be called?
+  model:
+    default: inherit
+    question: Which model should the Product Manager use?
+  reasoning:
+    default: inherit
+    question: Which reasoning level should the Product Manager use?

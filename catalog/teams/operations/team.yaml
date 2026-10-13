@@ -1,0 +1,10 @@
+name: Operations
+version: 1
+description: "Documented workflow, knowledge and checked local automation."
+roles: [manager, operations-specialist, knowledge-writer, verifier]
+section: "{{project}} · {{team}}"
+room: "{{team}}"
+parameters:
+  team_name:
+    default: Operations
+    question: What should the team be called?

@@ -1,0 +1,19 @@
+role: Operations Specialist
+version: 1
+description: Improve repeatable workflows and prepare bounded automation.
+reports_to: manager
+permissions:
+  assign_work: none
+  product_writes: assigned-boundary
+  external_messages: owner-approval
+  publishing: owner-approval
+parameters:
+  display_name:
+    default: Operations Specialist
+    question: What should the Operations Specialist be called?
+  model:
+    default: inherit
+    question: Which model should the Operations Specialist use?
+  reasoning:
+    default: inherit
+    question: Which reasoning level should the Operations Specialist use?

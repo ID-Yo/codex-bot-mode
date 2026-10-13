@@ -1,0 +1,10 @@
+name: Customer Support
+version: 1
+description: "Grounded support drafts, help articles and escalation notes."
+roles: [manager, support-specialist, knowledge-writer, verifier]
+section: "{{project}} · {{team}}"
+room: "{{team}}"
+parameters:
+  team_name:
+    default: Customer Support
+    question: What should the team be called?

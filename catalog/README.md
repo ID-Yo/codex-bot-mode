@@ -21,3 +21,32 @@ in the request win. The installed `agent.yaml` records each `value` and its
 `source` (owner, default or inferred).
 
 Install and manage teams with `scripts/team.py`; see `docs/operations/teams.md`.
+
+## Launch inventory and readiness
+
+Catalog v2 retains the original 13 agent templates and adds 10 distinct
+specialists: Business Analyst, Research Analyst, Product Manager, Data Analyst,
+Operations Specialist, Knowledge Writer, Support Specialist, Learning Designer,
+Career Advisor and Financial Analyst. All support individual appointment through
+`plan-agent`/`add-agent` into an existing team. Team Manager coordinates work;
+Product Manager supplies product outcomes and requirements without dispatch rights.
+Chief of Staff is the personal assistant in `packages/chief-of-staff-v1/`; there
+is no duplicate personal-assistant catalog profile or automatic CoS appointment.
+
+The 12 core bundles are development, marketing, sales, startup, product, research,
+content-studio, operations, customer-support, learning, career and
+business-reporting. They contain 3-5 roles. Starter adds a smaller Manager plus
+one owner-selected catalog specialist; it never invents a custom role.
+
+New profiles include synthetic input/output and boundary acceptance exercises in
+PLAYBOOK.md, installed with the profile. Their PROFILE.md separates required
+source/output access from optional tools. Honor the user's language and requested
+artifact language; availability, model capability and correctness are not promises.
+
+Readiness: owner-approved inventory implemented as templates; automated planning
+and temporary installation checks are template validation only. New roles and
+bundles have no verified live Desktop appointment, memory/restart recovery,
+requester-channel handoff or independently accepted deliverable yet. The proposal
+in work/reports/COS-004-catalog-roles.md remains historical research; the owner's
+launch decisions are recorded in issue #87. Public export/publication and live
+exercises are separate work.

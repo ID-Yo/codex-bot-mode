@@ -1,0 +1,10 @@
+name: Business Reporting
+version: 1
+description: "Reconciled reports, cash-flow scenarios and assumptions."
+roles: [manager, financial-analyst, data-analyst, verifier]
+section: "{{project}} · {{team}}"
+room: "{{team}}"
+parameters:
+  team_name:
+    default: Business Reporting
+    question: What should the team be called?

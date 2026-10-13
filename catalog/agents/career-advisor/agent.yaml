@@ -1,0 +1,19 @@
+role: Career Advisor
+version: 1
+description: Help people present verified experience and assess opportunities.
+reports_to: manager
+permissions:
+  assign_work: none
+  product_writes: assigned-boundary
+  external_messages: owner-approval
+  publishing: owner-approval
+parameters:
+  display_name:
+    default: Career Advisor
+    question: What should the Career Advisor be called?
+  model:
+    default: inherit
+    question: Which model should the Career Advisor use?
+  reasoning:
+    default: inherit
+    question: Which reasoning level should the Career Advisor use?

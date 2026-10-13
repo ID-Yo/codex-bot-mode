@@ -1,0 +1,10 @@
+name: Learning
+version: 1
+description: "Learning plans, exercises and reviewed assessments."
+roles: [manager, learning-designer, research-analyst, content-reviewer]
+section: "{{project}} · {{team}}"
+room: "{{team}}"
+parameters:
+  team_name:
+    default: Learning
+    question: What should the team be called?

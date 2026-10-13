@@ -38,7 +38,8 @@ class LaunchTests(unittest.TestCase):
 
     def test_catalog_plan_and_confirmed_launch_goes_to_the_lead_manager(self):
         names = [t['name'] for t in launch.catalog()]
-        self.assertEqual(sorted(names), ['development', 'marketing', 'sales'])
+        self.assertEqual(len(names), 13)
+        self.assertTrue({'development', 'marketing', 'sales', 'starter'}.issubset(names))
         plan = launch.plan('marketing', 'Growth', {'strategist': {'display_name': 'Mila'}})
         self.assertEqual(plan['team'], 'Growth')
         self.assertIsNotNone(plan['director_proposal'])
@@ -55,6 +56,16 @@ class LaunchTests(unittest.TestCase):
         self.assertEqual(rq.load(self.root)['requests'][0]['to'], 'manager')
         with self.assertRaises(ValueError):
             launch.launch(None, 'marketing', 'Other', {}, 'zzz12345zzz', {'tracking_mode': 'local'})
+
+    def test_starter_payload_retains_selected_catalog_specialist(self):
+        bridge = Bridge()
+        result = launch.launch(bridge, 'starter', 'Small', {}, 'starter12345',
+                               {'tracking_mode': 'both', 'tracking_authority': 'local',
+                                'specialist': 'data-analyst'})
+        self.assertEqual(result['state'], 'sent')
+        self.assertIn('"specialist": "data-analyst"', bridge.calls[0]['prompt'])
+        self.assertIn('"tracking_authority": "local"', bridge.calls[0]['prompt'])
+        self.assertEqual([a['template'] for a in result['plan']['agents']], ['manager', 'data-analyst'])
 
     def test_launch_without_tracking_does_not_send_or_record_request(self):
         bridge = Bridge()

@@ -1,0 +1,10 @@
+name: Startup
+version: 1
+description: "Opportunity brief, customer hypotheses and validation plan."
+roles: [manager, business-analyst, research-analyst, strategist]
+section: "{{project}} · {{team}}"
+room: "{{team}}"
+parameters:
+  team_name:
+    default: Startup
+    question: What should the team be called?

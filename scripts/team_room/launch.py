@@ -51,7 +51,7 @@ def launch(bridge, template, team_name, answers, client_id, team_answers=None):
     lead = served.participants()[0] if served.participants() else None
     if bridge is None or not lead or not lead.get('thread_id'):
         raise ValueError('The lead Manager chat is not connected; launch the team from Codex instead')
-    payload = {'template': template, 'team': {'team_name': summary['team'], 'tracking_mode': summary['work_tracking']['mode'], 'tracking_authority': summary['work_tracking']['authority']}, 'agents': _clean(answers)}
+    payload = {'template': template, 'team': {**(team_answers or {}), 'team_name': summary['team'], 'tracking_mode': summary['work_tracking']['mode'], 'tracking_authority': summary['work_tracking']['authority']}, 'agents': _clean(answers)}
     text = ('The owner reviewed and confirmed this team launch in Codex Office (request ' + key + '). '
             'Use the codex-team-launch skill: write the answers below to a file, run install-team '
             f'{template} --approval once --confirm with them, create and appoint every chat, place them in '

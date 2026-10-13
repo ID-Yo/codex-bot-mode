@@ -337,9 +337,16 @@ def plan_team(project, template, answers=None, source=None, team_answers=None):
     data = roster.load(project)
     if any(t['name'].casefold() == team.casefold() for t in data['teams']):
         raise TeamError(f'Team {team} already exists in this project')
+    roles = list(spec['roles'])
+    if template == 'starter':
+        specialist = team_values['specialist']
+        _, specialist_spec = agent_template(catalog, specialist)
+        if specialist in ('manager', 'director', 'blank') or specialist_spec.get('custom'):
+            raise TeamError('Starter requires an existing catalog specialist')
+        roles.append(specialist)
     context = {'project': project.name, 'team': team}
     agents, taken = [], []
-    for role in spec['roles']:
+    for role in roles:
         _, aspec = agent_template(catalog, role)
         bot = _bot_id(data, aspec['role'], team, taken)
         taken.append(bot)

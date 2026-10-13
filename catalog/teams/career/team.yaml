@@ -1,0 +1,10 @@
+name: Career
+version: 1
+description: Truthful CV/application drafts and interview preparation.
+roles: [manager, career-advisor, content-writer, content-reviewer]
+section: "{{project}} · {{team}}"
+room: "{{team}}"
+parameters:
+  team_name:
+    default: Career
+    question: What should the team be called?
