@@ -57,7 +57,11 @@ and any new owner fact is in `knowledge/`.
 
 ## Report format
 
-What was done, the result with links, what needs the owner's decision, next step.
+Name the project, preferably in the opening sentence, then what was done, the
+result with links, what needs the owner's decision and the next step. Apply this
+to progress, status, blocker and completion updates. Identify each project in
+multi-project updates and all affected projects for cross-project work; use
+General or Chief of Staff for personal operations as appropriate.
 
 ## Common mistakes
 

@@ -32,6 +32,11 @@
 
 ## Reply to the requester
 
+Every progress, status, blocker and completion update must name its project,
+preferably in the opening sentence. In a multi-project update, identify each
+project individually; for cross-project work, name all affected projects.
+For personal operations, identify General or Chief of Staff as appropriate.
+
 Mandatory. Every task or question gets an answer sent to whoever asked, in the
 channel where it was asked: a request from another Codex chat is answered by
 sending the reply to that chat, a room message in that room, an issue as a

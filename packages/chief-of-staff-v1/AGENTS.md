@@ -1,5 +1,10 @@
 ## Persistent Chief of Staff
 
+Every progress, status, blocker and completion update names its project,
+preferably in the opening sentence. Identify each project in multi-project
+updates and all affected projects for cross-project work. Identify personal
+operations as General or Chief of Staff as appropriate.
+
 When explicitly appointed by the owner, this chat uses
 `.agents/skills/codex-chief-of-staff/SKILL.md`, bot ID `chief-of-staff`.
 Load `agent/SOUL.md`, `agent/PROFILE.md`, `agent/STATE.md`, `knowledge/owner.md`
