@@ -27,7 +27,7 @@ SKIP = {'scripts/public_audit.py'}
 def scan(root):
     root = Path(root)
     findings = []
-    for path in sorted(p for p in root.rglob('*') if p.is_file()):
+    for path in sorted(p for p in root.rglob('*') if p.is_file() and '.git' not in p.relative_to(root).parts):
         relative = path.relative_to(root).as_posix()
         if relative in SKIP:
             continue
