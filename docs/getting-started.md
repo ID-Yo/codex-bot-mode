@@ -44,7 +44,7 @@ Without the plugin, the same launch works from the command line:
 
 ```text
 python -B scripts/team.py plan-team development --project <project>
-python -B scripts/team.py install-team development --project <project> --approval once --confirm
+python -B scripts/team.py install-team development --project <project> --tracking-mode github --approval once --confirm
 ```
 
 Then create one chat per agent and record it with

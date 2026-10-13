@@ -20,7 +20,7 @@ class PluginBuildTests(unittest.TestCase):
             project = Path(tmp) / 'demo'
             project.mkdir()
             run = subprocess.run([sys.executable, '-B', str(out / 'scripts/team.py'), 'install-team', 'sales',
-                                  '--project', str(project), '--approval', 'once', '--confirm'],
+                                  '--project', str(project), '--approval', 'once', '--confirm', '--tracking-mode', 'local'],
                                  capture_output=True, text=True)
             self.assertEqual(run.returncode, 0, run.stderr)
             roster = (project / '.bot-mode/roster.json').read_bytes()

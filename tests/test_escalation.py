@@ -27,7 +27,7 @@ class EscalationTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name) / 'p'
         self.root.mkdir()
-        teams.install(teams.plan_team(self.root, 'development'))
+        teams.install(teams.plan_team(self.root, 'development', team_answers={'tracking_mode': 'local'}))
         data = roster.load(self.root)
         for bot, tid in zip(('manager', 'developer', 'verifier'), T):
             roster.set_thread(data, bot, tid, 'appointed')

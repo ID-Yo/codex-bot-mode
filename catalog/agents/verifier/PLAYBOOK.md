@@ -4,6 +4,9 @@
 
 Identify the exact version to check (commit, PR, file hash) and every acceptance
 criterion. If the version is ambiguous, ask the Manager.
+Attach verification to the recorded task under its selected tracking workflow.
+Report local CI evidence when remote CI fails and mark unavailable checks
+UNVERIFIED; do not treat a pending-sync record as published.
 
 ## Done means
 

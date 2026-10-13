@@ -35,7 +35,7 @@ In Codex, ask the project chat to start a team; it uses the
 python -B scripts/team.py catalog
 python -B scripts/team.py questions --team-template development
 python -B scripts/team.py plan-team development --project <p> [--answers a.json]
-python -B scripts/team.py install-team development --project <p> --approval once --confirm
+python -B scripts/team.py install-team development --project <p> --tracking-mode github --approval once --confirm
 ```
 
 The installer never overwrites an existing team, workspace or memory, and rolls

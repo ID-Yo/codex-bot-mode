@@ -24,6 +24,11 @@ marked. Write the answers to a JSON file:
 
 ## 2. Plan and confirm
 
+Obtain an explicit tracking mode: github, local or both, even when using defaults.
+Both also requires the authoritative status record (github or local). Include
+`tracking_mode` and `tracking_authority` in team answers. Preserve existing team
+choices when adding agents; do not infer a mode from tool availability.
+
 Run `team.py plan-team <template> --project <p> [--answers <file>]` or
 `team.py plan-agent --project <p> --team <name> --template <a> [--answers <file>]`.
 Show the owner: agents with names and workspaces, every value and its source, the
@@ -32,7 +37,7 @@ confirmation.
 
 ## 3. Install
 
-After confirmation: `team.py install-team <template> --project <p> --approval once --confirm`
+After confirmation: `team.py install-team <template> --project <p> --answers <file> --approval once --confirm`
 or `team.py add-agent ... --actor <you> --approval once --confirm`. Use
 `--approval standing:<id>` only when `team.py approvals` shows a matching owner
 record. If you proposed a custom agent, pass `--proposed-by <you>`.

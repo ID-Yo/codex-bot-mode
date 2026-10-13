@@ -22,6 +22,12 @@ PLACEHOLDER = re.compile(r'\{\{([a-z_]+)\}\}')
 SLUG = re.compile(r'[^a-z0-9]+')
 KINDS = ('team', 'catalog-agent', 'custom-agent', 'director')
 BOT_LINE = '- Bot ID: \x60{{bot}}\x60'
+TRACKING_PARAMETERS = {
+    'tracking_mode': {'question': 'Where must implementation work be tracked?',
+                      'choices': ['github', 'local', 'both']},
+    'tracking_authority': {'question': 'For both, which record owns mutable status?',
+                           'choices': ['github', 'local']},
+}
 
 
 class TeamError(ValueError):
@@ -147,6 +153,7 @@ def team_template(catalog, name):
     for role in data['roles']:
         agent_template(catalog, role)
     validate_parameters(data.get('parameters'), name)
+    data['parameters'] = {**(data.get('parameters') or {}), **TRACKING_PARAMETERS}
     return folder, data
 
 
@@ -169,7 +176,7 @@ def resolve(spec, answers, inferred=None):
             missing.append(name)
         else:
             values[name], sources[name] = (inferred or {}).get(name), 'inferred'
-        if item.get('choices') and name in values and values[name] not in item['choices']:
+        if item.get('choices') and values.get(name) is not None and values[name] not in item['choices']:
             raise TeamError(f'{name} must be one of {item["choices"]}')
     if missing:
         raise TeamError('Missing required answers: ' + ', '.join(missing))
@@ -241,6 +248,22 @@ def record_use(project, approval, actor, what):
 
 # Planning --------------------------------------------------------------------
 
+def tracking(values):
+    mode = values.get('tracking_mode')
+    authority = values.get('tracking_authority')
+    if mode not in (None, 'github', 'local', 'both'):
+        raise TeamError('tracking_mode must be github, local or both')
+    if authority not in (None, 'github', 'local'):
+        raise TeamError('tracking_authority must be github or local')
+    if mode != 'both' and authority and authority != mode:
+        raise TeamError('tracking_authority conflicts with tracking_mode')
+    return {'mode': mode, 'authority': authority if mode == 'both' else mode}
+
+
+def require_tracking(choice):
+    if not choice.get('mode') or not choice.get('authority'):
+        raise TeamError('Choose tracking_mode (github/local/both); both also needs tracking_authority before appointment')
+
 def _agent_plan(project, catalog, source, template, bot, team, workspace, host, answers, extra=None):
     folder, spec = agent_template(catalog, template)
     values, sources = resolve(spec.get('parameters'), answers, {})
@@ -309,6 +332,7 @@ def plan_team(project, template, answers=None, source=None, team_answers=None):
     catalog, label = fetch(source)
     folder, spec = team_template(catalog, template)
     team_values, team_sources = resolve(spec.get('parameters'), team_answers or {})
+    work_tracking = tracking(team_values)
     team = team_values.get('team_name') or spec['name']
     data = roster.load(project)
     if any(t['name'].casefold() == team.casefold() for t in data['teams']):
@@ -330,6 +354,7 @@ def plan_team(project, template, answers=None, source=None, team_answers=None):
                     'appoint it with add-agent --template director after owner confirmation.')
     return {'kind': 'team', 'project': str(project), 'catalog': label, 'template': template,
             'template_version': spec['version'], 'team': team, 'team_sources': team_sources,
+            'work_tracking': work_tracking,
             'section': render(spec.get('section') or '{{project}} · {{team}}', context),
             'room': render(spec.get('room') or '{{team}}', context),
             'room_file': render((folder / 'ROOM.md').read_text(encoding='utf-8'), context) if (folder / 'ROOM.md').exists() else None,
@@ -376,6 +401,8 @@ def summary(plan):
 # Installing ------------------------------------------------------------------
 
 def install(plan):
+    if plan['kind'] == 'team':
+        require_tracking(plan.get('work_tracking') or {})
     project = Path(plan['project'])
     data = roster.load(project)
     expected = roster.version(data)
@@ -407,6 +434,7 @@ def install(plan):
             shutil.copyfile(agent['helper'], root / 'scripts' / 'bot_mode.py')
         if plan['kind'] == 'team':
             roster.add_team(data, plan['team'], plan['section'], plan['room'])
+            next(t for t in data['teams'] if t['name'] == plan['team'])['work_tracking'] = plan['work_tracking']
         for agent in plan['agents']:
             roster.add_participant(data, agent['bot'], agent['role'], agent['team'], agent['workspace'])
         data['project'].setdefault('tooling', str(REPO))

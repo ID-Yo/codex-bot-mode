@@ -279,10 +279,10 @@ def create_server(controller, port=0, *, ipv6=False, token=None):
                 elif self.path in ('/api/teams/plan','/api/teams/launch'):
                     from . import launch
                     if self.path == '/api/teams/plan':
-                        result = launch.plan(data.get('template'),data.get('team_name'),data.get('answers'))
+                        result = launch.plan(data.get('template'),data.get('team_name'),data.get('answers'),data.get('team_answers'))
                     else:
                         bridge = getattr(getattr(controller,'personal',None),'native_bridge',None)
-                        result = launch.launch(bridge,data.get('template'),data.get('team_name'),data.get('answers'),data.get('client_message_id'))
+                        result = launch.launch(bridge,data.get('template'),data.get('team_name'),data.get('answers'),data.get('client_message_id'),data.get('team_answers'))
                 elif self.path.startswith('/api/private/'):
                     parts = self.path.split('/')
                     if len(parts)!=5 or parts[3] not in BOTS or parts[4] not in ('messages','resume','stop','open'):

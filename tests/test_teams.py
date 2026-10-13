@@ -15,6 +15,29 @@ CATALOG = ROOT / 'catalog'
 
 
 class TeamTests(unittest.TestCase):
+    def test_tracking_is_required_before_install_and_both_needs_authority(self):
+        plan = teams.plan_team(self.project, 'development')
+        self.assertIsNone(plan['work_tracking']['mode'])
+        with self.assertRaises(teams.TeamError):
+            teams.install(plan)
+        self.assertEqual(list(self.project.iterdir()), [])
+        for values in ({'tracking_mode': 'invalid'},
+                       {'tracking_mode': 'local', 'tracking_authority': 'github'}):
+            with self.assertRaises(teams.TeamError):
+                teams.plan_team(self.project, 'development', team_answers=values)
+        plan = teams.plan_team(self.project, 'development', team_answers={'tracking_mode': 'both'})
+        with self.assertRaises(teams.TeamError):
+            teams.install(plan)
+        plan = teams.plan_team(self.project, 'development', team_answers={
+            'tracking_mode': 'both', 'tracking_authority': 'github'})
+        teams.install(plan)
+        before = roster.load(self.project)
+        self.assertEqual(before['teams'][0]['work_tracking'], {'mode': 'both', 'authority': 'github'})
+        teams.install(teams.plan_agent(self.project, 'Development', 'strategist'))
+        self.assertEqual(roster.load(self.project)['teams'], before['teams'])
+        self.assertIn('Implementation must have a recorded task',
+                      (self.project / 'team/Development/strategist/agent/BASE.md').read_text())
+
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.project = Path(self.tmp.name) / 'demo'
@@ -34,16 +57,16 @@ class TeamTests(unittest.TestCase):
             teams.team_template(CATALOG, item['name'])
 
     def test_plan_does_not_write(self):
-        plan = teams.plan_team(self.project, 'development')
+        plan = teams.plan_team(self.project, 'development', team_answers={'tracking_mode': 'local'})
         self.assertEqual([a['bot'] for a in plan['agents']], ['manager', 'developer', 'code-reviewer', 'designer', 'verifier'])
         self.assertEqual(plan['section'], 'demo · Development')
         self.assertEqual(list(self.project.iterdir()), [])
         self.assertIsNone(plan['director_proposal'])
 
     def test_install_team_then_second_team_and_director(self):
-        self.assertEqual(self.run_cli('install-team', 'development', '--project', str(self.project),
+        self.assertEqual(self.run_cli('install-team', 'development', '--tracking-mode', 'local', '--project', str(self.project),
                                       '--approval', 'once'), 2)  # no --confirm
-        self.assertEqual(self.run_cli('install-team', 'development', '--project', str(self.project),
+        self.assertEqual(self.run_cli('install-team', 'development', '--tracking-mode', 'local', '--project', str(self.project),
                                       '--approval', 'once', '--confirm'), 0)
         dev = self.project / 'team/Development/developer'
         self.assertTrue((dev / 'agent/BASE.md').exists())
@@ -64,8 +87,8 @@ class TeamTests(unittest.TestCase):
         self.assertEqual(data['teams'][0]['section'], 'demo · Development')
         self.assertTrue(all(p['thread_id'] is None for p in data['participants']))
         with self.assertRaises(teams.TeamError):
-            teams.plan_team(self.project, 'development')
-        plan = teams.plan_team(self.project, 'development', team_answers={'team_name': 'Platform'})
+            teams.plan_team(self.project, 'development', team_answers={'tracking_mode': 'local'})
+        plan = teams.plan_team(self.project, 'development', team_answers={'team_name': 'Platform', 'tracking_mode': 'local'})
         self.assertEqual([a['bot'] for a in plan['agents']][:2], ['platform-manager', 'platform-developer'])
         self.assertIsNotNone(plan['director_proposal'])
         teams.install(plan)
@@ -79,7 +102,7 @@ class TeamTests(unittest.TestCase):
 
     def test_owner_answers_and_blank_agent(self):
         teams.install(teams.plan_team(self.project, 'development',
-                                      answers={'developer': {'display_name': 'Dev Ana'}}))
+                                      answers={'developer': {'display_name': 'Dev Ana'}}, team_answers={'tracking_mode': 'local'}))
         meta = manifest.load(self.project / 'team/Development/developer/agent/agent.yaml')
         self.assertEqual(meta['parameters']['display_name'], {**meta['parameters']['display_name'], 'value': 'Dev Ana', 'source': 'owner'})
         with self.assertRaises(teams.TeamError):
@@ -99,7 +122,7 @@ class TeamTests(unittest.TestCase):
         self.assertIn('Write product copy.', (self.project / 'team/Development/copywriter/agent/SOUL.md').read_text(encoding='utf-8'))
 
     def test_standing_approvals(self):
-        teams.install(teams.plan_team(self.project, 'development'))
+        teams.install(teams.plan_team(self.project, 'development', team_answers={'tracking_mode': 'local'}))
         file = teams.approvals_path(self.project)
         manifest.dump(file, {'approvals': [
             {'id': 'catalog', 'granted_by': 'owner', 'used_by': ['manager'], 'covers': ['catalog-agent'],
@@ -119,13 +142,13 @@ class TeamTests(unittest.TestCase):
             check('catalog')
 
     def test_marketing_and_sales_join_an_existing_project(self):
-        teams.install(teams.plan_team(self.project, 'development'))
-        marketing = teams.plan_team(self.project, 'marketing')
+        teams.install(teams.plan_team(self.project, 'development', team_answers={'tracking_mode': 'local'}))
+        marketing = teams.plan_team(self.project, 'marketing', team_answers={'tracking_mode': 'local'})
         self.assertEqual([a['bot'] for a in marketing['agents']],
                          ['marketing-manager', 'strategist', 'content-writer', 'content-reviewer'])
         self.assertIsNotNone(marketing['director_proposal'])
         teams.install(marketing)
-        sales = teams.plan_team(self.project, 'sales')
+        sales = teams.plan_team(self.project, 'sales', team_answers={'tracking_mode': 'local'})
         self.assertEqual([a['bot'] for a in sales['agents']],
                          ['sales-manager', 'lead-researcher', 'outreach-writer', 'pipeline-analyst'])
         teams.install(sales)
@@ -142,8 +165,8 @@ class TeamTests(unittest.TestCase):
         config.write_text(json.dumps({'chief_of_staff': str(cos)}), encoding='utf-8')
         os.environ['CODEX_BOT_MODE_CONFIG'] = str(config)
         try:
-            teams.install(teams.plan_team(self.project, 'development'))
-            teams.install(teams.plan_team(self.project, 'sales'))
+            teams.install(teams.plan_team(self.project, 'development', team_answers={'tracking_mode': 'local'}))
+            teams.install(teams.plan_team(self.project, 'sales', team_answers={'tracking_mode': 'local'}))
         finally:
             del os.environ['CODEX_BOT_MODE_CONFIG']
         text = (cos / 'knowledge/projects.md').read_text(encoding='utf-8')

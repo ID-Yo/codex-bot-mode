@@ -8,7 +8,7 @@ Examples:
   python -B scripts/team.py catalog
   python -B scripts/team.py questions --team-template development
   python -B scripts/team.py plan-team development --project <project>
-  python -B scripts/team.py install-team development --project <project> --approval once --confirm
+  python -B scripts/team.py install-team development --project <project> --tracking-mode github --approval once --confirm
   python -B scripts/team.py add-agent --project <project> --team Development --template blank --answers a.json --actor manager --approval once --confirm
 """
 import argparse
@@ -47,6 +47,8 @@ def main(argv=None):
         p.add_argument('template')
         p.add_argument('--project', default='.')
         p.add_argument('--answers', help='JSON: {"team": {...}, "agents": {"<role>": {...}}}')
+        p.add_argument('--tracking-mode', choices=['github', 'local', 'both'])
+        p.add_argument('--tracking-authority', choices=['github', 'local'])
         if name == 'install-team':
             p.add_argument('--approval', required=True)
             p.add_argument('--actor', default='owner')
@@ -83,6 +85,10 @@ def main(argv=None):
                 raise teams.TeamError('Pass --team-template or --template')
         elif args.action in ('plan-team', 'install-team'):
             given = answers(args.answers)
+            given.setdefault('team', {})
+            for key in ('tracking_mode', 'tracking_authority'):
+                if getattr(args, key) is not None:
+                    given['team'][key] = getattr(args, key)
             plan = teams.plan_team(args.project, args.template, given.get('agents'), args.catalog, given.get('team'))
             if args.action == 'plan-team':
                 emit(teams.summary(plan))

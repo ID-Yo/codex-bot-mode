@@ -30,12 +30,15 @@ def _clean(answers):
             for role, values in answers.items()}
 
 
-def plan(template, team_name=None, answers=None):
+def plan(template, team_name=None, answers=None, team_answers=None):
+    if team_answers is not None and not isinstance(team_answers, dict):
+        raise ValueError('Team answers must be an object')
     team = {'team_name': team_name} if isinstance(team_name, str) and team_name.strip() else {}
+    team.update(team_answers or {})
     return teams.summary(teams.plan_team(served.PROJECT, template, _clean(answers), None, team))
 
 
-def launch(bridge, template, team_name, answers, client_id):
+def launch(bridge, template, team_name, answers, client_id, team_answers=None):
     if not isinstance(client_id, str) or not 8 <= len(client_id) <= 64:
         raise ValueError('Valid client ID required')
     key = 'OFFICE-' + ''.join(ch for ch in client_id if ch.isalnum())[:24]
@@ -43,11 +46,12 @@ def launch(bridge, template, team_name, answers, client_id):
     previous = next((r for r in ledger['requests'] if r['id'] == key), None)
     if previous:
         return {'request': key, 'state': previous['state'], 'repeated': True}
-    summary = plan(template, team_name, answers)
+    summary = plan(template, team_name, answers, team_answers)
+    teams.require_tracking(summary['work_tracking'])
     lead = served.participants()[0] if served.participants() else None
     if bridge is None or not lead or not lead.get('thread_id'):
         raise ValueError('The lead Manager chat is not connected; launch the team from Codex instead')
-    payload = {'template': template, 'team': {'team_name': summary['team']}, 'agents': _clean(answers)}
+    payload = {'template': template, 'team': {'team_name': summary['team'], 'tracking_mode': summary['work_tracking']['mode'], 'tracking_authority': summary['work_tracking']['authority']}, 'agents': _clean(answers)}
     text = ('The owner reviewed and confirmed this team launch in Codex Office (request ' + key + '). '
             'Use the codex-team-launch skill: write the answers below to a file, run install-team '
             f'{template} --approval once --confirm with them, create and appoint every chat, place them in '

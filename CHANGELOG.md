@@ -4,6 +4,13 @@ Format: [Keep a Changelog](https://keepachangelog.com/). Versions follow [SemVer
 
 ## [Unreleased]
 
+### Added
+- Explicit GitHub, local or combined team work tracking, with one authority for combined tracking and mandatory implementation records.
+- Catalog request and contribution form, profile acceptance exercises, MIT provenance guidance and identity-preserving update instructions.
+
+### Fixed
+- Installation examples now pass the selected tracking mode or the reviewed answers file.
+
 ## [0.1.0] - 2026-10-13
 
 ### Added

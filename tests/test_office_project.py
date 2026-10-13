@@ -15,8 +15,8 @@ class OfficeProjectTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name) / 'shop'
         self.root.mkdir()
-        teams.install(teams.plan_team(self.root, 'marketing'))
-        teams.install(teams.plan_team(self.root, 'sales'))
+        teams.install(teams.plan_team(self.root, 'marketing', team_answers={'tracking_mode': 'local'}))
+        teams.install(teams.plan_team(self.root, 'sales', team_answers={'tracking_mode': 'local'}))
         teams.install(teams.plan_agent(self.root, None, 'director'))
         data = roster.load(self.root)
         for bot, tid in zip(('manager', 'strategist', 'sales-manager', 'project-director'), T):

@@ -1,0 +1,36 @@
+name: Catalog profile request or update
+description: Request, contribute or update an individual role or team
+body:
+  - type: dropdown
+    id: change
+    attributes:
+      label: Change type
+      options: [Request a new profile, Contribute a profile, Update an existing profile, Request or update a team]
+    validations:
+      required: true
+  - type: textarea
+    id: purpose
+    attributes:
+      label: Role or team and intended outcome
+      description: Name existing template/version if updating; describe audience, concrete tasks and what makes this distinct.
+    validations:
+      required: true
+  - type: textarea
+    id: contract
+    attributes:
+      label: Contract and acceptance
+      description: Responsibilities, required parameters, tools, languages, deliverables, approval boundaries, done criteria and verification.
+    validations:
+      required: true
+  - type: textarea
+    id: examples
+    attributes:
+      label: Examples and evidence
+      description: One concrete input/output exercise and one missing-facts or boundary exercise; relevant tests and Desktop evidence. Synthetic data only.
+    validations:
+      required: true
+  - type: textarea
+    id: compatibility
+    attributes:
+      label: Update and licensing notes
+      description: Compatibility, version change, installation impact and MIT-compatible provenance. Exclude learned memory, private history, credentials and chat bindings.

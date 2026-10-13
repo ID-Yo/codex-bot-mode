@@ -54,10 +54,13 @@ class Controller:
                 raise TransportError('Selected model not present; no fallback')
             existing = self.store.participants()
             if existing:
+                # Resolve both sides: a moved or renamed project folder (reached
+                # through a link) is still the same owned workspace.
+                same = lambda a, b: a is not None and Path(a).resolve() == Path(b).resolve()
                 for p in existing:
                     expected = self.store.root / 'workspaces' / p['bot']
-                    if (p['bot'] not in self.bots or bindings.get(p['thread_id']) != str(expected)
-                            or Path(p['cwd']) != expected):
+                    if (p['bot'] not in self.bots or not same(bindings.get(p['thread_id']), expected)
+                            or not same(p['cwd'], expected)):
                         raise TransportError('Participant is not an owned room binding')
                 with self.store.transaction() as db:
                     db.execute("UPDATE room SET hold=1,status='recovering',error='Restart requires reconciliation and explicit Resume'")

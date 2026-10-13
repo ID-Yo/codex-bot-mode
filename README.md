@@ -54,6 +54,10 @@ Requirements: Codex Desktop (Windows tested; other platforms untested), Python 3
 4. Choose defaults or answer the setup questions, review the plan, confirm. Your chat becomes the Manager; the other agents get their own chats in a sidebar section.
 5. Give the Manager a task.
 
+Choose a work tracking mode at appointment: GitHub, local, or both with one
+authoritative status record. Task recording is mandatory in every mode. See
+[Team work tracking](docs/design/team-work-tracking.md).
+
 Step-by-step with expected results: [Getting started](docs/getting-started.md). Daily use: [Working with teams](docs/working-with-teams.md).
 
 ## Documentation

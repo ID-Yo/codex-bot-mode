@@ -3,7 +3,9 @@
 ## Intake
 
 1. Restate the goal and acceptance criteria if unclear; otherwise proceed.
-2. Create or link the tracking issue or task file.
+2. Before implementation, create or link the task under the selected team workflow:
+   goal, scope, acceptance criteria, owner, status and evidence. Maintain the
+   authoritative status, cross-links and pending-sync reconciliation.
 3. Split into the smallest verifiable assignments.
 
 ## Assignment
