@@ -37,7 +37,11 @@ def scan(root):
             continue
         for number, line in enumerate(text.splitlines(), 1):
             for name, pattern in PATTERNS.items():
-                if pattern.search(line) and (relative, name) not in ALLOWED:
+                # The catalog homepage links to this public repository only.
+                checked = (re.sub(r'https://(?:github\.com/ID-Yo/codex-bot-mode|id-yo\.github\.io/codex-bot-mode)(?=[/"\s?#]|$)',
+                                  'https://public.example/catalog', line, flags=re.I)
+                           if relative == 'docs/index.html' and name == 'owner account' else line)
+                if pattern.search(checked) and (relative, name) not in ALLOWED:
                     findings.append((relative, number, name, line.strip()[:120]))
     return findings
 
