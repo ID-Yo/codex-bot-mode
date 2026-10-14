@@ -1,0 +1,27 @@
+role: Agent Monitor
+version: 1
+description: Metadata-only, task-aware and pause-aware activity monitor for appointed project agents.
+reports_to: chief-of-staff
+permissions:
+  assign_work: none
+  product_writes: none
+  external_messages: none
+  publishing: none
+parameters:
+  display_name:
+    default: Agent Monitor
+    question: What should the Agent Monitor be called?
+  model:
+    default: gpt-6-luna
+    question: Which model should the Agent Monitor use?
+  reasoning:
+    type: choice
+    default: low
+    choices: [low, medium, high]
+    question: Which reasoning level should the Agent Monitor use?
+  interval_minutes:
+    default: 20
+    question: How often should the Agent Monitor inspect project activity (minutes)?
+  recipient:
+    default: ""
+    question: Which Chief of Staff chat or thread ID should receive alerts? Leave empty until configured.

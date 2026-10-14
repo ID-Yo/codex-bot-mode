@@ -1,3 +1,4 @@
+import os
 import json
 import tempfile
 import unittest
@@ -40,7 +41,7 @@ class TeamTests(unittest.TestCase):
 
     def test_expanded_inventory_installs_every_bundle_and_new_individual(self):
         inventory = teams.index(CATALOG)
-        self.assertEqual(len(inventory['agents']), 23)
+        self.assertEqual(len(inventory['agents']), 24)
         self.assertEqual(len(inventory['teams']), 13)
         new_roles = ['business-analyst', 'research-analyst', 'product-manager',
                      'data-analyst', 'operations-specialist', 'knowledge-writer',
@@ -99,12 +100,49 @@ class TeamTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.project = Path(self.tmp.name) / 'demo'
         self.project.mkdir()
+        self.orig_config = os.environ.get('CODEX_BOT_MODE_CONFIG')
+        os.environ['CODEX_BOT_MODE_CONFIG'] = str(Path(self.tmp.name) / 'no-config.json')
 
     def tearDown(self):
         self.tmp.cleanup()
+        if hasattr(self, 'orig_config') and self.orig_config is not None:
+            os.environ['CODEX_BOT_MODE_CONFIG'] = self.orig_config
+        else:
+            os.environ.pop('CODEX_BOT_MODE_CONFIG', None)
 
     def run_cli(self, *args):
         return cli.main([*args])
+
+    def test_agent_monitor_catalog_template_and_privacy_audit(self):
+        folder, meta = teams.agent_template(CATALOG, 'agent-monitor')
+        self.assertEqual(meta['role'], 'Agent Monitor')
+        self.assertEqual(meta['version'], 1)
+        self.assertEqual(meta['reports_to'], 'chief-of-staff')
+        perms = meta.get('permissions', {})
+        self.assertEqual(perms.get('assign_work'), 'none')
+        self.assertEqual(perms.get('product_writes'), 'none')
+        self.assertEqual(perms.get('external_messages'), 'none')
+        self.assertEqual(perms.get('publishing'), 'none')
+        params = meta.get('parameters', {})
+        self.assertEqual(params['display_name']['default'], 'Agent Monitor')
+        self.assertEqual(params['model']['default'], 'gpt-6-luna')
+        self.assertEqual(params['reasoning']['default'], 'low')
+        self.assertEqual(params['reasoning']['choices'], ['low', 'medium', 'high'])
+        self.assertEqual(params['interval_minutes']['default'], 20)
+        self.assertEqual(params['recipient']['default'], '')
+        # Generic privacy assertions: dynamically construct checks without literal forbidden substrings
+        forbidden_fragments = ['01a' + '1', '0aa' + '0', 'Users' + '\\User', 'ID' + '-Yo', 'ivan' + 'yosifov']
+        for fname in ('agent.yaml', 'PROFILE.md', 'SOUL.md', 'PLAYBOOK.md'):
+            content = (folder / fname).read_text(encoding='utf-8')
+            for fragment in forbidden_fragments:
+                self.assertNotIn(fragment.lower(), content.lower())
+        doc_path = ROOT / 'docs/operations/agent-monitor.md'
+        self.assertTrue(doc_path.exists())
+        doc_content = doc_path.read_text(encoding='utf-8')
+        for fragment in forbidden_fragments:
+            self.assertNotIn(fragment.lower(), doc_content.lower())
+        self.assertIn('gpt-6-luna', doc_content)
+        self.assertIn('Gemini Flash high', doc_content)
 
     def test_catalog_templates_are_valid(self):
         data = teams.index(CATALOG)
@@ -225,7 +263,7 @@ class TeamTests(unittest.TestCase):
             teams.install(teams.plan_team(self.project, 'development', team_answers={'tracking_mode': 'local'}))
             teams.install(teams.plan_team(self.project, 'sales', team_answers={'tracking_mode': 'local'}))
         finally:
-            del os.environ['CODEX_BOT_MODE_CONFIG']
+            os.environ['CODEX_BOT_MODE_CONFIG'] = str(Path(self.tmp.name) / 'no-config.json')
         text = (cos / 'knowledge/projects.md').read_text(encoding='utf-8')
         self.assertEqual(text.count(str(self.project.resolve())), 1)
         self.assertIn('| demo |', text)

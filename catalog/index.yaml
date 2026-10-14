@@ -70,6 +70,9 @@ agents:
   - name: financial-analyst
     version: 1
     description: Prepare traceable business calculations and budget scenarios.
+  - name: agent-monitor
+    version: 1
+    description: Metadata-only, task-aware and pause-aware activity monitor for appointed project agents.
 teams:
   - name: development
     version: 3
