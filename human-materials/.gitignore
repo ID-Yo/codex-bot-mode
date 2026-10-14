@@ -1,0 +1,5 @@
+# Originals and the populated index may be private. Only empty template scaffolding
+# is distributed publicly. Git ignores do not protect already tracked files.
+*
+!README.md
+!.gitignore
