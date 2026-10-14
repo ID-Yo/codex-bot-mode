@@ -5,6 +5,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/). Versions follow [SemVer
 ## [Unreleased]
 
 ### Added
+- Agent Monitor profile and setup guide: metadata-only, task-aware and pause-aware checks, authorized Chief of Staff routing, durable alert checkpoints and configurable model/cadence defaults.
 - Ten specialist profiles and nine additional core teams: twelve main teams in total, plus a Manager-and-selected-specialist Starter.
 - Synthetic deliverable and boundary exercises for each new specialist, with explicit tool requirements and template/live-verification limits.
 - Explicit GitHub, local or combined team work tracking, with one authority for combined tracking and mandatory implementation records.
