@@ -70,6 +70,7 @@ Step-by-step with expected results: [Getting started](docs/getting-started.md). 
 | [Roster](docs/design/project-roster.md) | Shared and local parts, commands |
 | [Catalog](catalog/README.md) | Templates and their parameters |
 | [Chief of Staff](packages/chief-of-staff-v1/README.md) | Personal agent setup |
+| [Documentation index](docs/00-index.md) | Canonical documentation index, marketing routes, and templates |
 | [AGENTS.md](AGENTS.md) | Instructions for coding agents working on this repository |
 
 ## Status
