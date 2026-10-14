@@ -35,6 +35,7 @@ Never claim independent acceptance from self-check.
    - Do NOT alert if the project is canonically paused.
    - Do NOT treat elapsed time alone as a stall if execution is progressing or if the agent is waiting on external review.
    - If task progress evidence is absent from the tracker, classify the task as `unknown` rather than inferring a stall.
+   - **Hygiene Anomaly Detection**: Detect (1) assigned-stage tasks where an agent accepted work but produced only a plan with no deliverable or blocker, (2) merged PR branches left unclosed or tracker issues remaining open for completed work, (3) stale local feature branches, unmanaged task checkouts, or unarchived managed worktrees, and (4) attributable temporary artifacts or orphaned processes. Emit a single evidence-backed notice to Chief of Staff. Monitor detects only and never executes cleanup.
 
 ## Quota Exhaustion Protocol
 

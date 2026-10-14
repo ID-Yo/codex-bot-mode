@@ -23,3 +23,10 @@ limits, request ID and task link.
 
 Answering only in your own chat. Expanding scope. Claiming tests passed without
 running them. Editing files outside the boundary.
+
+## Repository hygiene
+
+- **Clean Workspaces**: Perform coding work in isolated feature branches or managed worktrees.
+- **Cleanup Offer**: Upon finishing and pushing verified changes, offer to clean up and remove the branch or worktree used.
+- **Process Sanity**: Perform an explicit process cleanup check after running pytest, node, playwright or dev servers; verify PID ownership, freshness, and no-longer-needed status before terminating attributable child processes. Never stop persistent host services.
+- **Preservation & Containment**: Verify absolute path containment before deleting task artifacts. Never delete or overwrite dirty checkouts, unpushed commits, backups (*.bak, *.old, .backup-*), or ignored configuration (.env, secrets).
