@@ -144,6 +144,15 @@ class TeamTests(unittest.TestCase):
         self.assertIn('gpt-6-luna', doc_content)
         self.assertIn('Gemini Flash high', doc_content)
 
+        # Repository hygiene documentation audit
+        hygiene_path = ROOT / 'docs/operations/repository-hygiene.md'
+        self.assertTrue(hygiene_path.exists())
+        hygiene_content = hygiene_path.read_text(encoding='utf-8')
+        for fragment in forbidden_fragments:
+            self.assertNotIn(fragment.lower(), hygiene_content.lower())
+        self.assertIn('Repository Hygiene', hygiene_content)
+        self.assertIn('Process Cleanup Sanity Check', hygiene_content)
+
     def test_catalog_templates_are_valid(self):
         data = teams.index(CATALOG)
         for item in data['agents']:

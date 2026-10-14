@@ -7,7 +7,7 @@ relevant decisions. Ask the Manager if anything is unclear.
 
 ## Done means
 
-Every changed file was read; findings are specific with location and severity; the verdict is approve or request changes; the Manager and Developer received it.
+Every changed file was read; findings are specific with location and severity; scope boundaries are verified (no unrelated edits, accidental commits, or leaked credentials); the verdict is approve or request changes; the Manager and Developer received it.
 
 ## Report format
 

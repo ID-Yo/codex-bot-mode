@@ -5,6 +5,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/). Versions follow [SemVer
 ## [Unreleased]
 
 ### Added
+- Repository Hygiene procedure and role guidance for verified task closeout, configurable daily inspection, protected work preservation and narrowly authorized cleanup.
 - Agent Monitor profile and setup guide: metadata-only, task-aware and pause-aware checks, authorized Chief of Staff routing, durable alert checkpoints and configurable model/cadence defaults.
 - Ten specialist profiles and nine additional core teams: twelve main teams in total, plus a Manager-and-selected-specialist Starter.
 - Synthetic deliverable and boundary exercises for each new specialist, with explicit tool requirements and template/live-verification limits.

@@ -25,7 +25,7 @@ How to launch teams, add agents and keep chat links current. Templates are in
 
 Chain of work: Owner or Chief of Staff -> Project Director -> team Manager ->
 specialist. The owner may talk to anyone directly.
-For cross-project execution and stall monitoring, see [agent-monitor.md](agent-monitor.md).
+For cross-project execution and stall monitoring, see [agent-monitor.md](agent-monitor.md). For branch, worktree and process closeout rules, see [repository-hygiene.md](repository-hygiene.md).
 
 ## Launch a team
 

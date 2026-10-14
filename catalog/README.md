@@ -24,7 +24,7 @@ Install and manage teams with `scripts/team.py`; see `docs/operations/teams.md`.
 
 ## Launch inventory and readiness
 
-Agent Monitor provides read-only cross-project execution and activity monitoring reporting exclusively to the Chief of Staff; see [docs/operations/agent-monitor.md](../docs/operations/agent-monitor.md).
+Agent Monitor provides read-only cross-project execution and activity monitoring reporting exclusively to the Chief of Staff; see [docs/operations/agent-monitor.md](../docs/operations/agent-monitor.md) and [docs/operations/repository-hygiene.md](../docs/operations/repository-hygiene.md).
 
 
 Catalog v2 retains the original 13 agent templates and adds 10 distinct
