@@ -355,7 +355,7 @@ class HumanMaterialsTests(unittest.TestCase):
                     outside_lines.append(line)
             clean = '\n'.join(outside_lines)
             links = []
-            for part in clean.split(']('):
+            for part in clean.split('](')[1:]:
                 if ')' in part:
                     target = part.split(')')[0].strip()
                     if target.startswith('http') or target.startswith('#') or target.startswith('mailto:') or target.startswith('codex:'):
@@ -396,6 +396,32 @@ class HumanMaterialsTests(unittest.TestCase):
                 check_links_in_dir(export_out / 'docs')
                 check_links_in_dir(export_out / 'templates')
                 check_links_in_dir(export_out / 'human-materials')
+
+                # 3. Verify backticked repository paths in marketing and status docs exist in export
+                non_path_exclusions = {
+                    'list_threads', 'status: draft', 'status: verified', 'status', 'owner',
+                    'draft', 'verified', 'gpt-6-luna'
+                }
+                def is_path_citation(cand):
+                    if cand.startswith(('http://', 'https://', 'localhost', '127.0.0.1', '-', 'python ', 'git ', 'gh ', 'npm ')):
+                        return False
+                    if cand in non_path_exclusions:
+                        return False
+                    if re.match(r'^v?\d+\.\d+(\.\d+)?(-[a-zA-Z0-9_.-]+)?$', cand):
+                        return False
+                    if '/' in cand or chr(92) in cand or cand.startswith('.') or re.search(r'\.[a-zA-Z0-9_-]+$', cand):
+                        return True
+                    return False
+
+                doc_files = list((ROOT / 'docs/marketing').glob('*.md')) + list((ROOT / 'docs/status').glob('*.md'))
+                for doc_file in doc_files:
+                    text = doc_file.read_text(encoding='utf-8')
+                    for m in re.finditer(r'\x60([^\x60\r\n]+)\x60', text):
+                        c = m.group(1).strip()
+                        if is_path_citation(c):
+                            self.assertTrue((ROOT / c).exists(), f"Backticked path does not exist in repository ({doc_file.name}): {c}")
+                            self.assertTrue((export_out / c).exists() or (c == 'README.md' and (export_out / 'README.md').exists()),
+                                f"Backticked path is not exported to public tree ({doc_file.name}): {c}")
         else:
             if (ROOT / 'docs').is_dir():
                 check_links_in_dir(ROOT / 'docs')
@@ -403,6 +429,28 @@ class HumanMaterialsTests(unittest.TestCase):
                 check_links_in_dir(ROOT / 'templates')
             if (ROOT / 'human-materials').is_dir():
                 check_links_in_dir(ROOT / 'human-materials')
+            non_path_exclusions = {
+                'list_threads', 'status: draft', 'status: verified', 'status', 'owner',
+                'draft', 'verified', 'gpt-6-luna'
+            }
+            def is_path_citation(cand):
+                if cand.startswith(('http://', 'https://', 'localhost', '127.0.0.1', '-', 'python ', 'git ', 'gh ', 'npm ')):
+                    return False
+                if cand in non_path_exclusions:
+                    return False
+                if re.match(r'^v?\d+\.\d+(\.\d+)?(-[a-zA-Z0-9_.-]+)?$', cand):
+                    return False
+                if '/' in cand or chr(92) in cand or cand.startswith('.') or re.search(r'\.[a-zA-Z0-9_-]+$', cand):
+                    return True
+                return False
+
+            doc_files = list((ROOT / 'docs/marketing').glob('*.md')) + list((ROOT / 'docs/status').glob('*.md'))
+            for doc_file in doc_files:
+                text = doc_file.read_text(encoding='utf-8')
+                for m in re.finditer(r'\x60([^\x60\r\n]+)\x60', text):
+                    c = m.group(1).strip()
+                    if is_path_citation(c):
+                        self.assertTrue((ROOT / c).exists(), f"Backticked path does not exist in repository ({doc_file.name}): {c}")
 
 if __name__ == '__main__':
     unittest.main()
