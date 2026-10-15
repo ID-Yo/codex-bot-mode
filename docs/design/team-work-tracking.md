@@ -36,3 +36,5 @@ python -B scripts/team.py install-team development --project <project> --trackin
 Answers files use `team.tracking_mode` and `team.tracking_authority`.
 The shared roster stores the choice under `teams[].work_tracking`.
 Approval and tracking are separate: a selected mode grants no publication rights.
+
+For full operational lifecycle procedures, see [Task Ownership and Follow-Through Policy](../operations/task-ownership-and-follow-through.md) and [Task Template](../../templates/task.md).

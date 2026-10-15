@@ -24,18 +24,24 @@ Never claim independent acceptance from self-check.
 
 ## Task Follow-Through Rules
 
+Canonical task ownership and follow-through policy originates in the public repository `https://github.com/ID-Yo/codex-bot-mode` at `docs/operations/task-ownership-and-follow-through.md` (available after public release). When auditing projects that lack local policy documentation, evaluate follow-through using the embedded core rules:
+
 1. **Distinguish execution stages**:
-   - `assigned`: task is recorded and assigned to an agent.
+   - `assigned`: task is recorded and assigned to an agent (`project/team/bot ID` with fresh roster binding).
    - `active`: agent is actively executing turns or commands in the workspace.
    - `verified`: output deliverable exists and has been verified against criteria.
-   - `blocked`: explicit blocker recorded by the agent or manager.
-2. **Alert criteria**:
-   - An agent in `assigned` stage is completed or idle while holding an execution task, but has delivered only an initial plan and no code artifact, test output, or recorded blocker.
-   - Emit exactly one evidence-backed alert to the configured Chief of Staff identifying the agent, task, plan status, and missing deliverable.
-   - Do NOT alert if the project is canonically paused.
-   - Do NOT treat elapsed time alone as a stall if execution is progressing or if the agent is waiting on external review.
-   - If task progress evidence is absent from the tracker, classify the task as `unknown` rather than inferring a stall.
-   - **Hygiene Anomaly Detection**: Detect (1) assigned-stage tasks where an agent accepted work but produced only a plan with no deliverable or blocker, (2) merged PR branches left unclosed or tracker issues remaining open for completed work, (3) stale local feature branches, unmanaged task checkouts, or unarchived managed worktrees, and (4) attributable temporary artifacts or orphaned processes. Emit a single evidence-backed notice to Chief of Staff. Monitor detects only and never executes cleanup.
+   - `blocked`: explicit blocker recorded by the agent or manager (reason, unblock owner, resume condition, next check).
+2. **Alert criteria & 20-minute audit checks**:
+   - Use fresh authorized roster (`scripts/roster.py`), thread activity metadata, and authoritative tracker evidence.
+   - Audit:
+     1. Missing task ownership or unassigned task holding `in_progress` state.
+     2. Unacknowledged handoff: dispatched task without agent acknowledgment within expected turn bounds.
+     3. Finished or idle turns without continuation deliverable or recorded blocker (reason, unblock owner, resume condition, next check). An earlier plan or artifact does not exempt a finished turn that lacks an active continuation or blocker.
+     4. Candidate deliverables without Code Reviewer or Verifier check bound to the current commit SHA.
+     5. Accepted dual gates without merge integration or recorded blocker.
+     6. Contradictory authoritative and local tracking records in `both` tracking mode.
+     7. Hygiene anomalies: unclosed tracker issues or unarchived worktrees for completed work, or orphan processes.
+   - Invariants: Do not treat elapsed time alone as evidence of a stall; verify scoped task and current stage evidence. Missing access is UNKNOWN, not a violation. Backlog and paused tasks carry no execution expectation; explicit owner pause overrides. Deduplicate actionable reports solely to Chief of Staff in own `agent/STATE.md`; no project wakeups, interventions, model changes, or new schedules. No Product or Repository Mutations: Monitor writes solely to its own `agent/STATE.md` for checkpoint and deduplication bookkeeping. Monitor detects only and never executes cleanup.
 
 ## Quota Exhaustion Protocol
 

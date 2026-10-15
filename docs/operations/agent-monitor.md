@@ -27,7 +27,7 @@ Project Managers -----------------------------------------> Project Agents
 
 ## Task Follow-Through Protocol
 
-The Monitor evaluates task follow-through by distinguishing four execution stages:
+The Monitor evaluates task follow-through per canonical policy ([Task Ownership and Follow-Through Policy](task-ownership-and-follow-through.md)) by distinguishing four execution stages:
 1. **Assigned**: The task has been recorded in the tracker and assigned to a specific agent.
 2. **Active**: The agent is actively executing turns or running verified commands.
 3. **Verified**: The deliverable artifact has been produced and validated against criteria.
@@ -47,3 +47,8 @@ The Monitor evaluates task follow-through by distinguishing four execution stage
 - **Chief of Staff Failover Action**: The authorized Chief of Staff alone may rebind the affected existing chat to an owner-authorized backup model (for example, Gemini Flash high as a configurable backup option, not the normal operational model), recording the primary model, reason, and timestamp.
 - **Anti-Flapping and Recovery**: Maintain the backup binding until quota resets; avoid rapid model switching or blind retries. No availability promises are made for backup providers.
 - **Privacy**: Specific account IDs, credit balances, and billing records remain strictly private and outside repository files.
+
+## Related Documentation
+
+- [Task Ownership and Follow-Through Policy](task-ownership-and-follow-through.md)
+- [Repository Hygiene](repository-hygiene.md)

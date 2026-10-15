@@ -8,7 +8,7 @@ Codex Bot Mode adopts the Open-Dreamdocs category structure, mapping categories 
 | `governance` | core | `AGENTS.md` | Ownership, permissions, Karpathy engineering principles, and persistent manager rules. |
 | `context` | core | `docs/context/` | Handoff records and historical conversation context. |
 | `design` | core | `docs/design/` | Communication contracts, roster format, work tracking, and agent profile memory. |
-| `operations` | core | `docs/operations/` | Team management, Agent Monitor, repository hygiene, and public release procedures. |
+| `operations` | core | `docs/operations/` | Team management, Agent Monitor, repository hygiene, task ownership and follow-through, and public release procedures. |
 | `verification` | core | `docs/verification/` | Independent verification tests, checklists, and template setups. |
 | `marketing` | optional | `docs/marketing/` | 5 independent fields: audience/ICP, competitors/alternatives, positioning, value proposition, messaging. |
 | `status` | optional | `docs/status/` | Temporary current state, open blockers, and verification dates. |

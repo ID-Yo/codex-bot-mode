@@ -1,5 +1,7 @@
 # Repository Hygiene
 
+Operational lifecycle closeout, clean branch/worktree management, and process sanitation procedure. For task lifecycle states, assignment ownership, and monitor audit rules, see [Task Ownership and Follow-Through Policy](task-ownership-and-follow-through.md).
+
 Repository hygiene defines canonical procedures for maintaining clean, safe, and recoverable workspaces across Codex Bot Mode projects. It ensures completed work is fully integrated and closed out, prevents disk and worktree sprawl, and protects dirty, uncommitted, and user-owned state.
 
 ## Core Principles
