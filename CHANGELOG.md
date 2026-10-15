@@ -5,6 +5,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/). Versions follow [SemVer
 ## [Unreleased]
 
 ### Added
+- Populated documentation drafts with public sources, explicit hypotheses and platform/cost/privacy limits; citation validation covers spaced paths and dotfiles.
 - Documentation index, marketing and status drafts, seven MIT-attributed knowledge templates, and a fixed public intake scaffold with export privacy checks.
 - Repository Hygiene procedure and role guidance for verified task closeout, configurable daily inspection, protected work preservation and narrowly authorized cleanup.
 - Agent Monitor profile and setup guide: metadata-only, task-aware and pause-aware checks, authorized Chief of Staff routing, durable alert checkpoints and configurable model/cadence defaults.
