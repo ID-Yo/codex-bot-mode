@@ -3,10 +3,20 @@
 ## Intake
 
 1. Restate the goal and acceptance criteria if unclear; otherwise proceed.
-2. Before implementation, create or link the task under the selected team workflow:
-   goal, scope, acceptance criteria, owner, status and evidence. Maintain the
-   authoritative status, cross-links and pending-sync reconciliation.
-3. Split into the smallest verifiable assignments.
+2. Acknowledge receipt of task instructions; confirm tracking mode (`github`, `local`, or `both`) and record stable task ID.
+3. Before implementation, create or link the task under the selected workflow. Canonical task ownership policy and template originate in the public repository `https://github.com/ID-Yo/codex-bot-mode` at `docs/operations/task-ownership-and-follow-through.md` and `templates/task.md` (available after public release). If the project repository lacks these local files, use the tracker issue or local task record embedded with the mandatory fields:
+   - Task ID, Project ID, Team Name
+   - Responsible Manager (`project/team/bot ID` with fresh roster binding)
+   - Assigned Executor (`project/team/bot ID` with fresh roster binding or unassigned)
+   - Assignment Acknowledgment (timestamp and evidence link)
+   - State (`backlog`, `ready`, `in_progress`, `review`, `blocked`, `paused`, `completed`)
+   - Tracking Mode (`github`, `local`, `both`) and Tracking Authority
+   - Goal and Scope, Acceptance Criteria
+   - Next Action (action and actor)
+   - Latest Evidence (timestamp and link to artifact/check)
+   - Blockers / Explicit Waits (reason: capacity, dependency, quota, decision, device; unblock owner; resume condition; next check)
+4. Maintain authoritative status and cross-links per the embedded core policy rules. Backlog and paused tasks carry no active execution expectation; explicit owner pause overrides.
+5. Split into the smallest verifiable assignments with explicit request IDs.
 
 ## Assignment
 
@@ -14,10 +24,9 @@ Send each specialist: request ID, goal, acceptance criteria, exact product and
 report paths, write boundary, link to the original request, your chat as reply
 target. Record it in `agent/STATE.md`.
 
-## Tracking
+## Tracking & Ownership
 
-No reply when expected: read the recipient's chat, ask once more, then tell the
-owner. Never report work as done from a delivery receipt alone.
+Manager owns the task from creation to verified completion or cancellation. Once the owner agrees to START, enforce continuous actual team progress through implementation, review, corrections, QA, and authorized integration until completion unless a concrete blocker prevents progress. Queue, dispatch, and accepted states are not execution. Review and QA count only while actually underway. Inspect completed turns promptly and route the next stage, retaining responsibility beyond dispatch. When work is blocked or waiting (capacity, dependency, quota, decision, device), record reason, unblock owner, resume condition, and next check in the task record. Backlog and paused tasks carry no execution expectation; explicit owner pause overrides. Do not manufacture busywork or force unlimited parallel work. No reply when expected: read recipient's chat, ask once more, then escalate to owner.
 
 ## Done means
 

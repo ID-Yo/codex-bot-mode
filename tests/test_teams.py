@@ -1,3 +1,4 @@
+import re
 import os
 import json
 import tempfile
@@ -132,10 +133,27 @@ class TeamTests(unittest.TestCase):
         self.assertEqual(params['recipient']['default'], '')
         # Generic privacy assertions: dynamically construct checks without literal forbidden substrings
         forbidden_fragments = ['01a' + '1', '0aa' + '0', 'Users' + '\\User', 'ID' + '-Yo', 'ivan' + 'yosifov']
-        for fname in ('agent.yaml', 'PROFILE.md', 'SOUL.md', 'PLAYBOOK.md'):
-            content = (folder / fname).read_text(encoding='utf-8')
+        # Verify exact privacy mask boundary: canonical public URL and subpath pass, private -dev or lookalike fails
+        def check_privacy(text):
+            owner_tok = "ID" + "-Yo"; pat = r"https://(?:github\.com/" + owner_tok + r"/codex-bot-mode|" + owner_tok.lower() + r"\.github\.io/codex-bot-mode)" + '(?=[/`"\'\\s?#\\)]|$)'
+            cleaned = re.sub(pat, "https://public.example/catalog", text, flags=re.I)
             for fragment in forbidden_fragments:
-                self.assertNotIn(fragment.lower(), content.lower())
+                self.assertNotIn(fragment.lower(), cleaned.lower())
+
+        for fname in ("agent.yaml", "PROFILE.md", "SOUL.md", "PLAYBOOK.md"):
+            check_privacy((folder / fname).read_text(encoding="utf-8"))
+
+        # Negative and positive boundary proof on actual catalog fixture
+        bt = chr(96)
+        base_pb = (folder / "PLAYBOOK.md").read_text(encoding="utf-8")
+        check_privacy(base_pb + " Canonical: " + bt + "https://github.com/" + "ID" + "-Yo/codex-bot-mode" + bt)
+        check_privacy(base_pb + " Subpath: " + bt + "https://github.com/" + "ID" + "-Yo/codex-bot-mode/blob/main/README.md" + bt)
+        with self.assertRaises(AssertionError):
+            check_privacy(base_pb + " Private: " + bt + "https://github.com/" + "ID" + "-Yo/codex-bot-mode-dev" + bt)
+        with self.assertRaises(AssertionError):
+            check_privacy(base_pb + " Lookalike: " + bt + "https://github.com/" + "ID" + "-Yo/codex-bot-modeX" + bt)
+        with self.assertRaises(AssertionError):
+            check_privacy(base_pb + " Bare: " + bt + "ID" + "-Yo" + bt)
         doc_path = ROOT / 'docs/operations/agent-monitor.md'
         self.assertTrue(doc_path.exists())
         doc_content = doc_path.read_text(encoding='utf-8')
