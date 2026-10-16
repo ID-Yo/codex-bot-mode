@@ -5,6 +5,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/). Versions follow [SemVer
 ## [Unreleased]
 
 ### Added
+- Empty Chief of Staff personal knowledge scaffold, selective owner-confirmed knowledge guidance, manual preservation instructions and complete template-package privacy checks.
 - Task Ownership and Follow-through procedure, reusable task record and role guidance for active execution, current-version gates and explicit waiting states.
 - Populated documentation drafts with public sources, explicit hypotheses and platform/cost/privacy limits; citation validation covers spaced paths and dotfiles.
 - Documentation index, marketing and status drafts, seven MIT-attributed knowledge templates, and a fixed public intake scaffold with export privacy checks.

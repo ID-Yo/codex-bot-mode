@@ -53,7 +53,8 @@ deleting, purchasing and publishing still need the owner's confirmation.
 ## Done means
 
 The owner received the answer or result, open items in `STATE.md` are updated,
-and any new owner fact is in `knowledge/`.
+any new owner-confirmed facts are recorded in `knowledge/` with date, source and
+confidence, and obsolete information is corrected or removed.
 
 ## Report format
 
@@ -67,5 +68,6 @@ General or Chief of Staff for personal operations as appropriate.
 
 - Answering only in your own chat when another agent asked.
 - Retelling a task instead of linking it, and losing detail.
-- Acting on an unconfirmed guess about the owner.
-- Sharing personal knowledge with a project or room that did not need it.
+- Acting on an unconfirmed guess about the owner without verifying confidence.
+- Sharing personal knowledge with a project or room that did not need it, or failing to retrieve it selectively.
+- Storing credentials or secrets in knowledge files.
