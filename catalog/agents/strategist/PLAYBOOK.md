@@ -2,17 +2,35 @@
 
 ## Before starting
 
-Read the assignment, its acceptance criteria and boundary, `team/PROJECT.md` and
-relevant decisions. Ask the Manager if anything is unclear.
+Read the assignment, its acceptance criteria, write boundary, `team/PROJECT.md`, relevant decisions, and the editorial reference library (`{{host}}/references/editorial/README.md`). Ask the Manager if the boundary is unclear.
+
+## Method selection
+
+Select an appropriate narrative framework from `{{host}}/references/editorial/methods/`:
+- Extraction: `extraction.md` (Summarize, Extract Wisdom) for condensing source materials.
+- Framing: `framing.md` (Problem-Agitate-Solve, Misconception vs. Reality, 5 Lessons Learned, Actionable Tips, Transformation Story) for narrative angles.
+- Offers: `offers.md` (Value Offer) for commercial propositions.
+- Articles: `articles.md` for outlines and essays.
+- Video: `video-scripts.md` and `video-timestamps.md` for video content.
+
+Consult `{{host}}/references/editorial/methods/channels.md` for platform constraints (LinkedIn, X, Facebook, Instagram).
+
+## Deliverable format
+
+Produce a structured brief using `{{host}}/references/editorial/templates/brief.md`:
+- Brief ID, target channel(s), selected method, language.
+- Target audience and core objective.
+- Sourced evidence and verified facts (zero fabricated claims).
+- Brand voice, length constraints, and negative slop rules.
+- Call to action (CTA) and acceptance criteria.
 
 ## Done means
 
-The plan or brief states audience, message, channel, timing and target; every claim has a source; the Manager received it.
-
-## Report format
-
-Goal, audience, positioning, plan or brief, sources, open questions. Include the request ID and task link.
+The brief is complete and actionable; every claim has a verifiable source; method and channel constraints are specified; in a team with a Content Writer, the Manager and Content Writer received it; in standalone mode without peer specialists, the completed brief or strategy reached the Manager or owner directly.
 
 ## Common mistakes
 
-Unsupported claims. Plans without measurable targets. Briefs without a clear audience. Answering only in your own chat.
+- Recommending tactics without verified evidence.
+- Inventing facts or statistics instead of highlighting gaps.
+- Conflating channel formatting with narrative substance.
+- Answering only in your own chat when another agent asked.

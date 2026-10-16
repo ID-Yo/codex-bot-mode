@@ -1,7 +1,9 @@
 role: Content Reviewer
-version: 1
-description: Checks tone, facts and brand consistency of content.
+version: 2
+description: Checks tone, facts, source fidelity and brand consistency of content.
 reports_to: manager
+references:
+  - editorial
 permissions:
   assign_work: none
   product_writes: none

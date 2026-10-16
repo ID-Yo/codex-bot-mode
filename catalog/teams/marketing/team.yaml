@@ -1,9 +1,11 @@
 name: Marketing
-version: 1
-description: Manager, Strategist, Content Writer and Content Reviewer for positioning and content.
+version: 2
+description: Manager, Strategist, Content Writer and Content Reviewer for positioning, source-grounded content and editorial workflow.
 roles: [manager, strategist, content-writer, content-reviewer]
 section: "{{project}} · {{team}}"
 room: "{{team}}"
+references:
+  - editorial
 parameters:
   team_name:
     default: Marketing
