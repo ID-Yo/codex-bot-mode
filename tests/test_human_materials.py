@@ -452,5 +452,261 @@ class HumanMaterialsTests(unittest.TestCase):
                     if is_path_citation(c):
                         self.assertTrue((ROOT / c).exists(), f"Backticked path does not exist in repository ({doc_file.name}): {c}")
 
-if __name__ == '__main__':
+
+    def test_cos_personal_knowledge_adoption_preserves_existing_file(self):
+        # 1. Verify README contract explicitly specifies manual adoption/update procedure
+        readme_text = (ROOT / "packages/chief-of-staff-v1/README.md").read_text(encoding="utf-8")
+        self.assertIn("Manual adoption and update procedure", readme_text)
+        self.assertIn("preserve all existing populated files in BTknowledge/BT", readme_text.replace(chr(96), "BT"))
+        self.assertIn("BTagent/STATE.mdBT and BTagent/memory/BT", readme_text.replace(chr(96), "BT"))
+        self.assertIn("Never overwrite existing populated knowledge or state with the empty template scaffold", " ".join(readme_text.split()))
+
+        # 2. Execute the documented synthetic procedure on a target project with multiple preexisting populated files
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "my-chief-of-staff"
+            target.mkdir()
+            (target / "knowledge").mkdir()
+            (target / "agent").mkdir()
+            (target / "agent/memory").mkdir()
+
+            # Preexisting populated knowledge records (including binary/nonstandard bytes)
+            canary_personal = b"EXISTING_SYNTHETIC_CANARY_USER_RECORD_HABITS_AND_BOUNDARIES\xff\xfe"
+            canary_owner = b"EXISTING_SYNTHETIC_OWNER_BIO_AND_GOALS"
+            canary_people = b"EXISTING_SYNTHETIC_PEOPLE_CONTACTS"
+            canary_k_readme = b"EXISTING_SYNTHETIC_KNOWLEDGE_INDEX"
+            canary_state = b"EXISTING_SYNTHETIC_STATE_TASKS"
+            canary_memory = b"EXISTING_SYNTHETIC_MEMORY_SUMMARY"
+
+            (target / "knowledge/personal.md").write_bytes(canary_personal)
+            (target / "knowledge/owner.md").write_bytes(canary_owner)
+            (target / "knowledge/people.md").write_bytes(canary_people)
+            (target / "knowledge/README.md").write_bytes(canary_k_readme)
+            (target / "agent/STATE.md").write_bytes(canary_state)
+            (target / "agent/memory/summary.md").write_bytes(canary_memory)
+
+            # Documented procedure: copy only absent or new files; preserve existing files byte-for-byte
+            cos_src = ROOT / "packages/chief-of-staff-v1"
+            for src_path in cos_src.rglob("*"):
+                if src_path.is_file():
+                    rel = src_path.relative_to(cos_src)
+                    dest = target / rel
+                    if dest.exists():
+                        continue  # preserve existing record byte-for-byte
+                    dest.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copyfile(src_path, dest)
+
+            # Verification: ALL existing populated records are preserved byte-for-byte without clobber
+            self.assertEqual((target / "knowledge/personal.md").read_bytes(), canary_personal)
+            self.assertEqual((target / "knowledge/owner.md").read_bytes(), canary_owner)
+            self.assertEqual((target / "knowledge/people.md").read_bytes(), canary_people)
+            self.assertEqual((target / "knowledge/README.md").read_bytes(), canary_k_readme)
+            self.assertEqual((target / "agent/STATE.md").read_bytes(), canary_state)
+            self.assertEqual((target / "agent/memory/summary.md").read_bytes(), canary_memory)
+
+            # Verification: absent template files are correctly installed
+            self.assertTrue((target / "agent/PROFILE.md").exists())
+            self.assertTrue((target / "agent/PLAYBOOK.md").exists())
+            self.assertTrue((target / "scripts/backup.ps1").exists())
+
+    def test_export_public_preflight_rejects_populated_cos_personal_or_extra_knowledge(self):
+        ep_path = ROOT / "scripts/export_public.py"
+        if not ep_path.exists():
+            return
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("export_public", ep_path)
+        ep = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(ep)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            proj = root / "proj"
+            proj.mkdir()
+            pub = proj / "public"
+            pub.mkdir()
+            # Scaffold human-materials (supports both source and public layout)
+            pub_hm = pub / "human-materials"
+            pub_hm.mkdir(parents=True)
+            can_gi = ((ROOT / "human-materials/.gitignore") if (ROOT / "human-materials/.gitignore").exists() else (ROOT / "public/human-materials/.gitignore")).read_text(encoding="utf-8")
+            can_rm = ((ROOT / "human-materials/README.md") if (ROOT / "human-materials/README.md").exists() else (ROOT / "public/human-materials/README.md")).read_text(encoding="utf-8")
+            (pub_hm / ".gitignore").write_text(can_gi, encoding="utf-8")
+            (pub_hm / "README.md").write_text(can_rm, encoding="utf-8")
+
+            # Replicate packages/chief-of-staff-v1 into proj
+            shutil.copytree(ROOT / "packages/chief-of-staff-v1", proj / "packages/chief-of-staff-v1")
+            cos_pkg = proj / "packages/chief-of-staff-v1"
+
+            # 1. Populated personal.md -> fails closed
+            (cos_pkg / "knowledge/personal.md").write_text("# Personal\nSYNTHETIC_CANARY_HABITS\n", encoding="utf-8")
+            out1 = root / "out1"
+            with patch.object(ep, "ROOT", proj), patch.object(ep, "PUBLIC_FILES", pub), patch.object(ep, "INCLUDE", ["packages/chief-of-staff-v1"]):
+                with self.assertRaises(SystemExit) as caught:
+                    ep.export(out1)
+                self.assertIn("Chief of Staff template content does not match canonical empty template", str(caught.exception))
+            self.assertFalse(out1.exists())
+            # Restore
+            (cos_pkg / "knowledge/personal.md").write_text((ROOT / "packages/chief-of-staff-v1/knowledge/personal.md").read_text(encoding="utf-8"), encoding="utf-8")
+
+            # 2. Populated owner.md -> fails closed
+            (cos_pkg / "knowledge/owner.md").write_text("# Owner\nSYNTHETIC_CANARY_OWNER_FACTS\n", encoding="utf-8")
+            out2 = root / "out2"
+            with patch.object(ep, "ROOT", proj), patch.object(ep, "PUBLIC_FILES", pub), patch.object(ep, "INCLUDE", ["packages/chief-of-staff-v1"]):
+                with self.assertRaises(SystemExit) as caught:
+                    ep.export(out2)
+                self.assertIn("Chief of Staff template content does not match canonical empty template", str(caught.exception))
+            self.assertFalse(out2.exists())
+            # Restore
+            (cos_pkg / "knowledge/owner.md").write_text((ROOT / "packages/chief-of-staff-v1/knowledge/owner.md").read_text(encoding="utf-8"), encoding="utf-8")
+
+            # 3. Populated agent/STATE.md -> fails closed
+            (cos_pkg / "agent/STATE.md").write_text("# State\nSYNTHETIC_CANARY_ACTIVE_TASKS\n", encoding="utf-8")
+            out3 = root / "out3"
+            with patch.object(ep, "ROOT", proj), patch.object(ep, "PUBLIC_FILES", pub), patch.object(ep, "INCLUDE", ["packages/chief-of-staff-v1"]):
+                with self.assertRaises(SystemExit) as caught:
+                    ep.export(out3)
+                self.assertIn("Chief of Staff template content does not match canonical empty template", str(caught.exception))
+            self.assertFalse(out3.exists())
+            # Restore
+            (cos_pkg / "agent/STATE.md").write_text((ROOT / "packages/chief-of-staff-v1/agent/STATE.md").read_text(encoding="utf-8"), encoding="utf-8")
+
+            # 4. Extra file in agent/memory/private.md -> fails closed
+            extra_mem = cos_pkg / "agent/memory/private_memory.md"
+            extra_mem.write_text("PRIVATE_MEMORY_CANARY", encoding="utf-8")
+            out4 = root / "out4"
+            with patch.object(ep, "ROOT", proj), patch.object(ep, "PUBLIC_FILES", pub), patch.object(ep, "INCLUDE", ["packages/chief-of-staff-v1"]):
+                with self.assertRaises(SystemExit) as caught:
+                    ep.export(out4)
+                self.assertIn("Invalid, extra, or linked entry in Chief of Staff package", str(caught.exception))
+            self.assertFalse(out4.exists())
+            extra_mem.unlink()
+
+            # Missing required template file -> fails closed before output creation
+            (cos_pkg / "knowledge/personal.md").unlink()
+            out_miss = root / "out_miss"
+            with patch.object(ep, "ROOT", proj), patch.object(ep, "PUBLIC_FILES", pub), patch.object(ep, "INCLUDE", ["packages/chief-of-staff-v1"]):
+                with self.assertRaises(SystemExit) as caught:
+                    ep.export(out_miss)
+                self.assertIn("Incomplete Chief of Staff package scaffold", str(caught.exception))
+            self.assertFalse(out_miss.exists())
+            (cos_pkg / "knowledge/personal.md").write_text((ROOT / "packages/chief-of-staff-v1/knowledge/personal.md").read_text(encoding="utf-8"), encoding="utf-8")
+
+            # Populated agent/PROFILE.md -> fails closed
+            (cos_pkg / "agent/PROFILE.md").write_text("# Profile" + chr(10) + "SYNTHETIC_CANARY_PRIVATE_PROFILE", encoding="utf-8")
+            out_prof = root / "out_prof"
+            with patch.object(ep, "ROOT", proj), patch.object(ep, "PUBLIC_FILES", pub), patch.object(ep, "INCLUDE", ["packages/chief-of-staff-v1"]):
+                with self.assertRaises(SystemExit) as caught:
+                    ep.export(out_prof)
+                self.assertIn("Chief of Staff template content does not match canonical empty template", str(caught.exception))
+            self.assertFalse(out_prof.exists())
+            (cos_pkg / "agent/PROFILE.md").write_text((ROOT / "packages/chief-of-staff-v1/agent/PROFILE.md").read_text(encoding="utf-8"), encoding="utf-8")
+
+            # 5. Public overlay collision / injection -> fails closed before output creation
+            pub_overlay_f = pub / "packages/chief-of-staff-v1/knowledge/owner.md"
+            pub_overlay_f.parent.mkdir(parents=True, exist_ok=True)
+            pub_overlay_f.write_text("# Owner\nSYNTHETIC_PRIVATE_OVERLAY_PROSE\n", encoding="utf-8")
+            out5 = root / "out5"
+            with patch.object(ep, "ROOT", proj), patch.object(ep, "PUBLIC_FILES", pub), patch.object(ep, "INCLUDE", ["packages/chief-of-staff-v1"]):
+                with self.assertRaises(SystemExit) as caught:
+                    ep.export(out5)
+                self.assertIn("Chief of Staff template content does not match canonical empty template", str(caught.exception))
+            self.assertFalse(out5.exists())
+
+    def test_public_audit_detects_cos_personal_canary_leak_and_extra_knowledge(self):
+        sys.path.insert(0, str(ROOT / "scripts"))
+        import public_audit as pa
+
+        with tempfile.TemporaryDirectory() as tmp:
+            export_tree = Path(tmp) / "export"
+            export_tree.mkdir()
+
+            # Clean minimal human-materials scaffold (supports both source and public layout)
+            hm = export_tree / "human-materials"
+            hm.mkdir()
+            can_gi = ((ROOT / "human-materials/.gitignore") if (ROOT / "human-materials/.gitignore").exists() else (ROOT / "public/human-materials/.gitignore")).read_text(encoding="utf-8")
+            can_rm = ((ROOT / "human-materials/README.md") if (ROOT / "human-materials/README.md").exists() else (ROOT / "public/human-materials/README.md")).read_text(encoding="utf-8")
+            (hm / ".gitignore").write_text(can_gi, encoding="utf-8")
+            (hm / "README.md").write_text(can_rm, encoding="utf-8")
+
+            # Replicate packages/chief-of-staff-v1 into export_tree
+            shutil.copytree(ROOT / "packages/chief-of-staff-v1", export_tree / "packages/chief-of-staff-v1")
+            cos_pkg = export_tree / "packages/chief-of-staff-v1"
+
+            # Clean export tree produces 0 findings
+            self.assertEqual(pa.scan(export_tree), [])
+
+            # 1. Populated personal.md -> flagged
+            (cos_pkg / "knowledge/personal.md").write_text("# Personal knowledge\nSYNTHETIC_CANARY_FAMILY_DATA\n", encoding="utf-8")
+            findings = pa.scan(export_tree)
+            self.assertTrue(any("Chief of Staff template content does not match canonical empty template" in f[3] for f in findings))
+            (cos_pkg / "knowledge/personal.md").write_text((ROOT / "packages/chief-of-staff-v1/knowledge/personal.md").read_text(encoding="utf-8"), encoding="utf-8")
+            self.assertEqual(pa.scan(export_tree), [])
+
+            # 2. Populated owner.md -> flagged
+            (cos_pkg / "knowledge/owner.md").write_text("# Owner\nSYNTHETIC_CANARY_OWNER_FACTS\n", encoding="utf-8")
+            findings = pa.scan(export_tree)
+            self.assertTrue(any("Chief of Staff template content does not match canonical empty template" in f[3] for f in findings))
+            (cos_pkg / "knowledge/owner.md").write_text((ROOT / "packages/chief-of-staff-v1/knowledge/owner.md").read_text(encoding="utf-8"), encoding="utf-8")
+            self.assertEqual(pa.scan(export_tree), [])
+
+            # 3. Extra file agent/memory/private_memory.md -> flagged with generic non-sensitive location
+            extra_mem = cos_pkg / "agent/memory/private_memory.md"
+            extra_mem.write_text("PRIVATE_CANARY_NOTES", encoding="utf-8")
+            findings = pa.scan(export_tree)
+            self.assertTrue(any("Extra file or symlink in Chief of Staff package" in f[3] for f in findings))
+            # Assert private filename is NOT disclosed in finding location
+            self.assertFalse(any("private_memory.md" in f[0] for f in findings))
+            extra_mem.unlink()
+
+            # 4. Missing required template file -> flagged
+            pers_file = cos_pkg / "knowledge/personal.md"
+            pers_backup = pers_file.read_text(encoding="utf-8")
+            pers_file.unlink()
+            findings = pa.scan(export_tree)
+            self.assertTrue(any("Missing mandatory Chief of Staff template files" in f[3] for f in findings))
+            pers_file.write_text(pers_backup, encoding="utf-8")
+
+            # Missing knowledge directory entirely -> flagged without lstat crash
+            know_dir = cos_pkg / "knowledge"
+            know_backup = Path(tmp) / "know_backup"
+            shutil.copytree(know_dir, know_backup)
+            shutil.rmtree(know_dir)
+            findings = pa.scan(export_tree)
+            self.assertTrue(any("Missing mandatory Chief of Staff knowledge directory" in f[3] for f in findings))
+            shutil.copytree(know_backup, know_dir)
+            shutil.rmtree(know_backup)
+
+            # Injected synthetic credential in agent/PROFILE.md -> flagged by both hash and global credential pattern with redacted output
+            canary_tok = "sk" + "-1234567890abcdef1234567890123456"
+            (cos_pkg / "agent/PROFILE.md").write_text("# Profile" + chr(10) + "Token: " + canary_tok, encoding="utf-8")
+            findings = pa.scan(export_tree)
+            self.assertTrue(any("Chief of Staff template content does not match canonical empty template" in f[3] for f in findings))
+            self.assertTrue(any(f[2] == "credential" for f in findings))
+            # Verify diagnostic privacy: location is generic and matched token content is redacted from findings
+            cred_findings = [f for f in findings if f[2] == "credential"]
+            self.assertTrue(all(f[0] == "packages/chief-of-staff-v1" for f in cred_findings))
+            self.assertTrue(all(f[3] == "Chief of Staff package contains credential" for f in cred_findings))
+            self.assertTrue(all(canary_tok not in f[0] and canary_tok not in str(f[3]) for f in findings))
+            (cos_pkg / "agent/PROFILE.md").write_text((ROOT / "packages/chief-of-staff-v1/agent/PROFILE.md").read_text(encoding="utf-8"), encoding="utf-8")
+
+            # Injected local user path in agent/PROFILE.md -> flagged by both hash and local path detector with redacted output
+            canary_path_seg = "CANARY_SECRET_DIR"
+            canary_full_path = "C:" + chr(92) + "Users" + chr(92) + "User" + chr(92) + canary_path_seg
+            (cos_pkg / "agent/PROFILE.md").write_text("# Profile" + chr(10) + "Path: " + canary_full_path, encoding="utf-8")
+            findings = pa.scan(export_tree)
+            self.assertTrue(any(f[2] == "local user path" for f in findings))
+            path_findings = [f for f in findings if f[2] == "local user path"]
+            self.assertTrue(all(f[0] == "packages/chief-of-staff-v1" for f in path_findings))
+            self.assertTrue(all(f[3] == "Chief of Staff package contains local user path" for f in path_findings))
+            self.assertTrue(all(canary_path_seg not in f[0] and canary_path_seg not in str(f[3]) for f in findings))
+            (cos_pkg / "agent/PROFILE.md").write_text((ROOT / "packages/chief-of-staff-v1/agent/PROFILE.md").read_text(encoding="utf-8"), encoding="utf-8")
+
+            # 5. Non-UTF8 / binary owner.md -> flagged as unreadable template content
+            (cos_pkg / "knowledge/owner.md").write_bytes(b"\xff\xfe\x00\x00BINARY_INVALID_UTF8")
+            findings = pa.scan(export_tree)
+            self.assertTrue(any("cannot be decoded as valid text" in f[3] for f in findings))
+            (cos_pkg / "knowledge/owner.md").write_text((ROOT / "packages/chief-of-staff-v1/knowledge/owner.md").read_text(encoding="utf-8"), encoding="utf-8")
+
+            # Clean export tree produces 0 findings again
+            self.assertEqual(pa.scan(export_tree), [])
+
+if __name__ == "__main__":
     unittest.main()

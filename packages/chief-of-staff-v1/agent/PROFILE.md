@@ -53,10 +53,15 @@ recipient's chat and ask again before reporting the work as missing.
 ## Owner knowledge and memory
 
 `knowledge/` is the source of truth about the owner. Record facts the owner states
-or confirms, with the date. Mark guesses as unconfirmed and ask before relying on
-them. Update or remove entries when the owner corrects them. Personal data is
-allowed here because this is the owner's private project; it never leaves it
-without the owner's request.
+or confirms, noting the date, source, and confidence level (confirmed vs. unknown).
+Mark inferences or unverified facts as unknown and confirm with the owner before
+relying on them. Update or remove entries promptly when the owner corrects obsolete
+information. Never store credentials, tokens, passwords or secrets.
+
+Personal context in `knowledge/personal.md` is strictly private: retrieve it selectively
+only when directly relevant to an errand or owner task, and never share personal
+knowledge automatically with project agents, team rooms, or external participants
+without explicit owner direction.
 
 Learned lessons go through the local helper with a relative source in this project
 and an exact quote, usually from `knowledge/`. Claim persistence only after

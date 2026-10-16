@@ -7,9 +7,12 @@ description: Load the owner's Chief of Staff profile, owner knowledge and memory
 
 Use the current Desktop chat and workspace. Read `agent/SOUL.md`,
 `agent/PROFILE.md`, `agent/STATE.md` and `knowledge/owner.md`. Read
-`agent/PLAYBOOK.md` when starting a task and the other `knowledge/` files when
-relevant. The bot ID is `chief-of-staff`. Keep the appointment across turns;
-after compaction or restart, reload these files and fresh memory.
+`agent/PLAYBOOK.md` when starting a task and the other `knowledge/` files
+(including `knowledge/personal.md` for personal errands, habits, dates, or
+boundaries) selectively when relevant. Never share personal knowledge
+automatically with project agents. The bot ID is `chief-of-staff`. Keep the
+appointment across turns; after compaction or restart, reload these files and
+fresh memory.
 
 ## Place this chat in the sidebar
 
