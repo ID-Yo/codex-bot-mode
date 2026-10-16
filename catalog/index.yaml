@@ -23,13 +23,13 @@ agents:
     version: 1
     description: UI and UX design for the product.
   - name: strategist
-    version: 1
+    version: 2
     description: Positioning, audience and the marketing plan.
   - name: content-writer
-    version: 1
+    version: 2
     description: Texts, posts and pages from a brief.
   - name: content-reviewer
-    version: 1
+    version: 2
     description: Checks tone, facts and brand consistency of content.
   - name: lead-researcher
     version: 1
@@ -78,7 +78,7 @@ teams:
     version: 3
     description: Manager, Developer, Code Reviewer, Designer and Verifier for software changes.
   - name: marketing
-    version: 1
+    version: 2
     description: Manager, Strategist, Content Writer and Content Reviewer.
   - name: sales
     version: 1

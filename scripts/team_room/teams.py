@@ -323,6 +323,155 @@ def _project_files(project, catalog):
     return out
 
 
+def _validate_reference_index(base_dir, ref_name):
+    idx_file = base_dir / 'index.yaml'
+    if not idx_file.exists():
+        raise TeamError(f'Reference {ref_name} is missing index.yaml')
+    is_idx_link = idx_file.is_symlink() or (idx_file.exists() and bool(getattr(idx_file.lstat(), 'st_file_attributes', 0) & 0x400))
+    if is_idx_link:
+        raise TeamError(f'Reference {ref_name} has linked index.yaml')
+    try:
+        idx_data = manifest.load(idx_file)
+        if not isinstance(idx_data, dict) or not idx_data.get('name') or not isinstance(idx_data.get('modules'), dict) or not isinstance(idx_data.get('templates'), dict):
+            raise TeamError(f'Reference {ref_name} index lacks required name/modules/templates schema')
+    except TeamError:
+        raise
+    except Exception as e:
+        raise TeamError(f'Malformed index.yaml in reference {ref_name}: {e}')
+
+    def _check_path(cand_path, label):
+        if not isinstance(cand_path, str) or not cand_path.strip():
+            raise TeamError(f'Reference {ref_name} declares invalid {label} path')
+        if ':' in cand_path or chr(92) in cand_path:
+            raise TeamError(f'Reference {ref_name} declares unsafe {label} path: {cand_path}')
+        norm_m = PurePosixPath(cand_path)
+        if norm_m.is_absolute() or '..' in norm_m.parts:
+            raise TeamError(f'Reference {ref_name} declares unsafe {label} path: {cand_path}')
+        target_m = base_dir / norm_m
+        is_m_link = target_m.is_symlink() or (target_m.exists() and bool(getattr(target_m.lstat(), 'st_file_attributes', 0) & 0x400))
+        if is_m_link:
+            raise TeamError(f'Reference {ref_name} declares linked {label} path: {cand_path}')
+        if not target_m.exists() or not target_m.is_file():
+            raise TeamError(f'Reference {ref_name} declares missing indexed {label} file: {cand_path}')
+        if target_m.suffix not in ('.md', '.yaml', '.yml'):
+            raise TeamError(f'Reference {ref_name} declares unsupported file type for {label}: {cand_path}')
+        try:
+            target_m.resolve(strict=True).relative_to(base_dir.resolve(strict=True))
+        except Exception:
+            raise TeamError(f'Reference {ref_name} declares {label} path escaping bundle: {cand_path}')
+
+    for mod in (idx_data.get('modules') or {}).values():
+        mpath = mod.get('path') if isinstance(mod, dict) else mod
+        if mpath:
+            _check_path(mpath, 'method')
+    for tpath in (idx_data.get('templates') or {}).values():
+        if tpath:
+            _check_path(tpath, 'template')
+
+
+def _reference_files(project, catalog, references):
+    if references is not None and not isinstance(references, list):
+        raise TeamError('References declaration must be a list of reference names')
+    out = {}
+    project = Path(project).resolve()
+    catalog = Path(catalog).resolve()
+
+    # Verify catalog references directory itself is not a symlink or junction
+    cat_refs_dir = catalog / 'references'
+    if cat_refs_dir.exists():
+        is_cr_link = cat_refs_dir.is_symlink() or bool(getattr(cat_refs_dir.lstat(), 'st_file_attributes', 0) & 0x400)
+        if is_cr_link:
+            raise TeamError('Catalog references directory is a symlink or junction')
+        try:
+            cat_refs_dir.resolve(strict=True).relative_to(catalog)
+        except Exception:
+            raise TeamError('Catalog references directory escapes catalog')
+
+    for ref_name in (references or []):
+        if not isinstance(ref_name, str) or not ref_name.strip():
+            raise TeamError('Reference name must be a non-empty string')
+        if ref_name in ('.', '..') or ref_name.startswith('.'):
+            raise TeamError(f'Invalid reference name: {ref_name}')
+        norm_ref = PurePosixPath(ref_name.replace(chr(92), '/'))
+        if norm_ref.is_absolute() or '..' in norm_ref.parts or ':' in ref_name or len(norm_ref.parts) != 1:
+            raise TeamError(f'Invalid reference path: {ref_name}')
+
+        # Source validation (directory, links, and containment)
+        ref_dir = catalog / 'references' / norm_ref
+        is_ref_link = ref_dir.is_symlink() or (ref_dir.exists() and bool(getattr(ref_dir.lstat(), 'st_file_attributes', 0) & 0x400))
+        if is_ref_link:
+            raise TeamError(f'Unsupported link in reference directory {ref_name}')
+        if not ref_dir.exists() or not ref_dir.is_dir():
+            raise TeamError(f'Missing reference directory: {ref_name}')
+        try:
+            ref_dir.resolve(strict=True).relative_to(catalog)
+        except Exception:
+            raise TeamError(f'Reference containment escape: {ref_name}')
+
+        # Validate catalog source reference index and all declared paths
+        _validate_reference_index(ref_dir, ref_name)
+
+        # Target preflight validation before any writes
+        target_team = project / 'team'
+        target_refs = project / 'team' / 'references'
+        target_dir = project / 'team' / 'references' / norm_ref.as_posix()
+        for ancestor in (target_team, target_refs, target_dir):
+            if ancestor.exists():
+                is_anc_link = ancestor.is_symlink() or bool(getattr(ancestor.lstat(), 'st_file_attributes', 0) & 0x400)
+                if is_anc_link:
+                    raise TeamError(f'Target junction or symlink not permitted in project path: {ancestor}')
+                if not ancestor.is_dir():
+                    raise TeamError(f'Target path conflict: {ancestor} is not a directory')
+                try:
+                    ancestor.resolve(strict=True).relative_to(project)
+                except Exception:
+                    raise TeamError(f'Target path escapes project: {ancestor}')
+
+        # Validate existing files in target_dir if already populated
+        if target_dir.exists():
+            for existing in target_dir.rglob('*'):
+                is_ex_link = existing.is_symlink() or bool(getattr(existing.lstat(), 'st_file_attributes', 0) & 0x400)
+                if is_ex_link:
+                    raise TeamError(f'Target junction or symlink not permitted inside existing reference: {existing}')
+
+        for item in sorted(ref_dir.rglob('*')):
+            is_link = item.is_symlink() or bool(getattr(item.lstat(), 'st_file_attributes', 0) & 0x400)
+            if is_link:
+                raise TeamError(f'Unsupported link in reference {ref_name}: {item.name}')
+            if item.is_file():
+                if item.suffix not in ('.md', '.yaml', '.yml'):
+                    raise TeamError(f'Unsupported file type in reference {ref_name}: {item.name}')
+                rel = item.relative_to(ref_dir).as_posix()
+                target_rel = f'team/references/{norm_ref.as_posix()}/{rel}'
+                target_file = project / target_rel
+                if target_file.exists():
+                    if target_file.is_dir():
+                        raise TeamError(f'Existing directory in place of reference file: {target_rel}')
+                    if target_file.is_symlink() or bool(getattr(target_file.lstat(), 'st_file_attributes', 0) & 0x400):
+                        raise TeamError(f'Existing reference file is a symlink or junction: {target_rel}')
+                    # Interface compatibility validation on existing template files
+                    try:
+                        ex_text = target_file.read_text(encoding='utf-8')
+                    except Exception:
+                        raise TeamError(f'Incompatible existing reference file cannot be read: {target_rel}')
+                    if item.name == 'index.yaml':
+                        _validate_reference_index(target_dir, ref_name)
+                    elif item.name == 'brief.md':
+                        req_fields = ['# Editorial Brief', '## Metadata', '## Objective & Audience', '## Sourced Evidence & Facts', '## Call to Action']
+                        if any(f not in ex_text for f in req_fields):
+                            raise TeamError(f'Incompatible existing reference template: {target_rel} lacks required brief schema')
+                    elif item.name == 'draft-review.md':
+                        req_fields = ['# Editorial Review', '## Metadata', '## Criteria Evaluation', '## Verdict']
+                        if any(f not in ex_text for f in req_fields):
+                            raise TeamError(f'Incompatible existing reference template: {target_rel} lacks required review schema')
+                else:
+                    try:
+                        out[target_rel] = item.read_text(encoding='utf-8')
+                    except (UnicodeDecodeError, OSError) as e:
+                        raise TeamError(f'Cannot read reference file {rel} as valid UTF-8 text: {e}')
+    return out
+
+
 def _has_director(data):
     return any(p['role'] == 'Project Director' and p['status'] == 'active' for p in data['participants'])
 
@@ -359,13 +508,27 @@ def plan_team(project, template, answers=None, source=None, team_answers=None):
     if data['teams'] and not _has_director(data):
         director = ('This will be a second team. A Project Director is proposed as the project entry point; '
                     'appoint it with add-agent --template director after owner confirmation.')
+    raw_team_refs = spec.get('references')
+    if raw_team_refs is not None and not isinstance(raw_team_refs, list):
+        raise TeamError('References declaration in team must be a list of reference names')
+    references = list(raw_team_refs or [])
+    for role in roles:
+        _, aspec = agent_template(catalog, role)
+        raw_role_refs = aspec.get('references')
+        if raw_role_refs is not None and not isinstance(raw_role_refs, list):
+            raise TeamError(f'References declaration in agent {role} must be a list of reference names')
+        for r in (raw_role_refs or []):
+            if r not in references:
+                references.append(r)
+    ref_files = _reference_files(project, catalog, references)
+    all_proj_files = {**_project_files(project, catalog), **ref_files}
     return {'kind': 'team', 'project': str(project), 'catalog': label, 'template': template,
             'template_version': spec['version'], 'team': team, 'team_sources': team_sources,
             'work_tracking': work_tracking,
             'section': render(spec.get('section') or '{{project}} · {{team}}', context),
             'room': render(spec.get('room') or '{{team}}', context),
             'room_file': render((folder / 'ROOM.md').read_text(encoding='utf-8'), context) if (folder / 'ROOM.md').exists() else None,
-            'project_files': _project_files(project, catalog), 'agents': agents, 'director_proposal': director}
+            'project_files': all_proj_files, 'references': references, 'agents': agents, 'director_proposal': director}
 
 
 def plan_agent(project, team, template, answers=None, source=None, extra=None):
@@ -391,7 +554,7 @@ def plan_agent(project, team, template, answers=None, source=None, extra=None):
     agent = _agent_plan(project, catalog, label, template, bot, team, workspace, host, answers or {}, extra)
     kind = 'director' if template == 'director' else ('custom-agent' if spec.get('custom') else 'catalog-agent')
     return {'kind': kind, 'project': str(project), 'catalog': label, 'template': template, 'team': team,
-            'project_files': _project_files(project, catalog), 'agents': [agent]}
+            'project_files': {**_project_files(project, catalog), **_reference_files(project, catalog, spec.get('references') if spec.get('references') is None or isinstance(spec.get('references'), list) else (_ for _ in ()).throw(TeamError('References declaration in agent must be a list of reference names')))}, 'references': list(spec.get('references') or []) if isinstance(spec.get('references'), list) else [], 'agents': [agent]}
 
 
 def summary(plan):
@@ -416,6 +579,44 @@ def install(plan):
     for agent in plan['agents']:
         if (project / agent['workspace']).exists():
             raise TeamError(f'Workspace already exists: {agent["workspace"]}')
+
+    # Preflight project files, target ancestry, and existing reference compatibility before any writes
+    for relative in plan.get('project_files', {}):
+        norm_rel = PurePosixPath(relative.replace(chr(92), '/'))
+        if norm_rel.is_absolute() or '..' in norm_rel.parts or ':' in relative:
+            raise TeamError(f'Unsafe target path in plan: {relative}')
+        target_item = project / relative
+        curr = target_item
+        while curr != project and curr.parent != curr:
+            is_link = curr.is_symlink() or (curr.exists() and bool(getattr(curr.lstat(), 'st_file_attributes', 0) & 0x400))
+            if is_link:
+                raise TeamError(f'Target junction or symlink not permitted in project path: {curr}')
+            if curr.exists():
+                try:
+                    curr.resolve(strict=True).relative_to(project)
+                except Exception:
+                    raise TeamError(f'Target path escapes project: {curr}')
+            curr = curr.parent
+
+    # Preflight all required reference bundles (including preserved existing bundles)
+    for ref_name in plan.get('references', []):
+        norm_ref = PurePosixPath(ref_name.replace(chr(92), '/'))
+        target_ref_dir = project / 'team' / 'references' / norm_ref.as_posix()
+        if target_ref_dir.exists():
+            is_dir_link = target_ref_dir.is_symlink() or bool(getattr(target_ref_dir.lstat(), 'st_file_attributes', 0) & 0x400)
+            if is_dir_link:
+                raise TeamError(f'Target junction or symlink not permitted in reference path: {target_ref_dir}')
+            if not target_ref_dir.is_dir():
+                raise TeamError(f'Target reference path is not a directory: {target_ref_dir}')
+            try:
+                target_ref_dir.resolve(strict=True).relative_to(project)
+            except Exception:
+                raise TeamError(f'Target reference path escapes project: {target_ref_dir}')
+            if any(target_ref_dir.iterdir()):
+                if not (target_ref_dir / 'index.yaml').exists():
+                    raise TeamError(f'Existing reference directory {ref_name} is missing index.yaml')
+                _validate_reference_index(target_ref_dir, ref_name)
+
     created = []
     try:
         for relative, text in plan.get('project_files', {}).items():

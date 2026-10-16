@@ -1,7 +1,9 @@
 role: Content Writer
-version: 1
-description: Texts, posts and pages from a brief.
+version: 2
+description: Texts, posts, articles and scripts from a brief.
 reports_to: manager
+references:
+  - editorial
 permissions:
   assign_work: none
   product_writes: assigned-boundary

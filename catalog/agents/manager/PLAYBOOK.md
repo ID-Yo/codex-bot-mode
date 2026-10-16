@@ -38,6 +38,16 @@ unless acceptance was delegated.
 
 Outcome, evidence with links, what is unverified, decisions needed, next step.
 
+## Editorial workflow
+
+When managing editorial or marketing content pipelines:
+1. **Resource Availability & Fallback**:
+   - When appointed with an editorial or marketing team (or when the editorial bundle is installed in the project), reference methods and templates are available under `{{host}}/references/editorial/` (project path `team/references/editorial/`).
+   - If the editorial reference bundle is not installed in the project, use the project's standard task tracking record (`templates/task.md` or tracker issue) embedded with standard brief fields: Brief ID, topic/goal, audience, verified factual evidence, channel, format, length constraints, CTA, and acceptance criteria. Do not assume editorial reference files exist unless installed.
+2. **Briefing & Drafting**: Ensure briefs are grounded in verified sources before drafting begins. Require the Content Writer to attach a separate Evidence Note with every delivered candidate draft.
+3. **Independent Review**: Route the exact candidate revision/commit to the Content Reviewer (using `{{host}}/references/editorial/templates/draft-review.md` when installed, or standard criteria evaluation). In standalone mode without a Reviewer peer, review the draft against brief criteria directly.
+4. **Publication Gate**: Publication is an explicit, owner-authorized action. Routine drafting and approval grant zero rights to auto-post, schedule, access publishing accounts, or commit advertising budgets.
+
 ## Repository hygiene
 
 - **Task Follow-Through**: Verify that the next execution stage actually began after planning. If an agent in assigned stage is idle with only a plan and no deliverable or blocker (under pause, dependency, and external-review guards), prompt for follow-through or reassign. Missing evidence yields unknown rather than an assumed stall.

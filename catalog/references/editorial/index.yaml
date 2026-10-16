@@ -1,0 +1,30 @@
+name: editorial-references
+version: 1
+description: Reusable editorial methods, frameworks, channel adapters, and templates.
+modules:
+  extraction:
+    path: methods/extraction.md
+    methods: [summarize, extract-wisdom]
+  framing:
+    path: methods/framing.md
+    methods: [problem-agitate-solve, misconception-vs-reality, lessons-learned, actionable-tips, limiting-beliefs, transformation-story, engaging-questions]
+  offers:
+    path: methods/offers.md
+    methods: [value-offer]
+  articles:
+    path: methods/articles.md
+    methods: [article-outline, essay-longform, micro-essay]
+  video_scripts:
+    path: methods/video-scripts.md
+    methods: [short-video-hooks, short-video-script, long-video-script]
+  video_timestamps:
+    path: methods/video-timestamps.md
+    methods: [video-timestamps]
+  channels:
+    path: methods/channels.md
+    adapters: [linkedin, twitter-x, facebook, instagram]
+templates:
+  brief: templates/brief.md
+  review: templates/draft-review.md
+  calendar: templates/calendar.md
+  performance: templates/performance-note.md

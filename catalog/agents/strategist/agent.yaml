@@ -1,7 +1,9 @@
 role: Strategist
-version: 1
-description: Positioning, audience and the marketing plan.
+version: 2
+description: Positioning, audience, editorial brief and marketing plan.
 reports_to: manager
+references:
+  - editorial
 permissions:
   assign_work: none
   product_writes: assigned-boundary
