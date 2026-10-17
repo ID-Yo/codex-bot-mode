@@ -307,6 +307,14 @@ def update_monitor_state(state_file_path, findings, snapshot=None, now=None):
 import re
 from datetime import timedelta
 
+from contextlib import nullcontext
+from urllib.request import Request, build_opener, ProxyHandler
+
+class PreconnectConfigurationError(ConnectionError):
+    """Raised when relay or roster configuration is missing before connection initiation."""
+    pass
+
+
 class RouteLock:
     def __init__(self, lock_path, lease_seconds=60):
         self.lock_path = Path(lock_path)
@@ -378,6 +386,85 @@ def parse_markdown_metadata(txt):
                 k, v = cleaned.split(":", 1)
                 meta[k.replace("*", "").strip().lower()] = v.replace("*", "").strip()
     return meta
+
+
+def default_desktop_relay_adapter(project_path, bot_id, req_id, summary):
+    """Attempt dispatch via local Desktop Relay if available.
+    
+    Reads appointed thread from roster.json. If relay.json exists in project,
+    posts send_message_to_thread via POST /call. If configuration is missing before
+    connect, raises PreconnectConfigurationError.
+    """
+    project_path = Path(project_path).resolve()
+    roster_file = project_path / ".bot-mode" / "roster.json"
+    if not roster_file.exists():
+        raise PreconnectConfigurationError(f"Roster not found for {project_path}")
+    
+    r_data = json.loads(roster_file.read_text(encoding="utf-8"))
+    thread_id = None
+    for p in r_data.get("participants", []):
+        if p.get("bot") == bot_id or p.get("bot_id") == bot_id:
+            thread_id = p.get("thread_id")
+            break
+    
+    if not thread_id:
+        bindings_file = project_path / ".bot-mode" / "local" / "bindings.json"
+        if bindings_file.exists():
+            try:
+                b_data = json.loads(bindings_file.read_text(encoding="utf-8"))
+                thread_id = b_data.get(bot_id) or b_data.get(f"{project_path.name}:{bot_id}")
+            except Exception:
+                pass
+
+    if not thread_id:
+        raise PreconnectConfigurationError(f"No appointed thread ID found in roster or bindings for bot {bot_id}")
+
+    relay_file = project_path / ".bot-mode" / "relay.json"
+    if not relay_file.exists():
+        relay_file = project_path / "relay.json"
+    if not relay_file.exists():
+        raise PreconnectConfigurationError("No Desktop Relay active (relay.json not found)")
+
+    try:
+        desc = json.loads(relay_file.read_text(encoding="utf-8"))
+    except Exception as e:
+        raise PreconnectConfigurationError(f"Cannot read relay.json: {e}") from e
+
+    url = desc.get("url")
+    token = desc.get("token")
+    if not url or not token:
+        raise PreconnectConfigurationError("Malformed Desktop Relay descriptor")
+
+    payload = {
+        "name": "send_message_to_thread",
+        "arguments": {
+            "threadId": thread_id,
+            "prompt": f"Stage handoff [{req_id}]: {summary}"
+        }
+    }
+    req = Request(
+        f"{url}/call",
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json", "X-Office-Relay": token}
+    )
+    with build_opener(ProxyHandler({})).open(req, timeout=15) as resp:
+        res = json.load(resp)
+
+    if isinstance(res, dict) and "error" in res:
+        raise RuntimeError(f"Relay error: {res['error']}")
+
+    result = res.get("result") if isinstance(res, dict) else None
+    if result is None or not isinstance(result, dict) or result.get("isError") is True:
+        raise RuntimeError(f"Relay call failed: {result}")
+
+    if result.get("threadId") or result.get("receipt_id"):
+        return {
+            "receipt_id": result.get("receipt_id") or result.get("threadId"),
+            "status": "delivered",
+            "result": result
+        }
+    else:
+        raise RuntimeError("Relay call returned no delivery confirmation")
 
 
 def produce_snapshot(project_dir, now=None):
@@ -523,7 +610,15 @@ def produce_snapshot(project_dir, now=None):
                 if (local_req_id and r_id == local_req_id) or (task_id.lower() in r_id.lower()) or (task_id.lower() in r_link.lower()) or (task_id.lower() in r_sum.lower()):
                     matching_reqs.append(r)
 
-            matching_reqs.sort(key=lambda x: x.get("opened", ""))
+            def parse_opened(r):
+                val = r.get("opened")
+                if not val:
+                    return datetime.min.replace(tzinfo=timezone.utc)
+                try:
+                    return datetime.fromisoformat(val.replace("Z", "+00:00"))
+                except Exception:
+                    return datetime.min.replace(tzinfo=timezone.utc)
+            matching_reqs.sort(key=parse_opened)
             for r in matching_reqs:
                 w = r.get("to", "builder")
                 stg = "implementation"
@@ -587,157 +682,161 @@ def route_stage(project_dir, apply=False, allowlist=None, delivery_adapter=None,
     now = now or datetime.now(timezone.utc)
     project_path = Path(project_dir).resolve()
 
-    if (project_path / ".bot-mode" / "PAUSED").exists():
-        return {"ok": True, "dry_run": not apply, "routed": [], "skipped": ["project_paused"]}
-
     if apply and allowlist is not None:
         allowed = [str(Path(p).resolve()) for p in allowlist]
         if str(project_path) not in allowed:
             raise PermissionError(f"Project {project_path} is not in configured routing allowlist: {allowed}")
 
-    req_ledger = get_req_ledger(project_path)
-    snapshot = produce_snapshot(project_path, now=now)
+    lock_file = project_path / ".bot-mode" / "local" / "route.lock"
+    # Defect 1: Acquire RouteLock BEFORE reading live snapshot, checking project pause, loading requests.json, and computing actions.
+    lock_ctx = RouteLock(lock_file) if apply else nullcontext()
+    with lock_ctx:
+        # Check project pause under lock
+        if (project_path / ".bot-mode" / "PAUSED").exists():
+            return {"ok": True, "dry_run": not apply, "routed": [], "deduplicated": [], "errors": [], "skipped": ["project_paused"], "plan": []}
 
-    roster_file = project_path / ".bot-mode" / "roster.json"
-    active_bots = []
-    if roster_file.exists():
-        try:
-            r_data = json.loads(roster_file.read_text(encoding="utf-8"))
-            active_bots = [p["bot"] for p in r_data.get("participants", []) if p.get("status") == "active"]
-        except Exception:
-            pass
+        req_ledger = get_req_ledger(project_path)
+        snapshot = produce_snapshot(project_path, now=now)
 
-    existing_requests = req_ledger.load(project_path).get("requests", [])
-    open_requests = [r for r in existing_requests if r.get("state") == "open"]
+        roster_file = project_path / ".bot-mode" / "roster.json"
+        active_bots = []
+        if roster_file.exists():
+            try:
+                r_data = json.loads(roster_file.read_text(encoding="utf-8"))
+                active_bots = [p["bot"] for p in r_data.get("participants", []) if p.get("status") == "active"]
+            except Exception:
+                pass
 
-    actions = []
-    for task in snapshot.get("tasks", []):
-        t_id = task.get("id")
-        t_status = task.get("status")
-        if t_status in ("paused", "backlog", "future", "done", "blocked"):
-            continue
-        if not task.get("start_approved"):
-            continue
+        existing_requests = req_ledger.load(project_path).get("requests", [])
+        open_requests = [r for r in existing_requests if r.get("state") == "open"]
 
-        handoffs = task.get("handoffs", [])
-        if not handoffs:
-            continue
-        last_h = handoffs[-1]
-        if not last_h.get("finished_at"):
-            continue
-
-        successor_started = False
-        for h in handoffs[handoffs.index(last_h)+1:]:
-            if h.get("started_at"):
-                successor_started = True
-                break
-        if successor_started:
-            continue
-
-        stage = last_h.get("stage")
-        if stage in ("implementation", "revision"):
-            target = "code-reviewer"
-            if target not in active_bots:
-                if "verifier" in active_bots:
-                    target = "verifier"
-                else:
-                    actions.append({
-                        "task_id": t_id,
-                        "action": "error",
-                        "error": "No active reviewer found in roster",
-                        "target": None
-                    })
-                    continue
-
-            dup = any(r.get("to") == target and t_id.lower() in r.get("id", "").lower() for r in open_requests)
-            if dup:
-                actions.append({
-                    "task_id": t_id,
-                    "action": "deduplicated",
-                    "reason": f"Open review request already exists for {target}",
-                    "target": target
-                })
+        actions = []
+        for task in snapshot.get("tasks", []):
+            t_id = task.get("id")
+            t_status = task.get("status")
+            if t_status in ("paused", "backlog", "future", "done", "blocked"):
+                continue
+            if not task.get("start_approved"):
                 continue
 
-            actions.append({
-                "task_id": t_id,
-                "action": "route_review",
-                "target": target,
-                "sender": task.get("manager", "manager"),
-                "request_id": f"{t_id.lower()}-review-{now.strftime('%Y%m%d%H%M')}",
-                "summary": f"Review deliverable for {t_id}",
-                "link": f"work/tasks/{t_id}.md",
-                "next_state": "review"
-            })
+            handoffs = task.get("handoffs", [])
+            if not handoffs:
+                continue
+            last_h = handoffs[-1]
+            if not last_h.get("finished_at"):
+                continue
 
-        elif stage in ("review", "qa"):
-            review = task.get("review") or {}
-            verdict = review.get("verdict")
-            if not verdict:
-                reply_outcome = None
-                for r in existing_requests:
-                    if r.get("id") == last_h.get("id") and isinstance(r.get("reply"), dict):
-                        reply_outcome = r["reply"].get("outcome")
-                if reply_outcome in ("request_changes", "changes_requested", "failed"):
-                    verdict = "request_changes"
-                else:
-                    verdict = "approve"
+            successor_started = False
+            for h in handoffs[handoffs.index(last_h)+1:]:
+                if h.get("started_at"):
+                    successor_started = True
+                    break
+            if successor_started:
+                continue
 
-            if verdict in ("request_changes", "changes_requested"):
-                target = "developer"
+            stage = last_h.get("stage")
+            if stage in ("implementation", "revision"):
+                target = "code-reviewer"
+                if target not in active_bots:
+                    if "verifier" in active_bots:
+                        target = "verifier"
+                    else:
+                        actions.append({
+                            "task_id": t_id,
+                            "action": "error",
+                            "error": "No active reviewer found in roster",
+                            "target": None
+                        })
+                        continue
+
                 dup = any(r.get("to") == target and t_id.lower() in r.get("id", "").lower() for r in open_requests)
                 if dup:
                     actions.append({
                         "task_id": t_id,
                         "action": "deduplicated",
-                        "reason": f"Open corrections request already exists for {target}",
+                        "reason": f"Open review request already exists for {target}",
                         "target": target
                     })
                     continue
 
                 actions.append({
                     "task_id": t_id,
-                    "action": "route_corrections",
+                    "action": "route_review",
                     "target": target,
                     "sender": task.get("manager", "manager"),
-                    "request_id": f"{t_id.lower()}-corrections-{now.strftime('%Y%m%d%H%M')}",
-                    "summary": f"Implement review corrections for {t_id}",
+                    "request_id": f"{t_id.lower()}-review-{now.strftime('%Y%m%d%H%M')}",
+                    "summary": f"Review deliverable for {t_id}",
                     "link": f"work/tasks/{t_id}.md",
-                    "next_state": "in_progress"
+                    "next_state": "ready"
                 })
-            elif verdict == "approve":
-                target = task.get("manager", "manager")
-                dup = any(r.get("to") == target and t_id.lower() in r.get("id", "").lower() for r in open_requests)
-                if dup:
+
+            elif stage in ("review", "qa"):
+                review = task.get("review") or {}
+                verdict = review.get("verdict")
+                if not verdict:
+                    reply_outcome = None
+                    for r in existing_requests:
+                        if r.get("id") == last_h.get("id") and isinstance(r.get("reply"), dict):
+                            reply_outcome = r["reply"].get("outcome")
+                    if reply_outcome in ("request_changes", "changes_requested", "failed"):
+                        verdict = "request_changes"
+                    else:
+                        verdict = "approve"
+
+                if verdict in ("request_changes", "changes_requested"):
+                    target = "developer"
+                    dup = any(r.get("to") == target and t_id.lower() in r.get("id", "").lower() for r in open_requests)
+                    if dup:
+                        actions.append({
+                            "task_id": t_id,
+                            "action": "deduplicated",
+                            "reason": f"Open corrections request already exists for {target}",
+                            "target": target
+                        })
+                        continue
+
                     actions.append({
                         "task_id": t_id,
-                        "action": "deduplicated",
-                        "reason": f"Open integration request already exists for {target}",
-                        "target": target
+                        "action": "route_corrections",
+                        "target": target,
+                        "sender": task.get("manager", "manager"),
+                        "request_id": f"{t_id.lower()}-corrections-{now.strftime('%Y%m%d%H%M')}",
+                        "summary": f"Implement review corrections for {t_id}",
+                        "link": f"work/tasks/{t_id}.md",
+                        "next_state": "ready"
                     })
-                    continue
+                elif verdict == "approve":
+                    target = task.get("manager", "manager")
+                    dup = any(r.get("to") == target and t_id.lower() in r.get("id", "").lower() for r in open_requests)
+                    if dup:
+                        actions.append({
+                            "task_id": t_id,
+                            "action": "deduplicated",
+                            "reason": f"Open integration request already exists for {target}",
+                            "target": target
+                        })
+                        continue
 
-                actions.append({
-                    "task_id": t_id,
-                    "action": "route_integration",
-                    "target": target,
-                    "sender": last_h.get("worker", "code-reviewer"),
-                    "request_id": f"{t_id.lower()}-integration-{now.strftime('%Y%m%d%H%M')}",
-                    "summary": f"Review approved; accept and integrate {t_id}",
-                    "link": f"work/tasks/{t_id}.md",
-                    "next_state": "review"
-                })
+                    actions.append({
+                        "task_id": t_id,
+                        "action": "route_integration",
+                        "target": target,
+                        "sender": last_h.get("worker", "code-reviewer"),
+                        "request_id": f"{t_id.lower()}-integration-{now.strftime('%Y%m%d%H%M')}",
+                        "summary": f"Review approved; accept and integrate {t_id}",
+                        "link": f"work/tasks/{t_id}.md",
+                        "next_state": "ready"
+                    })
 
-    if not apply:
-        return {"ok": True, "dry_run": True, "plan": actions}
+        actually_routed = [a for a in actions if a.get("action") in ("route_review", "route_corrections", "route_integration")]
+        deduped = [a for a in actions if a.get("action") == "deduplicated"]
+        errs = [a for a in actions if a.get("action") == "error"]
 
-    lock_file = project_path / ".bot-mode" / "local" / "route.lock"
-    with RouteLock(lock_file):
+        if not apply:
+            return {"ok": True, "dry_run": True, "routed": actually_routed, "deduplicated": deduped, "errors": errs, "plan": actions}
+
         data = req_ledger.load(project_path)
-        for act in actions:
-            if act.get("action") not in ("route_review", "route_corrections", "route_integration"):
-                continue
-
+        for act in actually_routed:
             req_ledger.open_request(
                 data,
                 act["request_id"],
@@ -752,6 +851,7 @@ def route_stage(project_dir, apply=False, allowlist=None, delivery_adapter=None,
             exp = req_ledger.version(req_ledger.load(project_path))
             req_ledger.save(project_path, data, exp)
 
+            # Defect 3: Task Markdown state transitions to 'ready' awaiting worker start (NEVER in_progress or review before start)
             t_file = project_path / "work" / "tasks" / f"{act['task_id']}.md"
             if t_file.exists():
                 c = t_file.read_text(encoding="utf-8")
@@ -759,35 +859,44 @@ def route_stage(project_dir, apply=False, allowlist=None, delivery_adapter=None,
                 new_lines = []
                 for l in lines:
                     if l.strip().startswith("- **State**:") or l.strip().startswith("- State:"):
-                        new_lines.append(f"- **State**: {act['next_state']}")
+                        new_lines.append(f"- **State**: ready")
                     elif l.strip().startswith("- **Local Request ID**:") or l.strip().startswith("- Local Request ID:"):
                         new_lines.append(f"- **Local Request ID**: {act['request_id']}")
                     else:
                         new_lines.append(l)
                 t_file.write_text(chr(10).join(new_lines) + chr(10), encoding="utf-8")
 
-            if delivery_adapter:
-                try:
-                    receipt = delivery_adapter(project_path, act["target"], act["request_id"], act["summary"])
-                    new_r["delivery_status"] = "delivered"
-                    new_r["delivered_at"] = now.strftime("%Y-%m-%dT%H:%M:%SZ")
-                    new_r["delivery_receipt"] = receipt
-                    act["delivery"] = "delivered"
-                except Exception as err:
-                    new_r["delivery_status"] = "delivery_unknown"
-                    new_r["delivery_error"] = str(err)
-                    act["delivery"] = "delivery_unknown"
-                    act["delivery_error"] = str(err)
+            # Supported real delivery adapter and strict receipt validation
+            adapter_to_call = delivery_adapter if delivery_adapter is not None else default_desktop_relay_adapter
+            try:
+                receipt = adapter_to_call(project_path, act["target"], act["request_id"], act["summary"])
+                if not isinstance(receipt, dict) or not receipt:
+                    raise RuntimeError(f"Malformed or empty receipt from adapter: {receipt}")
+                if receipt.get("isError") is True or "error" in receipt:
+                    raise RuntimeError(f"Adapter reported error in receipt: {receipt}")
+                status = receipt.get("status")
+                receipt_id = receipt.get("receipt_id") or receipt.get("threadId")
+                if status not in ("delivered", "sent") or not receipt_id:
+                    raise RuntimeError(f"Receipt missing valid delivery confirmation: {receipt}")
 
-                exp = req_ledger.version(req_ledger.load(project_path))
-                req_ledger.save(project_path, data, exp)
-            else:
+                new_r["delivery_status"] = "delivered"
+                new_r["delivered_at"] = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+                new_r["delivery_receipt"] = receipt
+                act["delivery"] = "delivered"
+            except PreconnectConfigurationError as conn_err:
+                new_r["delivery_status"] = "outbox_queued"
+                new_r["delivery_note"] = str(conn_err)
                 act["delivery"] = "outbox_queued"
+            except Exception as err:
+                new_r["delivery_status"] = "delivery_unknown"
+                new_r["delivery_error"] = str(err)
+                act["delivery"] = "delivery_unknown"
+                act["delivery_error"] = str(err)
 
-    actually_routed = [a for a in actions if a.get("action") in ("route_review", "route_corrections", "route_integration")]
-    deduped = [a for a in actions if a.get("action") == "deduplicated"]
-    errs = [a for a in actions if a.get("action") == "error"]
-    return {"ok": True, "dry_run": False, "routed": actually_routed, "deduplicated": deduped, "errors": errs, "plan": actions}
+            exp = req_ledger.version(req_ledger.load(project_path))
+            req_ledger.save(project_path, data, exp)
+
+        return {"ok": True, "dry_run": False, "routed": actually_routed, "deduplicated": deduped, "errors": errs, "plan": actions}
 
 
 def main(argv=None):
@@ -810,8 +919,10 @@ def main(argv=None):
 
     route_parser = subparsers.add_parser("route", help="Safe authorized stage continuation router")
     route_parser.add_argument("--project", type=Path, default=Path("."), help="Project root directory")
-    route_parser.add_argument("--apply", action="store_true", help="Apply routing changes (default is dry-run)")
-    route_parser.add_argument("--dry-run", action="store_true", help="Dry-run preview without changes (default)")
+    # Defect 2: CLI mutually exclusive group for --apply and --dry-run
+    mode_group = route_parser.add_mutually_exclusive_group()
+    mode_group.add_argument("--apply", action="store_true", help="Apply routing changes")
+    mode_group.add_argument("--dry-run", action="store_true", help="Dry-run preview without changes (default)")
     route_parser.add_argument("--allowlist", action="append", help="Allowed project paths for apply")
 
     try:
