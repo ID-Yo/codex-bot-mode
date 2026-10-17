@@ -310,6 +310,11 @@ from datetime import timedelta
 from contextlib import nullcontext
 from urllib.request import Request, build_opener, ProxyHandler
 
+class PreconnectConfigurationError(ConnectionError):
+    """Raised when relay or roster configuration is missing before connection initiation."""
+    pass
+
+
 class RouteLock:
     def __init__(self, lock_path, lease_seconds=60):
         self.lock_path = Path(lock_path)
@@ -387,12 +392,13 @@ def default_desktop_relay_adapter(project_path, bot_id, req_id, summary):
     """Attempt dispatch via local Desktop Relay if available.
     
     Reads appointed thread from roster.json. If relay.json exists in project,
-    posts send_message_to_thread via POST /call. If unavailable, raises ConnectionError.
+    posts send_message_to_thread via POST /call. If configuration is missing before
+    connect, raises PreconnectConfigurationError.
     """
     project_path = Path(project_path).resolve()
     roster_file = project_path / ".bot-mode" / "roster.json"
     if not roster_file.exists():
-        raise ConnectionError(f"Roster not found for {project_path}")
+        raise PreconnectConfigurationError(f"Roster not found for {project_path}")
     
     r_data = json.loads(roster_file.read_text(encoding="utf-8"))
     thread_id = None
@@ -411,23 +417,23 @@ def default_desktop_relay_adapter(project_path, bot_id, req_id, summary):
                 pass
 
     if not thread_id:
-        raise ConnectionError(f"No appointed thread ID found in roster or bindings for bot {bot_id}")
+        raise PreconnectConfigurationError(f"No appointed thread ID found in roster or bindings for bot {bot_id}")
 
     relay_file = project_path / ".bot-mode" / "relay.json"
     if not relay_file.exists():
         relay_file = project_path / "relay.json"
     if not relay_file.exists():
-        raise ConnectionError("No Desktop Relay active (relay.json not found)")
+        raise PreconnectConfigurationError("No Desktop Relay active (relay.json not found)")
 
     try:
         desc = json.loads(relay_file.read_text(encoding="utf-8"))
     except Exception as e:
-        raise ConnectionError(f"Cannot read relay.json: {e}") from e
+        raise PreconnectConfigurationError(f"Cannot read relay.json: {e}") from e
 
     url = desc.get("url")
     token = desc.get("token")
     if not url or not token:
-        raise ConnectionError("Malformed Desktop Relay descriptor")
+        raise PreconnectConfigurationError("Malformed Desktop Relay descriptor")
 
     payload = {
         "name": "send_message_to_thread",
@@ -443,7 +449,22 @@ def default_desktop_relay_adapter(project_path, bot_id, req_id, summary):
     )
     with build_opener(ProxyHandler({})).open(req, timeout=15) as resp:
         res = json.load(resp)
-        return res.get("result") or {"receipt_id": req_id, "status": "sent"}
+
+    if isinstance(res, dict) and "error" in res:
+        raise RuntimeError(f"Relay error: {res['error']}")
+
+    result = res.get("result") if isinstance(res, dict) else None
+    if result is None or not isinstance(result, dict) or result.get("isError") is True:
+        raise RuntimeError(f"Relay call failed: {result}")
+
+    if result.get("threadId") or result.get("receipt_id"):
+        return {
+            "receipt_id": result.get("receipt_id") or result.get("threadId"),
+            "status": "delivered",
+            "result": result
+        }
+    else:
+        raise RuntimeError("Relay call returned no delivery confirmation")
 
 
 def produce_snapshot(project_dir, now=None):
@@ -845,15 +866,24 @@ def route_stage(project_dir, apply=False, allowlist=None, delivery_adapter=None,
                         new_lines.append(l)
                 t_file.write_text(chr(10).join(new_lines) + chr(10), encoding="utf-8")
 
-            # Defect 4: Supported real delivery adapter
+            # Supported real delivery adapter and strict receipt validation
             adapter_to_call = delivery_adapter if delivery_adapter is not None else default_desktop_relay_adapter
             try:
                 receipt = adapter_to_call(project_path, act["target"], act["request_id"], act["summary"])
+                if not isinstance(receipt, dict) or not receipt:
+                    raise RuntimeError(f"Malformed or empty receipt from adapter: {receipt}")
+                if receipt.get("isError") is True or "error" in receipt:
+                    raise RuntimeError(f"Adapter reported error in receipt: {receipt}")
+                status = receipt.get("status")
+                receipt_id = receipt.get("receipt_id") or receipt.get("threadId")
+                if status not in ("delivered", "sent") or not receipt_id:
+                    raise RuntimeError(f"Receipt missing valid delivery confirmation: {receipt}")
+
                 new_r["delivery_status"] = "delivered"
                 new_r["delivered_at"] = now.strftime("%Y-%m-%dT%H:%M:%SZ")
                 new_r["delivery_receipt"] = receipt
                 act["delivery"] = "delivered"
-            except ConnectionError as conn_err:
+            except PreconnectConfigurationError as conn_err:
                 new_r["delivery_status"] = "outbox_queued"
                 new_r["delivery_note"] = str(conn_err)
                 act["delivery"] = "outbox_queued"

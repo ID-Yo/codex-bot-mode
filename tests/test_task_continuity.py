@@ -726,7 +726,7 @@ class Phase2EnforcementTests(unittest.TestCase):
         self.assertIn("project_paused", res.get("skipped", []))
         self.assertEqual(len(res.get("routed", [])), 0)
 
-    def test_malformed_receipt_or_noop_callback(self):
+    def test_adapter_returning_none_marks_delivery_unknown(self):
         self._write_task("TASK-1", state="in_progress", start_approved="true", local_req_id="req-1")
         now_str = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         req_data = {
@@ -746,12 +746,161 @@ class Phase2EnforcementTests(unittest.TestCase):
         }
         (self.local_dir / "requests.json").write_text(json.dumps(req_data), encoding="utf-8")
 
-        def noop_adapter(project, bot, req_id, summary):
-            return None
-
-        res = tc.route_stage(self.project_path, apply=True, delivery_adapter=noop_adapter)
+        res = tc.route_stage(self.project_path, apply=True, delivery_adapter=lambda *a: None)
         self.assertTrue(res["ok"])
-        self.assertEqual(res["routed"][0]["delivery"], "delivered")
+        self.assertEqual(res["routed"][0]["delivery"], "delivery_unknown")
+        self.assertIn("Malformed or empty receipt", res["routed"][0]["delivery_error"])
+        reqs = json.loads((self.local_dir / "requests.json").read_text(encoding="utf-8"))["requests"]
+        self.assertEqual(reqs[1]["delivery_status"], "delivery_unknown")
+
+    def test_adapter_returning_empty_dict_marks_delivery_unknown(self):
+        self._write_task("TASK-1", state="in_progress", start_approved="true", local_req_id="req-1")
+        now_str = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        req_data = {
+            "schema": 1,
+            "requests": [{
+                "id": "req-1",
+                "from": "manager",
+                "to": "developer",
+                "summary": "Implement TASK-1",
+                "link": "work/tasks/TASK-1.md",
+                "opened": now_str,
+                "started_at": now_str,
+                "state": "done",
+                "reply": {"by": "developer", "link": "ref:commit-1", "outcome": "done", "at": now_str},
+                "escalations": []
+            }]
+        }
+        (self.local_dir / "requests.json").write_text(json.dumps(req_data), encoding="utf-8")
+
+        res = tc.route_stage(self.project_path, apply=True, delivery_adapter=lambda *a: {})
+        self.assertTrue(res["ok"])
+        self.assertEqual(res["routed"][0]["delivery"], "delivery_unknown")
+        self.assertIn("Malformed or empty receipt", res["routed"][0]["delivery_error"])
+
+    def test_adapter_returning_error_marks_delivery_unknown(self):
+        self._write_task("TASK-1", state="in_progress", start_approved="true", local_req_id="req-1")
+        self._write_task("TASK-2", state="in_progress", start_approved="true", local_req_id="req-2")
+        now_str = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        req_data = {
+            "schema": 1,
+            "requests": [
+                {
+                    "id": "req-1",
+                    "from": "manager",
+                    "to": "developer",
+                    "summary": "Implement TASK-1",
+                    "link": "work/tasks/TASK-1.md",
+                    "opened": now_str,
+                    "started_at": now_str,
+                    "state": "done",
+                    "reply": {"by": "developer", "link": "ref:commit-1", "outcome": "done", "at": now_str},
+                    "escalations": []
+                },
+                {
+                    "id": "req-2",
+                    "from": "manager",
+                    "to": "developer",
+                    "summary": "Implement TASK-2",
+                    "link": "work/tasks/TASK-2.md",
+                    "opened": now_str,
+                    "started_at": now_str,
+                    "state": "done",
+                    "reply": {"by": "developer", "link": "ref:commit-2", "outcome": "done", "at": now_str},
+                    "escalations": []
+                }
+            ]
+        }
+        (self.local_dir / "requests.json").write_text(json.dumps(req_data), encoding="utf-8")
+
+        def adapter(project, bot, req_id, summary):
+            if "task-1" in req_id.lower():
+                return {"isError": True}
+            return {"error": "Relay rejected"}
+
+        res = tc.route_stage(self.project_path, apply=True, delivery_adapter=adapter)
+        self.assertEqual(len(res["routed"]), 2)
+        self.assertEqual(res["routed"][0]["delivery"], "delivery_unknown")
+        self.assertEqual(res["routed"][1]["delivery"], "delivery_unknown")
+
+    def test_adapter_returning_malformed_dict_without_receipt_id_marks_delivery_unknown(self):
+        self._write_task("TASK-1", state="in_progress", start_approved="true", local_req_id="req-1")
+        now_str = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        req_data = {
+            "schema": 1,
+            "requests": [{
+                "id": "req-1",
+                "from": "manager",
+                "to": "developer",
+                "summary": "Implement TASK-1",
+                "link": "work/tasks/TASK-1.md",
+                "opened": now_str,
+                "started_at": now_str,
+                "state": "done",
+                "reply": {"by": "developer", "link": "ref:commit-1", "outcome": "done", "at": now_str},
+                "escalations": []
+            }]
+        }
+        (self.local_dir / "requests.json").write_text(json.dumps(req_data), encoding="utf-8")
+
+        res = tc.route_stage(self.project_path, apply=True, delivery_adapter=lambda *a: {"status": "delivered"})
+        self.assertEqual(res["routed"][0]["delivery"], "delivery_unknown")
+        self.assertIn("missing valid delivery confirmation", res["routed"][0]["delivery_error"])
+
+    def test_inflight_timeout_or_connection_drop_marks_delivery_unknown(self):
+        self._write_task("TASK-1", state="in_progress", start_approved="true", local_req_id="req-1")
+        now_str = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        req_data = {
+            "schema": 1,
+            "requests": [{
+                "id": "req-1",
+                "from": "manager",
+                "to": "developer",
+                "summary": "Implement TASK-1",
+                "link": "work/tasks/TASK-1.md",
+                "opened": now_str,
+                "started_at": now_str,
+                "state": "done",
+                "reply": {"by": "developer", "link": "ref:commit-1", "outcome": "done", "at": now_str},
+                "escalations": []
+            }]
+        }
+        (self.local_dir / "requests.json").write_text(json.dumps(req_data), encoding="utf-8")
+
+        def drop_adapter(*a):
+            raise ConnectionResetError("Connection reset by peer during response read")
+
+        res = tc.route_stage(self.project_path, apply=True, delivery_adapter=drop_adapter)
+        self.assertEqual(res["routed"][0]["delivery"], "delivery_unknown")
+        self.assertIn("Connection reset", res["routed"][0]["delivery_error"])
+
+    def test_preconnect_missing_relay_marks_outbox_queued(self):
+        self._write_task("TASK-1", state="in_progress", start_approved="true", local_req_id="req-1")
+        now_str = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        req_data = {
+            "schema": 1,
+            "requests": [{
+                "id": "req-1",
+                "from": "manager",
+                "to": "developer",
+                "summary": "Implement TASK-1",
+                "link": "work/tasks/TASK-1.md",
+                "opened": now_str,
+                "started_at": now_str,
+                "state": "done",
+                "reply": {"by": "developer", "link": "ref:commit-1", "outcome": "done", "at": now_str},
+                "escalations": []
+            }]
+        }
+        (self.local_dir / "requests.json").write_text(json.dumps(req_data), encoding="utf-8")
+        # Ensure thread_id is set in bindings so preconnect check tests missing relay.json
+        (self.local_dir / "bindings.json").write_text(json.dumps({"code-reviewer": "thread-rev-123"}), encoding="utf-8")
+
+        res = tc.route_stage(self.project_path, apply=True)
+        self.assertEqual(res["routed"][0]["delivery"], "outbox_queued")
+        reqs = json.loads((self.local_dir / "requests.json").read_text(encoding="utf-8"))["requests"]
+        self.assertEqual(reqs[1]["delivery_status"], "outbox_queued")
+        self.assertIn("relay.json not found", reqs[1]["delivery_note"])
 
     def test_role_binding_change_missing_reviewer(self):
         roster_data = {
@@ -791,6 +940,56 @@ class Phase2EnforcementTests(unittest.TestCase):
         self._write_task("TASK-1", state="in_progress", start_approved="true")
         with self.assertRaises(PermissionError):
             tc.route_stage(self.project_path, apply=True, allowlist=["/different/path/only"])
+
+    def test_default_desktop_relay_adapter_receipt_handling(self):
+        import unittest.mock as mock
+        from urllib.request import Request
+
+        # Create valid relay.json and bindings
+        (self.project_path / ".bot-mode" / "relay.json").write_text(json.dumps({
+            "url": "http://localhost:24243",
+            "token": "test-secret-token"
+        }), encoding="utf-8")
+        (self.local_dir / "bindings.json").write_text(json.dumps({
+            "developer": "thread-dev-123"
+        }), encoding="utf-8")
+
+        # Case 1: Relay returns error key -> raises RuntimeError
+        with mock.patch("urllib.request.OpenerDirector.open") as mock_open:
+            mock_resp = mock.MagicMock()
+            mock_resp.read.return_value = json.dumps({"error": "Desktop locked"}).encode("utf-8")
+            mock_open.return_value.__enter__.return_value = mock_resp
+            with self.assertRaises(RuntimeError) as cm:
+                tc.default_desktop_relay_adapter(self.project_path, "developer", "req-1", "summary")
+            self.assertIn("Relay error: Desktop locked", str(cm.exception))
+
+        # Case 2: Relay returns isError -> raises RuntimeError
+        with mock.patch("urllib.request.OpenerDirector.open") as mock_open:
+            mock_resp = mock.MagicMock()
+            mock_resp.read.return_value = json.dumps({"result": {"isError": True, "error": "failed"}}).encode("utf-8")
+            mock_open.return_value.__enter__.return_value = mock_resp
+            with self.assertRaises(RuntimeError) as cm:
+                tc.default_desktop_relay_adapter(self.project_path, "developer", "req-1", "summary")
+            self.assertIn("Relay call failed", str(cm.exception))
+
+        # Case 3: Relay returns empty result -> raises RuntimeError
+        with mock.patch("urllib.request.OpenerDirector.open") as mock_open:
+            mock_resp = mock.MagicMock()
+            mock_resp.read.return_value = json.dumps({"result": {}}).encode("utf-8")
+            mock_open.return_value.__enter__.return_value = mock_resp
+            with self.assertRaises(RuntimeError) as cm:
+                tc.default_desktop_relay_adapter(self.project_path, "developer", "req-1", "summary")
+            self.assertIn("no delivery confirmation", str(cm.exception))
+
+        # Case 4: Relay returns valid threadId -> success delivered
+        with mock.patch("urllib.request.OpenerDirector.open") as mock_open:
+            mock_resp = mock.MagicMock()
+            mock_resp.read.return_value = json.dumps({"result": {"threadId": "thread-dev-123"}}).encode("utf-8")
+            mock_open.return_value.__enter__.return_value = mock_resp
+            receipt = tc.default_desktop_relay_adapter(self.project_path, "developer", "req-1", "summary")
+            self.assertEqual(receipt["status"], "delivered")
+            self.assertEqual(receipt["receipt_id"], "thread-dev-123")
+
 
     def test_real_demonstration_bounded_handoff(self):
         self._write_task("TASK-1", state="in_progress", start_approved="true", local_req_id="req-1")
