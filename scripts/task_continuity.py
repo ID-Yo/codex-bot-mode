@@ -1,14 +1,19 @@
 """Audit an explicit task evidence snapshot; never dispatch, repair or schedule work.
 
 Vendored core from open-dreamdocs:
-Repository: E:/Codex_work/open-dreamdocs-enforcement-20261017/scripts/task_continuity.py
+Source: open-dreamdocs (pinned commit: aedd92a61f2e4830d86582754fe59f5fbf6a08a7)
+License: MIT (Copyright (c) 2026 open-dreamdocs contributors)
 Pinned commit: aedd92a61f2e4830d86582754fe59f5fbf6a08a7
 License: MIT
 """
 import argparse
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 import json
+import os
 from pathlib import Path
+import re
+import sys
+import tempfile
 
 
 def check(snapshot, now=None):
@@ -298,8 +303,494 @@ def update_monitor_state(state_file_path, findings, snapshot=None, now=None):
     return state, new_alerts
 
 
+
+import re
+from datetime import timedelta
+
+class RouteLock:
+    def __init__(self, lock_path, lease_seconds=60):
+        self.lock_path = Path(lock_path)
+        self.lease_seconds = lease_seconds
+        self.acquired = False
+
+    def acquire(self):
+        self.lock_path.parent.mkdir(parents=True, exist_ok=True)
+        now_ts = datetime.now(timezone.utc).timestamp()
+        if self.lock_path.exists():
+            try:
+                data = json.loads(self.lock_path.read_text(encoding="utf-8"))
+                lock_time = data.get("acquired_at", 0)
+                if now_ts - lock_time < self.lease_seconds:
+                    raise RuntimeError(f"Concurrent routing in progress by PID {data.get('pid')} since {data.get('acquired_at')}")
+            except (ValueError, OSError):
+                pass
+        
+        lock_data = {
+            "pid": os.getpid(),
+            "acquired_at": now_ts,
+            "acquired_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        }
+        tmp_fd, tmp_path = tempfile.mkstemp(dir=str(self.lock_path.parent), prefix="route-lock-", suffix=".tmp")
+        with os.fdopen(tmp_fd, "w", encoding="utf-8") as f:
+            json.dump(lock_data, f)
+        os.replace(tmp_path, str(self.lock_path))
+        self.acquired = True
+        return self
+
+    def release(self):
+        if self.acquired and self.lock_path.exists():
+            try:
+                self.lock_path.unlink()
+            except OSError:
+                pass
+            self.acquired = False
+
+    def __enter__(self):
+        return self.acquire()
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.release()
+
+
+def get_req_ledger(project_path):
+    project_path = Path(project_path).resolve()
+    req_file = project_path / ".bot-mode" / "requests.py"
+    if not req_file.exists():
+        req_file = Path(__file__).resolve().parent / "team_room" / "requests.py"
+    if not req_file.exists():
+        req_file = Path(__file__).resolve().parents[1] / ".bot-mode" / "requests.py"
+    if not req_file.exists():
+        raise FileNotFoundError(f"Cannot locate requests.py for {project_path}")
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("cbm_requests_ledger", str(req_file))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def parse_markdown_metadata(txt):
+    meta = {}
+    for line in txt.splitlines():
+        line = line.strip()
+        if line.startswith("-") or line.startswith("*"):
+            cleaned = line.lstrip("-* ").strip()
+            if ":" in cleaned:
+                k, v = cleaned.split(":", 1)
+                meta[k.replace("*", "").strip().lower()] = v.replace("*", "").strip()
+    return meta
+
+
+def produce_snapshot(project_dir, now=None):
+    now = now or datetime.now(timezone.utc)
+    now_str = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+    future_str = (now + timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    project_path = Path(project_dir).resolve()
+
+    roster_file = project_path / ".bot-mode" / "roster.json"
+    participants = []
+    manager = "manager"
+    if roster_file.exists():
+        try:
+            r_data = json.loads(roster_file.read_text(encoding="utf-8"))
+            participants = r_data.get("participants", [])
+            for p in participants:
+                if p.get("role") == "Manager":
+                    manager = p.get("bot", "manager")
+                    break
+        except Exception:
+            pass
+
+    req_ledger = get_req_ledger(project_path)
+    requests_data = req_ledger.load(project_path)
+    requests_list = requests_data.get("requests", [])
+
+    tasks = []
+    tasks_dir = project_path / "work" / "tasks"
+    if tasks_dir.exists():
+        for task_file in sorted(tasks_dir.glob("*.md")):
+            txt = task_file.read_text(encoding="utf-8")
+            meta = parse_markdown_metadata(txt)
+
+            task_id = meta.get("task id") or task_file.stem
+            task_mgr = meta.get("responsible manager") or meta.get("owner") or manager
+            executor = meta.get("assigned executor") or meta.get("assigned bot id")
+            if executor and executor.lower() in ("unassigned", "none", "null"):
+                executor = None
+
+            raw_state = (meta.get("state") or meta.get("status") or "backlog").lower()
+            state_map = {
+                "in_progress": "in-progress",
+                "in-progress": "in-progress",
+                "completed": "done",
+                "done": "done",
+                "ready": "ready",
+                "backlog": "backlog",
+                "review": "review",
+                "blocked": "blocked",
+                "paused": "paused",
+                "future": "future"
+            }
+            status = state_map.get(raw_state, "backlog")
+
+            raw_approved = meta.get("start approved")
+            start_approved = bool(raw_approved and raw_approved.lower() in ("true", "yes", "1"))
+
+            next_action = meta.get("action")
+            if not next_action:
+                if "## Next Action" in txt:
+                    part = txt.split("## Next Action", 1)[1].split("##", 1)[0].strip()
+                    lines = [l.strip().lstrip("-* ") for l in part.splitlines() if l.strip()]
+                    if lines:
+                        next_action = lines[0]
+            if not next_action:
+                next_action = f"Progress task {task_id}"
+
+            acc_list = []
+            if "## Acceptance Criteria" in txt:
+                part = txt.split("## Acceptance Criteria", 1)[1].split("##", 1)[0].strip()
+                for l in part.splitlines():
+                    cleaned = l.strip().lstrip("0123456789.-* ").strip()
+                    if cleaned:
+                        acc_list.append(cleaned)
+            if not acc_list:
+                acc_list = [f"Acceptance criteria defined for {task_id}"]
+
+            ev_list = []
+            if meta.get("latest evidence"):
+                ev_list.append(meta.get("latest evidence"))
+            if "## Evidence and Artifacts" in txt:
+                part = txt.split("## Evidence and Artifacts", 1)[1].split("##", 1)[0].strip()
+                for l in part.splitlines():
+                    cleaned = l.strip().lstrip("0123456789.-* ").strip()
+                    if cleaned and cleaned not in ev_list:
+                        ev_list.append(cleaned)
+            if not ev_list:
+                ev_list = [f"ref:task:{task_id}"]
+
+            mtime = datetime.fromtimestamp(task_file.stat().st_mtime, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+            local_req_id = meta.get("local request id")
+            if local_req_id and local_req_id.lower() in ("none", "null"):
+                local_req_id = None
+
+            candidate = None
+            cand_sha = meta.get("candidate sha")
+            if cand_sha:
+                candidate = {"id": cand_sha, "author": executor or "builder"}
+
+            review = None
+            rev_verdict = meta.get("review verdict")
+            if rev_verdict:
+                v = "approve" if rev_verdict.lower() in ("approve", "approved", "pass") else "request_changes"
+                review = {
+                    "candidate": candidate["id"] if candidate else "unknown",
+                    "reviewer": "code-reviewer",
+                    "verdict": v,
+                    "reviewed_at": mtime,
+                    "evidence": ["ref:review-evidence"]
+                }
+
+            accepted = None
+            acc_sha = meta.get("accepted candidate")
+            if acc_sha:
+                accepted = {
+                    "candidate": acc_sha,
+                    "by": task_mgr,
+                    "accepted_at": mtime,
+                    "evidence": ["ref:manager-acceptance"]
+                }
+
+            blocker = None
+            if status == "blocked":
+                b_reason = meta.get("blocked reason")
+                b_owner = meta.get("unblock owner")
+                b_resume = meta.get("resume condition")
+                if b_reason and b_owner and b_resume:
+                    blocker = {
+                        "reason": b_reason,
+                        "owner": b_owner,
+                        "resume_condition": b_resume,
+                        "next_check_at": future_str,
+                        "evidence": [f"ref:blocker:{task_id}"]
+                    }
+
+            handoffs = []
+            matching_reqs = []
+            for r in requests_list:
+                r_id = r.get("id", "")
+                r_link = r.get("link", "")
+                r_sum = r.get("summary", "")
+                if (local_req_id and r_id == local_req_id) or (task_id.lower() in r_id.lower()) or (task_id.lower() in r_link.lower()) or (task_id.lower() in r_sum.lower()):
+                    matching_reqs.append(r)
+
+            matching_reqs.sort(key=lambda x: x.get("opened", ""))
+            for r in matching_reqs:
+                w = r.get("to", "builder")
+                stg = "implementation"
+                if w in ("code-reviewer", "reviewer") or "review" in r.get("id", ""):
+                    stg = "review"
+                elif w in ("verifier", "qa") or "qa" in r.get("id", ""):
+                    stg = "qa"
+                elif w == task_mgr or "integration" in r.get("id", ""):
+                    stg = "integration"
+
+                ack = r.get("acknowledged_at")
+                started = r.get("started_at")
+                fin = r.get("reply", {}).get("at") if (r.get("state") == "done" and isinstance(r.get("reply"), dict)) else None
+
+                handoffs.append({
+                    "id": r.get("id"),
+                    "worker": w,
+                    "stage": stg,
+                    "requested_at": r.get("opened"),
+                    "acknowledged_at": ack,
+                    "started_at": started,
+                    "finished_at": fin,
+                    "evidence": [r.get("link") or f"ref:request:{r.get('id')}"]
+                })
+
+            tasks.append({
+                "id": task_id,
+                "manager": task_mgr,
+                "executor": executor,
+                "status": status,
+                "start_approved": start_approved,
+                "next_action": next_action,
+                "acceptance": acc_list,
+                "evidence": ev_list,
+                "updated_at": mtime,
+                "next_check_at": future_str,
+                "handoffs": handoffs,
+                "blocker": blocker,
+                "candidate": candidate,
+                "review": review,
+                "accepted": accepted
+            })
+
+    snapshot = {
+        "version": 1,
+        "reconciled_at": now_str,
+        "next_check_at": future_str,
+        "runtime": {
+            "scheduler": "healthy",
+            "host": "online",
+            "observed_at": now_str,
+            "next_check_at": future_str,
+            "evidence": ["ref:desktop-runtime-local"]
+        },
+        "tasks": tasks
+    }
+    return snapshot
+
+
+def route_stage(project_dir, apply=False, allowlist=None, delivery_adapter=None, now=None):
+    now = now or datetime.now(timezone.utc)
+    project_path = Path(project_dir).resolve()
+
+    if (project_path / ".bot-mode" / "PAUSED").exists():
+        return {"ok": True, "dry_run": not apply, "routed": [], "skipped": ["project_paused"]}
+
+    if apply and allowlist is not None:
+        allowed = [str(Path(p).resolve()) for p in allowlist]
+        if str(project_path) not in allowed:
+            raise PermissionError(f"Project {project_path} is not in configured routing allowlist: {allowed}")
+
+    req_ledger = get_req_ledger(project_path)
+    snapshot = produce_snapshot(project_path, now=now)
+
+    roster_file = project_path / ".bot-mode" / "roster.json"
+    active_bots = []
+    if roster_file.exists():
+        try:
+            r_data = json.loads(roster_file.read_text(encoding="utf-8"))
+            active_bots = [p["bot"] for p in r_data.get("participants", []) if p.get("status") == "active"]
+        except Exception:
+            pass
+
+    existing_requests = req_ledger.load(project_path).get("requests", [])
+    open_requests = [r for r in existing_requests if r.get("state") == "open"]
+
+    actions = []
+    for task in snapshot.get("tasks", []):
+        t_id = task.get("id")
+        t_status = task.get("status")
+        if t_status in ("paused", "backlog", "future", "done", "blocked"):
+            continue
+        if not task.get("start_approved"):
+            continue
+
+        handoffs = task.get("handoffs", [])
+        if not handoffs:
+            continue
+        last_h = handoffs[-1]
+        if not last_h.get("finished_at"):
+            continue
+
+        successor_started = False
+        for h in handoffs[handoffs.index(last_h)+1:]:
+            if h.get("started_at"):
+                successor_started = True
+                break
+        if successor_started:
+            continue
+
+        stage = last_h.get("stage")
+        if stage in ("implementation", "revision"):
+            target = "code-reviewer"
+            if target not in active_bots:
+                if "verifier" in active_bots:
+                    target = "verifier"
+                else:
+                    actions.append({
+                        "task_id": t_id,
+                        "action": "error",
+                        "error": "No active reviewer found in roster",
+                        "target": None
+                    })
+                    continue
+
+            dup = any(r.get("to") == target and t_id.lower() in r.get("id", "").lower() for r in open_requests)
+            if dup:
+                actions.append({
+                    "task_id": t_id,
+                    "action": "deduplicated",
+                    "reason": f"Open review request already exists for {target}",
+                    "target": target
+                })
+                continue
+
+            actions.append({
+                "task_id": t_id,
+                "action": "route_review",
+                "target": target,
+                "sender": task.get("manager", "manager"),
+                "request_id": f"{t_id.lower()}-review-{now.strftime('%Y%m%d%H%M')}",
+                "summary": f"Review deliverable for {t_id}",
+                "link": f"work/tasks/{t_id}.md",
+                "next_state": "review"
+            })
+
+        elif stage in ("review", "qa"):
+            review = task.get("review") or {}
+            verdict = review.get("verdict")
+            if not verdict:
+                reply_outcome = None
+                for r in existing_requests:
+                    if r.get("id") == last_h.get("id") and isinstance(r.get("reply"), dict):
+                        reply_outcome = r["reply"].get("outcome")
+                if reply_outcome in ("request_changes", "changes_requested", "failed"):
+                    verdict = "request_changes"
+                else:
+                    verdict = "approve"
+
+            if verdict in ("request_changes", "changes_requested"):
+                target = "developer"
+                dup = any(r.get("to") == target and t_id.lower() in r.get("id", "").lower() for r in open_requests)
+                if dup:
+                    actions.append({
+                        "task_id": t_id,
+                        "action": "deduplicated",
+                        "reason": f"Open corrections request already exists for {target}",
+                        "target": target
+                    })
+                    continue
+
+                actions.append({
+                    "task_id": t_id,
+                    "action": "route_corrections",
+                    "target": target,
+                    "sender": task.get("manager", "manager"),
+                    "request_id": f"{t_id.lower()}-corrections-{now.strftime('%Y%m%d%H%M')}",
+                    "summary": f"Implement review corrections for {t_id}",
+                    "link": f"work/tasks/{t_id}.md",
+                    "next_state": "in_progress"
+                })
+            elif verdict == "approve":
+                target = task.get("manager", "manager")
+                dup = any(r.get("to") == target and t_id.lower() in r.get("id", "").lower() for r in open_requests)
+                if dup:
+                    actions.append({
+                        "task_id": t_id,
+                        "action": "deduplicated",
+                        "reason": f"Open integration request already exists for {target}",
+                        "target": target
+                    })
+                    continue
+
+                actions.append({
+                    "task_id": t_id,
+                    "action": "route_integration",
+                    "target": target,
+                    "sender": last_h.get("worker", "code-reviewer"),
+                    "request_id": f"{t_id.lower()}-integration-{now.strftime('%Y%m%d%H%M')}",
+                    "summary": f"Review approved; accept and integrate {t_id}",
+                    "link": f"work/tasks/{t_id}.md",
+                    "next_state": "review"
+                })
+
+    if not apply:
+        return {"ok": True, "dry_run": True, "plan": actions}
+
+    lock_file = project_path / ".bot-mode" / "local" / "route.lock"
+    with RouteLock(lock_file):
+        data = req_ledger.load(project_path)
+        for act in actions:
+            if act.get("action") not in ("route_review", "route_corrections", "route_integration"):
+                continue
+
+            req_ledger.open_request(
+                data,
+                act["request_id"],
+                act["sender"],
+                act["target"],
+                act["summary"],
+                link=act["link"],
+                at=now
+            )
+            new_r = next(r for r in data["requests"] if r["id"] == act["request_id"])
+            new_r["delivery_status"] = "outbox_queued"
+            exp = req_ledger.version(req_ledger.load(project_path))
+            req_ledger.save(project_path, data, exp)
+
+            t_file = project_path / "work" / "tasks" / f"{act['task_id']}.md"
+            if t_file.exists():
+                c = t_file.read_text(encoding="utf-8")
+                lines = c.splitlines()
+                new_lines = []
+                for l in lines:
+                    if l.strip().startswith("- **State**:") or l.strip().startswith("- State:"):
+                        new_lines.append(f"- **State**: {act['next_state']}")
+                    elif l.strip().startswith("- **Local Request ID**:") or l.strip().startswith("- Local Request ID:"):
+                        new_lines.append(f"- **Local Request ID**: {act['request_id']}")
+                    else:
+                        new_lines.append(l)
+                t_file.write_text(chr(10).join(new_lines) + chr(10), encoding="utf-8")
+
+            if delivery_adapter:
+                try:
+                    receipt = delivery_adapter(project_path, act["target"], act["request_id"], act["summary"])
+                    new_r["delivery_status"] = "delivered"
+                    new_r["delivered_at"] = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+                    new_r["delivery_receipt"] = receipt
+                    act["delivery"] = "delivered"
+                except Exception as err:
+                    new_r["delivery_status"] = "delivery_unknown"
+                    new_r["delivery_error"] = str(err)
+                    act["delivery"] = "delivery_unknown"
+                    act["delivery_error"] = str(err)
+
+                exp = req_ledger.version(req_ledger.load(project_path))
+                req_ledger.save(project_path, data, exp)
+            else:
+                act["delivery"] = "outbox_queued"
+
+    actually_routed = [a for a in actions if a.get("action") in ("route_review", "route_corrections", "route_integration")]
+    deduped = [a for a in actions if a.get("action") == "deduplicated"]
+    errs = [a for a in actions if a.get("action") == "error"]
+    return {"ok": True, "dry_run": False, "routed": actually_routed, "deduplicated": deduped, "errors": errs, "plan": actions}
+
+
 def main(argv=None):
-    import sys
     raw_args = argv if argv is not None else sys.argv[1:]
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--file", type=Path, help="Explicit snapshot JSON file (direct check)")
@@ -312,6 +803,16 @@ def main(argv=None):
     audit_parser = subparsers.add_parser("audit", help="Audit snapshot and atomically update monitor state")
     audit_parser.add_argument("--file", type=Path, required=True, help="Explicit snapshot JSON file")
     audit_parser.add_argument("--state-file", type=Path, default=Path("monitor-state.json"), help="State file path")
+
+    snap_parser = subparsers.add_parser("snapshot", help="Produce valid ODD snapshot from live project")
+    snap_parser.add_argument("--project", type=Path, default=Path("."), help="Project root directory")
+    snap_parser.add_argument("--output", type=Path, help="Optional output JSON path")
+
+    route_parser = subparsers.add_parser("route", help="Safe authorized stage continuation router")
+    route_parser.add_argument("--project", type=Path, default=Path("."), help="Project root directory")
+    route_parser.add_argument("--apply", action="store_true", help="Apply routing changes (default is dry-run)")
+    route_parser.add_argument("--dry-run", action="store_true", help="Dry-run preview without changes (default)")
+    route_parser.add_argument("--allowlist", action="append", help="Allowed project paths for apply")
 
     try:
         args = parser.parse_args(raw_args)
@@ -354,6 +855,27 @@ def main(argv=None):
             "new_alerts_count": len(new_alerts),
         }, indent=2))
         return 0 if result["ok"] else 1
+    elif args.command == "snapshot":
+        try:
+            snap = produce_snapshot(args.project)
+            if args.output:
+                args.output.parent.mkdir(parents=True, exist_ok=True)
+                args.output.write_text(json.dumps(snap, indent=2) + chr(10), encoding="utf-8")
+                print(f"Snapshot written to {args.output}")
+            else:
+                print(json.dumps(snap, indent=2))
+            return 0
+        except Exception as error:
+            print(f"ERROR: {error}", file=sys.stderr)
+            return 1
+    elif args.command == "route":
+        try:
+            res = route_stage(args.project, apply=bool(args.apply), allowlist=args.allowlist)
+            print(json.dumps(res, indent=2))
+            return 0 if res.get("ok") else 1
+        except Exception as error:
+            print(f"ERROR: {error}", file=sys.stderr)
+            return 1
     else:
         parser.error(f"Unknown command: {args.command}")
         return 2
