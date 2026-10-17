@@ -412,14 +412,20 @@ def default_desktop_relay_adapter(project_path, bot_id, req_id, summary):
         if bindings_file.exists():
             try:
                 b_data = json.loads(bindings_file.read_text(encoding="utf-8"))
-                thread_id = b_data.get(bot_id) or b_data.get(f"{project_path.name}:{bot_id}")
+                bound = b_data.get(bot_id) or b_data.get(f"{project_path.name}:{bot_id}")
+                if isinstance(bound, dict):
+                    thread_id = bound.get("thread_id")
+                elif isinstance(bound, str):
+                    thread_id = bound
             except Exception:
                 pass
 
     if not thread_id:
         raise PreconnectConfigurationError(f"No appointed thread ID found in roster or bindings for bot {bot_id}")
 
-    relay_file = project_path / ".bot-mode" / "relay.json"
+    relay_file = project_path / ".bot-mode" / "desktop-relay" / "relay.json"
+    if not relay_file.exists():
+        relay_file = project_path / ".bot-mode" / "relay.json"
     if not relay_file.exists():
         relay_file = project_path / "relay.json"
     if not relay_file.exists():
