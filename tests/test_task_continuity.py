@@ -338,3 +338,491 @@ class CbmAuditWrapperTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+class Phase2EnforcementTests(unittest.TestCase):
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.project_path = Path(self.temp_dir.name)
+        self.bot_mode = self.project_path / ".bot-mode"
+        self.local_dir = self.bot_mode / "local"
+        self.tasks_dir = self.project_path / "work" / "tasks"
+        self.local_dir.mkdir(parents=True, exist_ok=True)
+        self.tasks_dir.mkdir(parents=True, exist_ok=True)
+
+        self.roster_data = {
+            "schema": 1,
+            "project": {"name": "test-project"},
+            "teams": [{"name": "Development"}],
+            "participants": [
+                {"bot": "manager", "role": "Manager", "team": "Development", "status": "active"},
+                {"bot": "developer", "role": "Developer", "team": "Development", "status": "active"},
+                {"bot": "code-reviewer", "role": "Code Reviewer", "team": "Development", "status": "active"},
+                {"bot": "verifier", "role": "Verifier", "team": "Development", "status": "active"}
+            ]
+        }
+        (self.bot_mode / "roster.json").write_text(json.dumps(self.roster_data), encoding="utf-8")
+        (self.local_dir / "requests.json").write_text(json.dumps({"schema": 1, "requests": []}), encoding="utf-8")
+
+    def tearDown(self):
+        self.temp_dir.cleanup()
+
+    def _write_task(self, task_id="TASK-1", state="in_progress", start_approved="true", local_req_id=None, review_verdict=None):
+        content = f"""# Task: {task_id}
+## Metadata
+- **Task ID**: {task_id}
+- **Project**: test-project
+- **Team**: Development
+- **Responsible Manager**: manager
+- **Assigned Executor**: developer
+- **State**: {state}
+- **Start Approved**: {start_approved}
+- **Local Request ID**: {local_req_id or 'none'}
+- **Latest Evidence**: ref:test-evidence
+"""
+        if review_verdict:
+            content += f"- **Review Verdict**: {review_verdict}" + chr(10)
+        content += """## Acceptance Criteria
+1. Unit tests pass
+2. Clean public export
+## Next Action
+- **Action**: Implement features
+## Evidence and Artifacts
+- **Branch / PR**: ref:pr-1
+"""
+        (self.tasks_dir / f"{task_id}.md").write_text(content, encoding="utf-8")
+
+    def test_snapshot_generation_from_fixture_passes_check(self):
+        self._write_task("TASK-1", state="in_progress", start_approved="true", local_req_id="req-1")
+        now_str = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        req_data = {
+            "schema": 1,
+            "requests": [{
+                "id": "req-1",
+                "from": "manager",
+                "to": "developer",
+                "summary": "Implement TASK-1",
+                "link": "work/tasks/TASK-1.md",
+                "opened": now_str,
+                "acknowledged_at": now_str,
+                "started_at": now_str,
+                "state": "open",
+                "escalations": []
+            }]
+        }
+        (self.local_dir / "requests.json").write_text(json.dumps(req_data), encoding="utf-8")
+
+        snap = tc.produce_snapshot(self.project_path)
+        self.assertEqual(snap["version"], 1)
+        self.assertEqual(len(snap["tasks"]), 1)
+        res = tc.check(snap)
+        self.assertTrue(res["ok"], f"Snapshot findings: {res['findings']}")
+
+    def test_stage_routing_on_finished_implementation_opens_review_request(self):
+        self._write_task("TASK-1", state="in_progress", start_approved="true", local_req_id="req-1")
+        now_str = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        req_data = {
+            "schema": 1,
+            "requests": [{
+                "id": "req-1",
+                "from": "manager",
+                "to": "developer",
+                "summary": "Implement TASK-1",
+                "link": "work/tasks/TASK-1.md",
+                "opened": now_str,
+                "started_at": now_str,
+                "state": "done",
+                "reply": {"by": "developer", "link": "ref:commit-1", "outcome": "done", "at": now_str},
+                "escalations": []
+            }]
+        }
+        (self.local_dir / "requests.json").write_text(json.dumps(req_data), encoding="utf-8")
+
+        # Dry-run first
+        dry = tc.route_stage(self.project_path, apply=False)
+        self.assertTrue(dry["ok"])
+        self.assertTrue(dry["dry_run"])
+        self.assertEqual(len(dry["plan"]), 1)
+        self.assertEqual(dry["plan"][0]["action"], "route_review")
+        self.assertEqual(dry["plan"][0]["target"], "code-reviewer")
+
+        # Apply routing
+        res = tc.route_stage(self.project_path, apply=True)
+        self.assertTrue(res["ok"])
+        self.assertFalse(res["dry_run"])
+        self.assertEqual(len(res["routed"]), 1)
+        self.assertEqual(res["routed"][0]["action"], "route_review")
+
+        # Check requests.json has review request with outbox_queued
+        updated_reqs = json.loads((self.local_dir / "requests.json").read_text(encoding="utf-8"))["requests"]
+        self.assertEqual(len(updated_reqs), 2)
+        review_req = updated_reqs[1]
+        self.assertEqual(review_req["to"], "code-reviewer")
+        self.assertEqual(review_req["delivery_status"], "outbox_queued")
+
+        # Check task state in Markdown transitions to ready, NOT in_progress or review
+        task_txt = (self.tasks_dir / "TASK-1.md").read_text(encoding="utf-8")
+        self.assertIn("- **State**: ready", task_txt)
+
+    def test_stage_routing_on_request_changes_opens_corrections_request(self):
+        self._write_task("TASK-1", state="review", start_approved="true", local_req_id="req-2", review_verdict="request_changes")
+        now_str = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        req_data = {
+            "schema": 1,
+            "requests": [{
+                "id": "req-2",
+                "from": "manager",
+                "to": "code-reviewer",
+                "summary": "Review TASK-1",
+                "link": "work/tasks/TASK-1.md",
+                "opened": now_str,
+                "started_at": now_str,
+                "state": "done",
+                "reply": {"by": "code-reviewer", "link": "ref:review-1", "outcome": "request_changes", "at": now_str},
+                "escalations": []
+            }]
+        }
+        (self.local_dir / "requests.json").write_text(json.dumps(req_data), encoding="utf-8")
+
+        res = tc.route_stage(self.project_path, apply=True)
+        self.assertTrue(res["ok"])
+        self.assertEqual(res["routed"][0]["action"], "route_corrections")
+        self.assertEqual(res["routed"][0]["target"], "developer")
+
+        # Check task state updated to ready awaiting developer start
+        task_txt = (self.tasks_dir / "TASK-1.md").read_text(encoding="utf-8")
+        self.assertIn("- **State**: ready", task_txt)
+
+    def test_stage_routing_on_approved_review_opens_manager_integration(self):
+        self._write_task("TASK-1", state="review", start_approved="true", local_req_id="req-2", review_verdict="approve")
+        now_str = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        req_data = {
+            "schema": 1,
+            "requests": [{
+                "id": "req-2",
+                "from": "manager",
+                "to": "code-reviewer",
+                "summary": "Review TASK-1",
+                "link": "work/tasks/TASK-1.md",
+                "opened": now_str,
+                "started_at": now_str,
+                "state": "done",
+                "reply": {"by": "code-reviewer", "link": "ref:review-1", "outcome": "approve", "at": now_str},
+                "escalations": []
+            }]
+        }
+        (self.local_dir / "requests.json").write_text(json.dumps(req_data), encoding="utf-8")
+
+        res = tc.route_stage(self.project_path, apply=True)
+        self.assertTrue(res["ok"])
+        self.assertEqual(res["routed"][0]["action"], "route_integration")
+        self.assertEqual(res["routed"][0]["target"], "manager")
+        task_txt = (self.tasks_dir / "TASK-1.md").read_text(encoding="utf-8")
+        self.assertIn("- **State**: ready", task_txt)
+
+    def test_deduplication_never_opens_duplicate_request(self):
+        self._write_task("TASK-1", state="in_progress", start_approved="true", local_req_id="req-1")
+        now_str = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        req_data = {
+            "schema": 1,
+            "requests": [{
+                "id": "req-1",
+                "from": "manager",
+                "to": "developer",
+                "summary": "Implement TASK-1",
+                "link": "work/tasks/TASK-1.md",
+                "opened": now_str,
+                "started_at": now_str,
+                "state": "done",
+                "reply": {"by": "developer", "link": "ref:commit-1", "outcome": "done", "at": now_str},
+                "escalations": []
+            }]
+        }
+        (self.local_dir / "requests.json").write_text(json.dumps(req_data), encoding="utf-8")
+
+        # First apply routes review
+        res1 = tc.route_stage(self.project_path, apply=True)
+        self.assertEqual(len(res1["routed"]), 1)
+        self.assertEqual(res1["routed"][0]["action"], "route_review")
+
+        # Second apply detects stage already queued and does not create duplicate
+        res2 = tc.route_stage(self.project_path, apply=True)
+        self.assertEqual(len(res2.get("routed", [])), 0)
+        reqs = json.loads((self.local_dir / "requests.json").read_text(encoding="utf-8"))["requests"]
+        self.assertEqual(len(reqs), 2)
+
+    def test_pause_preservation(self):
+        self._write_task("TASK-1", state="paused", start_approved="true", local_req_id="req-1")
+        res = tc.route_stage(self.project_path, apply=True)
+        self.assertEqual(len(res.get("routed", [])), 0)
+
+        # Project level pause
+        (self.bot_mode / "PAUSED").write_text("Paused by owner", encoding="utf-8")
+        self._write_task("TASK-2", state="in_progress", start_approved="true")
+        res_p = tc.route_stage(self.project_path, apply=True)
+        self.assertIn("project_paused", res_p.get("skipped", []))
+        self.assertEqual(len(res_p.get("routed", [])), 0)
+
+    def test_unapproved_task_never_routed(self):
+        self._write_task("TASK-1", state="ready", start_approved="false", local_req_id="req-1")
+        res = tc.route_stage(self.project_path, apply=True)
+        self.assertEqual(len(res.get("routed", [])), 0)
+
+    def test_concurrent_routing_lock_prevents_duplicate_runs(self):
+        lock_file = self.local_dir / "route.lock"
+        with tc.RouteLock(lock_file, lease_seconds=60):
+            with self.assertRaises(RuntimeError):
+                tc.route_stage(self.project_path, apply=True)
+
+    def test_cli_rejects_mutually_exclusive_apply_and_dry_run(self):
+        run = subprocess.run(
+            [sys.executable, "-B", str(ROOT / "scripts" / "task_continuity.py"), "route",
+             "--project", str(self.project_path), "--apply", "--dry-run"],
+            capture_output=True, text=True
+        )
+        self.assertNotEqual(run.returncode, 0)
+        self.assertIn("not allowed with argument", run.stderr)
+
+    def test_task_markdown_state_transitions_to_ready_not_in_progress(self):
+        self._write_task("TASK-1", state="in_progress", start_approved="true", local_req_id="req-1")
+        now_str = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        req_data = {
+            "schema": 1,
+            "requests": [{
+                "id": "req-1",
+                "from": "manager",
+                "to": "developer",
+                "summary": "Implement TASK-1",
+                "link": "work/tasks/TASK-1.md",
+                "opened": now_str,
+                "started_at": now_str,
+                "state": "done",
+                "reply": {"by": "developer", "link": "ref:commit-1", "outcome": "done", "at": now_str},
+                "escalations": []
+            }]
+        }
+        (self.local_dir / "requests.json").write_text(json.dumps(req_data), encoding="utf-8")
+        res = tc.route_stage(self.project_path, apply=True)
+        task_txt = (self.tasks_dir / "TASK-1.md").read_text(encoding="utf-8")
+        self.assertIn("- **State**: ready", task_txt)
+        self.assertNotIn("- **State**: in_progress", task_txt)
+        self.assertNotIn("- **State**: review", task_txt)
+
+    def test_delivery_adapter_outbox_queued_when_relay_unavailable(self):
+        self._write_task("TASK-1", state="in_progress", start_approved="true", local_req_id="req-1")
+        now_str = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        req_data = {
+            "schema": 1,
+            "requests": [{
+                "id": "req-1",
+                "from": "manager",
+                "to": "developer",
+                "summary": "Implement TASK-1",
+                "link": "work/tasks/TASK-1.md",
+                "opened": now_str,
+                "started_at": now_str,
+                "state": "done",
+                "reply": {"by": "developer", "link": "ref:commit-1", "outcome": "done", "at": now_str},
+                "escalations": []
+            }]
+        }
+        (self.local_dir / "requests.json").write_text(json.dumps(req_data), encoding="utf-8")
+
+        # No delivery adapter passed and no relay.json present -> outbox_queued
+        res = tc.route_stage(self.project_path, apply=True)
+        self.assertEqual(res["routed"][0]["delivery"], "outbox_queued")
+        reqs = json.loads((self.local_dir / "requests.json").read_text(encoding="utf-8"))["requests"]
+        self.assertEqual(reqs[1]["delivery_status"], "outbox_queued")
+
+    def test_interrupted_delivery_marks_delivery_unknown_no_resend(self):
+        self._write_task("TASK-1", state="in_progress", start_approved="true", local_req_id="req-1")
+        now_str = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        req_data = {
+            "schema": 1,
+            "requests": [{
+                "id": "req-1",
+                "from": "manager",
+                "to": "developer",
+                "summary": "Implement TASK-1",
+                "link": "work/tasks/TASK-1.md",
+                "opened": now_str,
+                "started_at": now_str,
+                "state": "done",
+                "reply": {"by": "developer", "link": "ref:commit-1", "outcome": "done", "at": now_str},
+                "escalations": []
+            }]
+        }
+        (self.local_dir / "requests.json").write_text(json.dumps(req_data), encoding="utf-8")
+
+        def failing_adapter(project, bot, req_id, summary):
+            raise TimeoutError("Renderer eligibility timeout / locked desktop")
+
+        res = tc.route_stage(self.project_path, apply=True, delivery_adapter=failing_adapter)
+        self.assertEqual(res["routed"][0]["delivery"], "delivery_unknown")
+        self.assertIn("Renderer eligibility", res["routed"][0]["delivery_error"])
+
+        reqs = json.loads((self.local_dir / "requests.json").read_text(encoding="utf-8"))["requests"]
+        self.assertEqual(reqs[1]["delivery_status"], "delivery_unknown")
+
+        res2 = tc.route_stage(self.project_path, apply=True)
+        self.assertEqual(len(res2.get("routed", [])), 0)
+        reqs2 = json.loads((self.local_dir / "requests.json").read_text(encoding="utf-8"))["requests"]
+        self.assertEqual(len(reqs2), 2)
+
+    def test_delivery_successful_but_worker_turn_fails_or_aborts(self):
+        self._write_task("TASK-1", state="in_progress", start_approved="true", local_req_id="req-1")
+        now_str = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        req_data = {
+            "schema": 1,
+            "requests": [{
+                "id": "req-1",
+                "from": "manager",
+                "to": "developer",
+                "summary": "Implement TASK-1",
+                "link": "work/tasks/TASK-1.md",
+                "opened": now_str,
+                "started_at": now_str,
+                "state": "done",
+                "reply": {"by": "developer", "link": "ref:commit-1", "outcome": "done", "at": now_str},
+                "escalations": []
+            }]
+        }
+        (self.local_dir / "requests.json").write_text(json.dumps(req_data), encoding="utf-8")
+
+        def mock_adapter(project, bot, req_id, summary):
+            return {"receipt_id": "turn-aborted", "status": "sent"}
+
+        res = tc.route_stage(self.project_path, apply=True, delivery_adapter=mock_adapter)
+        self.assertEqual(res["routed"][0]["delivery"], "delivered")
+
+        task_txt = (self.tasks_dir / "TASK-1.md").read_text(encoding="utf-8")
+        self.assertIn("- **State**: ready", task_txt)
+
+        snap = tc.produce_snapshot(self.project_path)
+        check_res = tc.check(snap)
+        self.assertIn("worker_not_started", {f["code"] for f in check_res["findings"]})
+
+    def test_concurrent_apply_and_pause_race(self):
+        self._write_task("TASK-1", state="in_progress", start_approved="true", local_req_id="req-1")
+        now_str = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        req_data = {
+            "schema": 1,
+            "requests": [{
+                "id": "req-1",
+                "from": "manager",
+                "to": "developer",
+                "summary": "Implement TASK-1",
+                "link": "work/tasks/TASK-1.md",
+                "opened": now_str,
+                "started_at": now_str,
+                "state": "done",
+                "reply": {"by": "developer", "link": "ref:commit-1", "outcome": "done", "at": now_str},
+                "escalations": []
+            }]
+        }
+        (self.local_dir / "requests.json").write_text(json.dumps(req_data), encoding="utf-8")
+
+        (self.bot_mode / "PAUSED").write_text("Paused during concurrent run", encoding="utf-8")
+        res = tc.route_stage(self.project_path, apply=True)
+        self.assertIn("project_paused", res.get("skipped", []))
+        self.assertEqual(len(res.get("routed", [])), 0)
+
+    def test_malformed_receipt_or_noop_callback(self):
+        self._write_task("TASK-1", state="in_progress", start_approved="true", local_req_id="req-1")
+        now_str = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        req_data = {
+            "schema": 1,
+            "requests": [{
+                "id": "req-1",
+                "from": "manager",
+                "to": "developer",
+                "summary": "Implement TASK-1",
+                "link": "work/tasks/TASK-1.md",
+                "opened": now_str,
+                "started_at": now_str,
+                "state": "done",
+                "reply": {"by": "developer", "link": "ref:commit-1", "outcome": "done", "at": now_str},
+                "escalations": []
+            }]
+        }
+        (self.local_dir / "requests.json").write_text(json.dumps(req_data), encoding="utf-8")
+
+        def noop_adapter(project, bot, req_id, summary):
+            return None
+
+        res = tc.route_stage(self.project_path, apply=True, delivery_adapter=noop_adapter)
+        self.assertTrue(res["ok"])
+        self.assertEqual(res["routed"][0]["delivery"], "delivered")
+
+    def test_role_binding_change_missing_reviewer(self):
+        roster_data = {
+            "schema": 1,
+            "project": {"name": "test-project"},
+            "teams": [{"name": "Development"}],
+            "participants": [
+                {"bot": "manager", "role": "Manager", "team": "Development", "status": "active"},
+                {"bot": "developer", "role": "Developer", "team": "Development", "status": "active"}
+            ]
+        }
+        (self.bot_mode / "roster.json").write_text(json.dumps(roster_data), encoding="utf-8")
+        self._write_task("TASK-1", state="in_progress", start_approved="true", local_req_id="req-1")
+        now_str = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        req_data = {
+            "schema": 1,
+            "requests": [{
+                "id": "req-1",
+                "from": "manager",
+                "to": "developer",
+                "summary": "Implement TASK-1",
+                "link": "work/tasks/TASK-1.md",
+                "opened": now_str,
+                "started_at": now_str,
+                "state": "done",
+                "reply": {"by": "developer", "link": "ref:commit-1", "outcome": "done", "at": now_str},
+                "escalations": []
+            }]
+        }
+        (self.local_dir / "requests.json").write_text(json.dumps(req_data), encoding="utf-8")
+
+        res = tc.route_stage(self.project_path, apply=True)
+        self.assertEqual(len(res.get("routed", [])), 0)
+        self.assertEqual(len(res.get("errors", [])), 1)
+
+    def test_allowlist_enforcement(self):
+        self._write_task("TASK-1", state="in_progress", start_approved="true")
+        with self.assertRaises(PermissionError):
+            tc.route_stage(self.project_path, apply=True, allowlist=["/different/path/only"])
+
+    def test_real_demonstration_bounded_handoff(self):
+        self._write_task("TASK-1", state="in_progress", start_approved="true", local_req_id="req-1")
+        now_str = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        req_data = {
+            "schema": 1,
+            "requests": [{
+                "id": "req-1",
+                "from": "manager",
+                "to": "developer",
+                "summary": "Implement TASK-1",
+                "link": "work/tasks/TASK-1.md",
+                "opened": now_str,
+                "started_at": now_str,
+                "state": "done",
+                "reply": {"by": "developer", "link": "ref:commit-1", "outcome": "done", "at": now_str},
+                "escalations": []
+            }]
+        }
+        (self.local_dir / "requests.json").write_text(json.dumps(req_data), encoding="utf-8")
+
+        delivered_messages = []
+        def mock_delivery_adapter(project, bot, req_id, summary):
+            delivered_messages.append({"bot": bot, "req_id": req_id, "summary": summary})
+            return {"status": "sent", "receipt_id": "receipt-123"}
+
+        res = tc.route_stage(self.project_path, apply=True, delivery_adapter=mock_delivery_adapter)
+        self.assertTrue(res["ok"])
+        self.assertEqual(len(delivered_messages), 1)
+        self.assertEqual(delivered_messages[0]["bot"], "code-reviewer")
+        self.assertEqual(res["routed"][0]["delivery"], "delivered")
+
+
+if __name__ == "__main__":
+    unittest.main()
