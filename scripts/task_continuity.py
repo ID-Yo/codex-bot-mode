@@ -1,7 +1,8 @@
 """Audit an explicit task evidence snapshot; never dispatch, repair or schedule work.
 
 Vendored core from open-dreamdocs:
-Repository: E:/Codex_work/open-dreamdocs-enforcement-20261017/scripts/task_continuity.py
+Source: open-dreamdocs (pinned commit: aedd92a61f2e4830d86582754fe59f5fbf6a08a7)
+License: MIT (Copyright (c) 2026 open-dreamdocs contributors)
 Pinned commit: aedd92a61f2e4830d86582754fe59f5fbf6a08a7
 License: MIT
 """
