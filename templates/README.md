@@ -11,7 +11,8 @@ These files are copyable markdown forms for project artifacts. Fill in placehold
 | [contradiction](contradiction.md) | Conflicting facts or requirements requiring resolution |
 | [episode](episode.md) | Record of observed outcomes and lessons |
 | [skill](skill.md) | Candidate skill instructions |
-| [task](task.md) | Canonical task ownership, lifecycle state, and blocker tracking record |
+| [task](task.md) | Canonical task ownership, lifecycle state, and blocker tracking record (Markdown) |
+| [task.json](task.json) | Shared minimal machine-readable task continuity and handoff schema snapshot |
 
 Canonical document templates are drafts until reviewed. A procedure candidate is not an executable agent skill.
 

@@ -1,0 +1,50 @@
+{
+  "version": 1,
+  "reconciled_at": "2026-10-16T12:00:00Z",
+  "next_check_at": "2028-01-01T00:00:00Z",
+  "runtime": {
+    "scheduler": "healthy",
+    "host": "online",
+    "observed_at": "2026-10-16T12:00:00Z",
+    "next_check_at": "2028-01-01T00:00:00Z",
+    "evidence": [
+      "ref:observer-heartbeat-run-1"
+    ]
+  },
+  "tasks": [
+    {
+      "id": "task-cbm-example",
+      "manager": "manager",
+      "executor": "developer",
+      "status": "in-progress",
+      "start_approved": true,
+      "next_action": "Implement task stage and prepare review candidate",
+      "acceptance": [
+        "All targeted tests pass and independent code review approved"
+      ],
+      "evidence": [
+        "ref:task-issue-1"
+      ],
+      "updated_at": "2026-10-16T12:00:00Z",
+      "next_check_at": "2028-01-01T00:00:00Z",
+      "blocker": null,
+      "candidate": null,
+      "review": null,
+      "accepted": null,
+      "handoffs": [
+        {
+          "id": "handoff-1",
+          "worker": "developer",
+          "stage": "implementation",
+          "requested_at": "2026-10-16T12:00:00Z",
+          "acknowledged_at": "2026-10-16T12:00:00Z",
+          "started_at": "2026-10-16T12:00:00Z",
+          "finished_at": null,
+          "evidence": [
+            "ref:actual-developer-execution-start"
+          ]
+        }
+      ]
+    }
+  ]
+}
