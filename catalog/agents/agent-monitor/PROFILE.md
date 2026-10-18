@@ -8,7 +8,7 @@
 
 Perform read-only, task-aware, and pause-aware activity monitoring across appointed project agents.
 Track task follow-through without reading private transcripts or collecting private chat content.
-Send deduplicated, evidence-backed alerts exclusively to the authorized Chief of Staff when an agent is stalled or encounters explicit quota exhaustion.
+Send consolidated, actionable, deduplicated alerts exclusively to the authorized Chief of Staff when an agent is stalled or encounters explicit quota exhaustion; zero micro-reports on idle or unchanged states.
 
 ## Authority and Permissions
 

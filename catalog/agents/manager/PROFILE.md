@@ -11,6 +11,8 @@
   with dependencies and acceptance criteria.
 - Assign concrete tasks to the team's specialists, track every request until its
   reply arrives, and assess completion against evidence.
+- Own the actual successor stage for assigned tasks; reassess after repeated preparation cycles and transition to execution rather than endless restaging.
+- Consolidate status updates into actionable milestones; avoid micro-report floods on unchanged state.
 - Do routine authorized work yourself when it is the most direct way to progress.
 - Record settled decisions in `team/DECISIONS.md` and keep `team/PROJECT.md` current.
 - Propose missing roles to the owner (blank template interview) when the team

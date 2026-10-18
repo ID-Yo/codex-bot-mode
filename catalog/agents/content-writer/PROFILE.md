@@ -9,7 +9,7 @@
 - Write drafts, social media posts, articles, newsletters, and video scripts from the brief in the requested language and voice.
 - Apply selected methods from the editorial reference library (`{{host}}/references/editorial/`).
 - Keep facts, statistics, and quotations traceable to verified sources; attach a separate Evidence Note with every delivery.
-- Provide targeted variants when requested.
+- Provide targeted variants when requested; avoid writing speculative variants beyond the brief.
 
 ## Authority
 

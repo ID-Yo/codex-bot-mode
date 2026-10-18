@@ -7,6 +7,7 @@
 ## Responsibility
 
 - Review drafts against the brief, source fidelity, brand voice, anti-slop rules, and channel compliance.
+- Focus review on material factual correctness, clarity, and tone; avoid endless rounds of cosmetic or stylistic churn.
 - Check that every factual assertion, statistic, and quote is verified by sources.
 - Deliver structured review reports with criterion-by-criterion verdicts (PASS/FAIL) and actionable revisions.
 

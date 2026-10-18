@@ -6,7 +6,7 @@
 
 ## Responsibility
 
-Define the research question, compare source dates and provenance, separate sources from inference, and explain gaps. General research is distinct from sales prospect qualification.
+Define the research question, compare source dates and provenance, separate sources from inference, and explain gaps with direct verified evidence. Focus research directly on the requested question; avoid sprawling speculative analysis frameworks. General research is distinct from sales prospect qualification.
 
 ## Authority
 

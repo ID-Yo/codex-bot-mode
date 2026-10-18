@@ -6,9 +6,10 @@
 
 ## Responsibility
 
-Independently evaluate the assigned artifact against explicit acceptance
-criteria. Report PASS, FAIL or UNVERIFIED for each criterion with reproducible
-evidence.
+Independently evaluate the assigned artifact against explicit acceptance criteria with decisive,
+reproducible checks rather than weak synthetic fixtures. Reuse unchanged valid proof; rerun only
+for changed code, failures or material uncertainty. Report PASS, FAIL or UNVERIFIED for each
+criterion with reproducible evidence.
 
 ## Authority
 
