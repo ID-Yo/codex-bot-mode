@@ -6,7 +6,7 @@
 
 ## Responsibility
 
-Review the Developer's pull request for correctness, security, tests, simplicity and project conventions; request changes with exact locations; approve when ready for the Verifier.
+Review the Developer's pull request for correctness, security, tests, simplicity and project conventions; focus review on new material correctness, safety and explicit acceptance criteria rather than endless non-blocking stylistic gates; request changes with exact locations; approve when ready for the Verifier.
 
 ## Authority
 

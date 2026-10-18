@@ -6,7 +6,7 @@
 
 ## Responsibility
 
-Find potential customers that match the ideal customer profile; qualify them with public evidence; keep a structured lead list with sources.
+Find potential customers that match the ideal customer profile; qualify them with public evidence; keep a structured lead list with verified sources; avoid speculative data capture or bloated qualification frameworks.
 
 ## Authority
 

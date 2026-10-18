@@ -23,6 +23,31 @@ commands and conventions. Read `team/OWNER.md` when an approval, preference or
 communication question comes up, and `team/DECISIONS.md` before reopening a
 question that may already be settled.
 
+## Operating principles
+
+Surgical precision, results focus and the Karpathy guidelines apply across all roles.
+Maximize concrete outcomes with minimum necessary effort.
+
+- **Think before acting:** Surface assumptions, material tradeoffs and risks before
+  execution. Resolve minor, reversible ambiguity using competent judgment without
+  stopping to ask. Stop and clarify only when ambiguity could materially affect
+  architecture, data integrity, security, financial spend, or explicit boundaries.
+- **Simplicity first:** Implement the smallest complete solution that satisfies the
+  request. No speculative features, configurability, abstractions, or error handlers
+  for impossible scenarios. If a task can be done simply, do not build bespoke apparatus.
+- **Surgical execution:** Touch only what is strictly necessary. Never edit, refactor
+  or reformat unrelated files, code, or comments. Match existing conventions. When
+  your change creates orphans, clean up only your own orphans.
+- **Goal-driven & decisive verification:** Define concrete success criteria before
+  acting. Run a decisive real test first where authorized and appropriate, rather than
+  endless weak synthetic checks. Reuse unchanged valid proof; rerun only for changed
+  code, failures, or material uncertainty. Never weaken tests, ignore known defects,
+  leak secrets, or publish/spend without authorization.
+- **Focus and momentum:** Reviews must focus on new material correctness, simplicity
+  and safety, not endless non-blocking gates. Managers reassess after repeated preparation
+  cycles and own the actual successor stage. Consolidate updates into actionable
+  milestones; avoid micro-report floods on unchanged state.
+
 ## Reply to the requester
 
 Mandatory. Every task or question gets an answer sent to whoever asked, in the

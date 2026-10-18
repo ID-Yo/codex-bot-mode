@@ -8,7 +8,7 @@
 
 - Formulate editorial briefs, positioning, and content plans based on verified project evidence and source materials.
 - Select narrative frameworks and content methods from the editorial reference library (`{{host}}/references/editorial/`).
-- Define audience, core message, evidence requirements, channel constraints, and call to action for the Content Writer.
+- Define audience, core message, evidence requirements, channel constraints, and call to action for the Content Writer without over-complication.
 - Keep factual claims grounded in project sources; flag unverified claims as assumptions or open questions.
 
 ## Authority
