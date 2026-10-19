@@ -1,0 +1,63 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="560" height="850" viewBox="0 0 560 850" role="img" aria-labelledby="title description">
+  <title id="title">Codex Bot Mode working structure</title>
+  <desc id="description">Four coordination tiers: Human owner, Chief of Staff, Managers, Specialists. Below the pyramid, a Project outline contains two separate Team outlines. Each Team contains its own Manager and two Specialists. Two-way arrows connect adjacent coordination tiers, each specialist with its own Manager, and specialists within the same Team. No specialist connections cross Team or Project boundaries.</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="3" markerHeight="3" orient="auto-start-reverse">
+      <path d="M1 1 7 4 1 7" fill="none" stroke="#183b31" stroke-width="1.5"/>
+    </marker>
+    <style>
+      text{fill:#183b31;font-family:Georgia,'Times New Roman',serif;font-size:28px;text-anchor:middle}
+      .outline{fill:none;stroke:#50635a;stroke-width:2}
+      .node{fill:#f3f0e7;stroke:#50635a;stroke-width:2}
+      .link{fill:none;stroke:#183b31;stroke-width:2;marker-start:url(#arrow);marker-end:url(#arrow)}
+      .label{font-family:'Courier New',monospace;font-size:24px}
+    </style>
+  </defs>
+  <rect width="560" height="850" rx="12" fill="#f3f0e7"/>
+  <text class="label" x="280" y="28">COORDINATION</text>
+  <g stroke="#183b31" stroke-width="2">
+    <path d="M160 44H400L424 92H136Z" fill="#dfff85"/>
+    <path d="M128 108H432L456 156H104Z" fill="#e5eccf"/>
+    <path d="M96 172H464L488 220H72Z" fill="#d7e3d3"/>
+    <path d="M64 236H496L520 284H40Z" fill="#c6d9cb"/>
+  </g>
+  <text x="280" y="77">Human owner</text>
+  <text x="280" y="141">Chief of Staff</text>
+  <text x="280" y="205">Managers</text>
+  <text x="280" y="269">Specialists</text>
+  <g class="link">
+    <path d="M280 94V106"/>
+    <path d="M280 158V170"/>
+    <path d="M280 222V234"/>
+  </g>
+  <text class="label" x="280" y="324">MEMBERSHIP EXAMPLE</text>
+  <rect class="outline" x="20" y="342" width="520" height="464" rx="12"/>
+  <text x="280" y="378">Project</text>
+  <g id="team-a">
+    <rect class="outline" x="40" y="392" width="480" height="190" rx="8"/>
+    <text class="label" x="112" y="423">Team A</text>
+    <rect class="node" x="190" y="430" width="180" height="44" rx="6"/>
+    <text x="280" y="461">Manager</text>
+    <path class="link" d="M230 478 146 516"/>
+    <path class="link" d="M330 478 414 516"/>
+    <rect class="node" x="56" y="520" width="180" height="44" rx="6"/>
+    <rect class="node" x="324" y="520" width="180" height="44" rx="6"/>
+    <text x="146" y="551">Specialist</text>
+    <text x="414" y="551">Specialist</text>
+    <path class="link" d="M242 542H318"/>
+  </g>
+  <g id="team-b">
+    <rect class="outline" x="40" y="600" width="480" height="190" rx="8"/>
+    <text class="label" x="112" y="631">Team B</text>
+    <rect class="node" x="190" y="638" width="180" height="44" rx="6"/>
+    <text x="280" y="669">Manager</text>
+    <path class="link" d="M230 686 146 724"/>
+    <path class="link" d="M330 686 414 724"/>
+    <rect class="node" x="56" y="728" width="180" height="44" rx="6"/>
+    <rect class="node" x="324" y="728" width="180" height="44" rx="6"/>
+    <text x="146" y="759">Specialist</text>
+    <text x="414" y="759">Specialist</text>
+    <path class="link" d="M242 750H318"/>
+  </g>
+  <text class="label" x="280" y="838">Arrows = two-way communication</text>
+</svg>

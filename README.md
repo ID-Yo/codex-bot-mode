@@ -19,10 +19,15 @@ Nothing runs behind your back: work happens in your Codex chats, with your permi
 
 ## How it works
 
-```text
-You -> Chief of Staff -> Project Director -> Team Manager -> Specialists
-        (optional)       (2+ teams)          (per team)       (Developer, Designer, ...)
-```
+![Four coordination tiers: Human owner, Chief of Staff, Managers, Specialists. A Project contains two Teams, each with its own Manager and Specialists. Arrows connect each specialist with its own Manager and other specialists in that Team in both directions.](docs/assets/working-structure.svg)
+
+The pyramid shows coordination; the adjacent outlined example shows membership.
+A Team is a Manager plus specialists; a Project can contain multiple Teams.
+The optional Chief of Staff connects the owner with each project's entry point.
+For projects with two or more Teams, appoint a Project Director to coordinate
+their Managers and act as the project entry point. This is a project policy,
+not a fifth pyramid tier. Specialist communication stays within the team's scope;
+the diagram grants no cross-project authority.
 
 | Piece | What it is |
 |---|---|
