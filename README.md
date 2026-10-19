@@ -19,10 +19,9 @@ Nothing runs behind your back: work happens in your Codex chats, with your permi
 
 ## How it works
 
-```text
-You -> Chief of Staff -> Project Director -> Team Manager -> Specialists
-        (optional)       (2+ teams)          (per team)       (Developer, Designer, ...)
-```
+![Four tiers: Human owner (HO), Chief of Staff (COS), Project Director, and Teams A, B and C. Each own Manager reports to the Director. Each Team contains its Manager and Specialists S1/S2, with two-way Manager-specialist and within-team specialist communication.](docs/assets/working-structure.svg)
+
+Four tiers, from top to bottom: Human owner (HO), Chief of Staff (COS), Project Director, and Teams A, B and C. The Project groups its Director and all three Teams. Each Team Manager reports to the Director; the Director coordinates with COS, and COS with HO. Each Team contains its own Manager and specialists (S1/S2). Arrows show two-way communication, including between specialists within the same Team. These internal Team roles are part of the bottom tier, not additional tiers. No specialist connection grants cross-team or cross-project authority.
 
 | Piece | What it is |
 |---|---|

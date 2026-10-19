@@ -5,6 +5,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/). Versions follow [SemVer
 ## [Unreleased]
 
 ### Added
+- One canonical SVG working-structure diagram in the public README and website, with four unified tiers (Human owner, Chief of Staff, Project Director, Teams A/B/C), Project grouping and scoped two-way communication.
 - Empty Chief of Staff personal knowledge scaffold, selective owner-confirmed knowledge guidance, manual preservation instructions and complete template-package privacy checks.
 - Task Ownership and Follow-through procedure, reusable task record and role guidance for active execution, current-version gates and explicit waiting states.
 - Populated documentation drafts with public sources, explicit hypotheses and platform/cost/privacy limits; citation validation covers spaced paths and dotfiles.
