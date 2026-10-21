@@ -23,6 +23,9 @@ modules:
   channels:
     path: methods/channels.md
     adapters: [linkedin, twitter-x, facebook, instagram]
+  linkedin:
+    path: methods/linkedin-handbook.md
+    methods: [linkedin-editorial]
 templates:
   brief: templates/brief.md
   review: templates/draft-review.md

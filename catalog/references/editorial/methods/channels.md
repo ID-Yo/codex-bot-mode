@@ -13,7 +13,8 @@ Platform-specific formatting, tone, and character constraints.
 - **Tone**: Professional, insightful, direct, respectful.
 - **Formatting**: Short 1-2 line paragraphs with whitespace. Strong opening hook line before the "see more" cutoff. Bullet points for lists.
 - **Hashtags**: Maximum 2 to 3 relevant industry tags at the bottom (omit if project guidelines disallow hashtags).
-- **CTA**: Conversational question encouraging practitioner discussion.
+- **CTA**: Match the objective: practical next step, relevant discussion question, useful resource, authorized inquiry route, or no CTA when the post is complete. A question is optional, not mandatory.
+- **Handbook**: Use [LinkedIn Editorial](linkedin-handbook.md) for evidence, audience/purpose, experiment limits, measurement and the per-post audit. The project brief and brand voice override its defaults.
 - **Fallback**: Standard professional update without bulleted formatting.
 
 ---
