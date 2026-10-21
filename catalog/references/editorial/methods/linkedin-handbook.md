@@ -67,6 +67,13 @@ post-attributed profile activity. Analytics are estimates; field availability
 must be checked for the actual account and post. Definitions are documented in
 the dated source below, not evidence that a metric causes distribution.
 
+LinkedIn counts the author's own views, social and link engagement, including
+saves and sends, in content analytics. Raw totals can therefore contain creator
+activity and must not automatically be described as audience-only response.
+Record whether creator activity can actually be identified and isolated in the
+available data. If it cannot, label the counts as including possible creator
+activity; do not invent a deduction or promise a removable activity breakdown.
+
 For editorial usefulness, inspect saves/sends and substantive audience response.
 For interest, inspect post-attributed profile views where available, separately
 from all-account views. For commercial intent, define a qualified DM or lead
@@ -113,7 +120,7 @@ audit authorization does not permit editing, scheduling or publishing it.
 | Hook | Exact opening; promised value versus delivered value; hypothesis if tested |
 | Format | Paragraph/layout review, format, length/counting rule, link placement; brief overrides |
 | CTA | Exact action or intentional absence; alignment with goal and permission |
-| Metric | Primary metric; actual counts/source or unavailable; denominator; capture date and matched window; own comparable baseline and confounders; qualified outcome/attribution limits |
+| Metric | Primary metric; actual counts/source or unavailable; denominator; capture date and matched window; own comparable baseline and confounders; whether creator activity can actually be identified/isolated, otherwise label possible creator activity without invented deductions; qualified outcome/attribution limits |
 | Severity | Blocker: unsupported claim, fabricated story or permission breach; major: wrong audience/goal/CTA or invalid comparison; minor: clarity/layout; experiment: optional unproven tactic |
 | Recommendation | Specific evidence-linked correction, priority and next step; one-variable experiment only if justified; retain/omit when evidence is missing |
 | Disposition | APPROVE or REQUEST CHANGES for this revision only; unresolved evidence; separate owner publication approval |
