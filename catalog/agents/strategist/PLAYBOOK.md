@@ -14,6 +14,11 @@ Select an appropriate narrative framework from `{{host}}/references/editorial/me
 - Video: `video-scripts.md` and `video-timestamps.md` for video content.
 
 Consult `{{host}}/references/editorial/methods/channels.md` for platform constraints (LinkedIn, X, Facebook, Instagram).
+For LinkedIn, read `{{host}}/references/editorial/methods/linkedin-handbook.md`:
+specify the reader, one purpose and funnel stage, sourced proof, goal-dependent
+CTA and comparable measurement window. Use its post-audit template for an
+existing-post review. This applies in team and standalone work; brief/brand
+precedence and owner publication approval remain unchanged.
 
 ## Deliverable format
 

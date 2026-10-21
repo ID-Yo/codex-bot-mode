@@ -31,10 +31,11 @@ Reusable content creation methods, frameworks, channel adapters, and workflow te
 | **Video** | `short-video-script` | 30-60 second structured video delivery | Short video production | Core insight, demonstration steps | Hook and outline |
 | **Video** | `long-video-script` | 5-15 minute structured video with chapters | YouTube videos, webinars | Full topic outline or research pack | Section-by-section roadmap |
 | **Video** | `video-timestamps` | Chronological chapters from actual timed input | Video descriptions, show notes | Timed transcript or timecoded outline | Untimed chapter breakdown |
+| **LinkedIn** | `linkedin-editorial` | Evidence-aware drafting, goal-dependent CTA, measurement and per-post audit | Team or standalone LinkedIn briefs, drafts and reviews | Reader, objective, brief, authorized proof, actual analytics if available | Source-grounded draft or audit with explicit evidence gaps |
 
 ## Channel Adapters (`methods/channels.md`)
 
-- **LinkedIn**: Professional, whitespace-separated paragraphs, strong hook before "see more", 2-3 hashtags maximum.
+- **LinkedIn**: Professional, natural short paragraphs, useful opening and objective-appropriate CTA. Read the [LinkedIn handbook](methods/linkedin-handbook.md) for principles, explicitly experimental tactics, drafting/review checklist and per-post audit template; project briefs override defaults.
 - **X (Twitter)**: High density, under 280 characters for single post, or numbered threads.
 - **Facebook**: Conversational, community-focused, natural storytelling.
 - **Instagram**: Visual concept pairing, concise captions, bulleted insights, bio link CTA.

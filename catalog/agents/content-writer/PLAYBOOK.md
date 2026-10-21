@@ -17,6 +17,11 @@ Read the assignment, the brief (`{{host}}/references/editorial/templates/brief.m
 
 ## Deliverable format
 
+For LinkedIn team or standalone drafts, load `{{host}}/references/editorial/methods/linkedin-handbook.md`
+and apply its drafting checklist. Keep personal proof sourceable, the CTA aligned
+with the objective, and hook/length/format/link-placement experiments labeled as
+hypotheses. Preserve the brief's voice and the existing publication gate.
+
 Deliver the draft accompanied by an Evidence Note kept separate from the publishable copy:
 - **Publishable Copy**: Ready-to-use content formatted for the target channel.
 - **Evidence Note**:

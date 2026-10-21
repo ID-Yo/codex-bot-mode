@@ -16,6 +16,12 @@ Evaluate the candidate draft across five standard criteria:
 
 ## Report format
 
+For LinkedIn team or standalone reviews, use `{{host}}/references/editorial/methods/linkedin-handbook.md`:
+apply its checklist and per-post audit to the exact revision. Check sourced
+personal proof, objective-appropriate CTA and matched metric denominators/windows.
+Keep experimental tactics separate from facts. Brief/brand constraints override
+defaults; editorial approval never authorizes editing or publishing existing posts.
+
 Use the template in `{{host}}/references/editorial/templates/draft-review.md`:
 - Review ID, candidate revision SHA or path, brief link.
 - Criteria table with result and evidence for each criterion.
