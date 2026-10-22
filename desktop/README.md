@@ -5,51 +5,36 @@ service. It starts the service bundled beside the Tauri application; it does
 not install Python system-wide or replace the existing Office web interface.
 The web interface remains in Chrome at `http://localhost:24242`.
 
-## Build and artifact status
+## Windows release 0.1.1
 
-The repository contains a Windows workflow intended to build an x64 PyInstaller
-sidecar and a per-user NSIS installer, then retain them as private Actions
-artifacts. That is an optional remote build path, not evidence that an installer
-exists. Under the current local-only CI policy, automatic remote runs are
-disabled and the workflow has not been run successfully.
+The Windows x64 controller and bundled Python service were built locally on
+2026-10-22 using Rust/Cargo 1.90.0, MSVC v143 and Windows SDK 26100.
+The release installer is an unsigned Windows executable. Authenticode publisher
+signing is not configured; Ed25519 component signatures are a separate mechanism.
+Use the release checksum to compare the downloaded bytes. A checksum alone is
+not a Windows publisher identity.
 
-The native Tauri build has not been compiled. Rust/Cargo, MSVC, and the Windows
-SDK are absent from the checked local toolchain locations, so the native
-compiler is the current local build blocker; no workstation toolchain was
-installed. At the 2026-10-21 check, a fresh PATH and standard toolchain
-locations had no Cargo, rustc, MSVC, Windows SDK, or NSIS. Available disk space
-was about 0.02 GiB on C:, 8.83 GiB on D:, and 66.25 GiB on E:; recheck before
-planning a local build because these values change. Earlier optional Actions
-runs were rejected before starting a runner because GitHub reported an account
-payment or spending-limit block. Those failures are separate from the missing
-local compiler and provided no compile evidence. The local PyInstaller check
-produced a sidecar only. No NSIS installer exists from that check. Wait for a
-locally available approved toolchain or an explicitly authorized remote build,
-a successful native build, and an explicit trusted-install decision before
-installing anything.
+Native Rust tests (15), controller source checks (12), packaged service health,
+safe shutdown and child survival were verified. These checks do not establish
+clean-machine installation, interactive tray behavior or uninstall acceptance.
 
-The NSIS package is configured for the current Windows user. No service,
-elevation, login autostart, or automatic update is configured. Codex Desktop
-must already be installed; the controller searches for its `codex.exe` and
-offers a file picker if it cannot find it.
+The installer targets the current user. It does not configure a Windows service,
+login autostart or automatic application updates. Codex Desktop must already be
+installed. Python, Node and Rust are build dependencies and are not required by
+the person running the packaged application. Chrome is the primary work browser.
 
-### Installation when a release is approved
-
-1. Obtain the signed installer from the approved private distribution location
-   named by that release's instructions. Verify its publisher and checksum
-   against the release evidence.
-2. Do not install the unsigned PR or Actions test artifact described above.
-   If Windows reports an unexpected or invalid signature, stop and contact the
-   release owner instead of bypassing the warning.
-3. Run the verified installer as the current user. It does not require
-   elevation. Launch **Codex Office** from the Start menu when you choose to
-   use it; installation does not enable login autostart.
+Download the Windows x64 setup file and SHA256SUMS.txt from the Office desktop
+release. Compare the SHA-256 using PowerShell Get-FileHash, then run the installer
+and launch Codex Office from the Start menu.
 
 ## First run
 
 1. Start **Codex Office** from the per-user Start menu shortcut.
-2. Choose the project folder that contains the Office profiles you want to
-   serve. The controller stores its service runtime under that project's
+2. Choose the root folder of an existing CBM project, containing its
+   `.bot-mode/roster.json` and installed team profiles. This is the Office host
+   workspace, not the Codex installation directory. If this workspace has an
+   Office project registry, the Projects tab can show its other configured
+   projects as well. A folder choice does not launch an agent turn. The controller stores its service runtime under that project's
    `.bot-mode/team-room-v1/desktop-controller` directory.
 3. Confirm the detected Codex Desktop runtime, or use **Locate** to select its
    `codex.exe`.
@@ -108,10 +93,11 @@ within the selected project.
 
 ## Updates and support information
 
-This controller has no automatic update mechanism. Do not replace the
-application or bundled service with an unsigned build. Updates require a
-reviewed release and a verified signing/trust process; that process is not
-configured by this draft.
+The controller has no automatic application self-update. Component updates in
+the web UI require explicit local source/trust configuration, inventory, a reviewed
+preview and explicit Apply. See ../docs/operations/office-update-host.md.
+Applied files remain pending activation until loading evidence is recorded.
+Installing this controller alone does not configure trusted update sources.
 
 There is no support-bundle export in this build. For a support report, copy the
 displayed service state, safety state, counts, reason, and recent-activity lines
@@ -123,15 +109,15 @@ sharing.
 
 ## Maintainer build notes
 
-The **Codex Office desktop (Windows)** workflow is manual-only and is not a
-current validation route under the local-only CI policy. It is not being
-dispatched. A future authorized Windows runner could resolve the Cargo lockfile,
-install locked npm dependencies, build the sidecar, compile Tauri, and create
-an unsigned test installer. Do not infer any of those outputs from the workflow
-definition. The local sidecar `--help` smoke check proves only that the
-packaged CLI starts; it does not prove service startup, authenticated health,
-tray behavior, safe shutdown, or native compilation. Verify those separately
-before treating a package as accepted.
+Install the pinned frontend dependencies with npm ci in desktop/. Build the
+sidecar with build-sidecar.ps1, run cargo test --locked --manifest-path
+src-tauri/Cargo.toml, then npm run build. The committed Cargo.lock records the
+resolved native dependencies. These commands require the Windows build tools;
+regular users download the packaged installer instead.
+
+Validation is local. No hosted CI build is required or automatically dispatched
+for this publication. Generated binaries, icons and native build outputs are
+excluded from source control; release binaries are attached separately.
 
 
 ## Packaged profile regression check
