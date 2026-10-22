@@ -1,0 +1,4 @@
+#updates-view{flex:1;overflow:auto;padding:28px 36px;max-width:1100px;min-width:0}#updates-view[hidden]{display:none}#updates-view header{border-bottom:2px solid var(--line);padding-bottom:20px}#updates-view h1{font-size:28px;margin:8px 0}#updates-view h2{font-size:18px}#updates-view section{padding:18px 0;border-bottom:1px solid var(--line)}#updates-view label{display:block;margin:12px 0}#updates-view input{display:block;width:min(100%,560px);box-sizing:border-box;margin-top:4px}#updates-view button{margin:6px 10px 6px 0}#updates-view pre{white-space:pre-wrap;overflow-wrap:anywhere;background:var(--surface,#f4f6f5);padding:12px;font-size:12px}#updates-view summary{cursor:pointer;padding:8px 0}@media(max-width:640px){#updates-view{padding:16px}}
+
+/* Keep all five navigation tabs inside the sidebar. */
+.sidebar-tabs{flex-wrap:wrap;row-gap:0}

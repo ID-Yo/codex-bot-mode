@@ -72,7 +72,7 @@ def profile_location(bot, project=None):
     if not workspace:
         raise ValueError('Unknown agent.')
     folder = root / workspace
-    if (folder / 'agent').is_dir():
+    if (folder / 'agent').is_dir() and ((folder / 'agent' / 'agent.yaml').is_file() or (folder / 'agent' / 'PROFILE.md').is_file()):
         return (folder / 'agent', folder / 'scripts' / 'bot_mode.py', folder, bot_id,
                 f'{workspace}/agent/memory')
     if folder.is_dir():

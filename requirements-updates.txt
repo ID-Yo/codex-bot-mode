@@ -1,0 +1,2 @@
+# Only component update verification needs this dependency; normal Office remains stdlib.
+cryptography==48.0.1

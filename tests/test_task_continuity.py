@@ -241,7 +241,7 @@ class CbmAuditWrapperTests(unittest.TestCase):
             snap_file = Path(temp) / "snap.json"
             state_file = Path(temp) / "state.json"
             snap_file.write_text(json.dumps(live_snapshot()), encoding="utf-8")
-            
+
             run = subprocess.run(
                 [sys.executable, "-B", str(ROOT / "scripts" / "task_continuity.py"), "audit",
                  "--file", str(snap_file), "--state-file", str(state_file)],
@@ -274,11 +274,11 @@ class CbmAuditWrapperTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             snap_file = Path(temp) / "snap.json"
             state_file = Path(temp) / "state.json"
-            
+
             bad_snap = live_snapshot()
             bad_snap["tasks"][0]["handoffs"][-1]["started_at"] = None
             snap_file.write_text(json.dumps(bad_snap), encoding="utf-8")
-            
+
             run1 = subprocess.run(
                 [sys.executable, "-B", str(ROOT / "scripts" / "task_continuity.py"), "audit",
                  "--file", str(snap_file), "--state-file", str(state_file)],
@@ -289,7 +289,7 @@ class CbmAuditWrapperTests(unittest.TestCase):
             fp = "worker_not_started:task-1"
             self.assertIn(fp, state1["alert_ledger"])
             self.assertEqual(state1["alert_ledger"][fp]["status"], "new")
-            
+
             run2 = subprocess.run(
                 [sys.executable, "-B", str(ROOT / "scripts" / "task_continuity.py"), "audit",
                  "--file", str(snap_file), "--state-file", str(state_file)],
@@ -298,10 +298,10 @@ class CbmAuditWrapperTests(unittest.TestCase):
             self.assertEqual(run2.returncode, 1)
             state2 = json.loads(state_file.read_text(encoding="utf-8"))
             self.assertEqual(state2["alert_ledger"][fp]["status"], "deduplicated")
-            
+
             bad_snap["tasks"][0]["next_check_at"] = "2020-01-01T00:00:00Z"
             snap_file.write_text(json.dumps(bad_snap), encoding="utf-8")
-            
+
             run3 = subprocess.run(
                 [sys.executable, "-B", str(ROOT / "scripts" / "task_continuity.py"), "audit",
                  "--file", str(snap_file), "--state-file", str(state_file)],
@@ -320,12 +320,12 @@ class CbmAuditWrapperTests(unittest.TestCase):
         spec = importlib.util.spec_from_file_location("odd_tc", str(odd_script))
         odd_tc = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(odd_tc)
-        
+
         res_cbm = tc.check(snapshot(), NOW)
         res_odd = odd_tc.check(snapshot(), NOW)
         self.assertEqual(res_cbm["ok"], res_odd["ok"])
         self.assertEqual(res_cbm["findings"], res_odd["findings"])
-        
+
         broken = snapshot()
         broken["tasks"][0]["status"] = "review"
         broken["tasks"][0]["candidate"] = {"id": "sha-1", "author": "builder"}
