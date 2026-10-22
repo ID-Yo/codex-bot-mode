@@ -16,17 +16,75 @@
   const when=t=>{const d=new Date(t);return Number.isNaN(d.valueOf())?'unknown time':d.toLocaleString(undefined,{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'});};
   const stale=p=>!p.source.as_of||Date.now()-new Date(p.source.as_of)>(p.stale_after_hours||48)*3600e3;
   const pending=p=>(p.decisions||[]).filter(d=>d.state==='pending');
-  const projects=()=>data?.snapshot?.projects||[];
+  let registryData=null;
+  const VISIBILITY_KEY='office_visible_projects';
+  let projSearchQuery='';
+
+  function getVisibleProjectIds(){
+    try{
+      const raw=localStorage.getItem(VISIBILITY_KEY);
+      if(raw){const p=JSON.parse(raw);if(Array.isArray(p))return new Set(p);}
+    }catch(_){}
+    return null;
+  }
+  function isProjectVisible(id){
+    if(!id)return true;
+    const s=getVisibleProjectIds();
+    return s===null||s.has(id);
+  }
+  function setVisibleProjectIds(ids){
+    try{
+      if(ids===null)localStorage.removeItem(VISIBILITY_KEY);
+      else localStorage.setItem(VISIBILITY_KEY,JSON.stringify(Array.from(ids)));
+    }catch(_){}
+    onVisibilityChanged();
+  }
+  function onVisibilityChanged(){
+    render();
+    renderList();
+    if(typeof window.refreshOfficeDirectoryVisibility==='function'){
+      window.refreshOfficeDirectoryVisibility();
+    }
+    if(window.officeAgents && typeof window.officeAgents.refresh==='function'){
+      window.officeAgents.refresh();
+    }
+  }
+  function allKnownProjects(){
+    const list=[];const seen=new Set();
+    const fromReg=registryData?.projects||[];
+    for(const p of fromReg){
+      if(!p.id||seen.has(p.id))continue;
+      seen.add(p.id);
+      list.push({id:p.id,name:p.name||p.id,root:p.root||'',status:p.status||'ok',reason:p.reason||null,is_current:Boolean(p.is_current),applicable:p.applicable!==false});
+    }
+    const fromSnap=data?.snapshot?.projects||[];
+    for(const p of fromSnap){
+      if(!p.id||seen.has(p.id))continue;
+      seen.add(p.id);
+      list.push({id:p.id,name:p.name||p.id,root:'',status:'unknown',reason:'Not in project registry',is_current:false,applicable:false});
+    }
+    return list;
+  }
+  const allProjects=()=>data?.snapshot?.projects||[];
+  const projects=()=>allProjects().filter(p=>isProjectVisible(p.id));
 
   async function load(){
     if(loading)return;loading=true;
     try{
-      const r=await fetch('/api/projects',{headers:{'X-Room-Token':token}});
-      const j=await r.json();
-      if(!r.ok)throw Error(j.error||'Projects unavailable');
-      if(j.available){data=j;problem=null;}
-      else if(data?.available)problem=j.error||'Project status is unavailable';
-      else{data=j;problem=null;}
+      const [rProjects,rOverview]=await Promise.allSettled([
+        fetch('/api/projects',{headers:{'X-Room-Token':token}}),
+        fetch('/api/registry/overview',{headers:{'X-Room-Token':token}})
+      ]);
+      if(rProjects.status==='fulfilled'){
+        const j=await rProjects.value.json();
+        if(!rProjects.value.ok)throw Error(j.error||'Projects unavailable');
+        if(j.available){data=j;problem=null;}
+        else if(data?.available)problem=j.error||'Project status is unavailable';
+        else{data=j;problem=null;}
+      }
+      if(rOverview.status==='fulfilled'&&rOverview.value.ok){
+        registryData=await rOverview.value.json();
+      }
     }catch(e){
       if(data?.available)problem=e.message;
       else{data={available:false,error:e.message};problem=null;}
@@ -995,12 +1053,136 @@
     });
   }
 
+  function renderVisibilityControls(){
+    const known=allKnownProjects();
+    if(!known.length)return null;
+    const panel=el('div','pc-visibility-panel');
+    const top=el('div','pc-vis-top');
+
+    const searchInput=el('input','pc-search-input');
+    searchInput.type='search';
+    searchInput.id='pc-proj-search';
+    searchInput.placeholder='Search known projects…';
+    searchInput.setAttribute('aria-label','Search known projects');
+    searchInput.value=projSearchQuery;
+    searchInput.oninput=(e)=>{
+      projSearchQuery=e.target.value.trim().toLowerCase();
+      updateChecklistDisplay();
+    };
+
+    const actions=el('div','pc-vis-actions');
+    const visibleSet=getVisibleProjectIds();
+    const isFiltered=visibleSet!==null;
+    const allCount=known.length;
+    const visibleCount=isFiltered?known.filter(p=>visibleSet.has(p.id)).length:allCount;
+
+    const countMeta=el('span','pc-muted');
+    countMeta.id='pc-vis-count';
+    countMeta.textContent=isFiltered?`Showing ${visibleCount} of ${allCount} (${allCount-visibleCount} hidden)`:`All ${allCount} projects visible`;
+
+    const selectApplicableBtn=el('button','pc-vis-btn','Select all applicable');
+    selectApplicableBtn.type='button';
+    selectApplicableBtn.id='pc-select-applicable-btn';
+    selectApplicableBtn.onclick=()=>{
+      const applicableIds=known.filter(p=>p.applicable).map(p=>p.id);
+      setVisibleProjectIds(applicableIds);
+    };
+
+    const restoreAllBtn=el('button','pc-vis-btn','Restore all');
+    restoreAllBtn.type='button';
+    restoreAllBtn.id='pc-restore-all-btn';
+    restoreAllBtn.disabled=!isFiltered;
+    restoreAllBtn.onclick=()=>setVisibleProjectIds(null);
+
+    actions.append(countMeta,selectApplicableBtn,restoreAllBtn);
+    top.append(searchInput,actions);
+    panel.append(top);
+
+    const checklist=el('div','pc-proj-checklist');
+    checklist.id='pc-proj-checklist';
+
+    function updateChecklistDisplay(){
+      const items=checklist.querySelectorAll('.pc-proj-item');
+      for(const item of items){
+        const hay=item.dataset.hay||'';
+        item.hidden=projSearchQuery?!hay.includes(projSearchQuery):false;
+      }
+    }
+
+    known.forEach(p=>{
+      const item=el('label','pc-proj-item');
+      const hay=[p.name,p.id,p.status,p.reason||''].join(' ').toLowerCase();
+      item.dataset.hay=hay;
+
+      const chk=document.createElement('input');
+      chk.type='checkbox';
+      chk.id=`pc-chk-${p.id}`;
+      chk.checked=isProjectVisible(p.id);
+      chk.onchange=()=>{
+        let set=getVisibleProjectIds();
+        if(set===null){
+          set=new Set(known.map(k=>k.id));
+        }
+        if(chk.checked){
+          set.add(p.id);
+        }else{
+          set.delete(p.id);
+        }
+        setVisibleProjectIds(set);
+      };
+
+      const info=el('div','pc-proj-info');
+      const head=el('div','pc-proj-head');
+      head.append(el('strong',null,p.name));
+      if(p.name!==p.id){
+        head.append(el('small','pc-muted',`(${p.id})`));
+      }
+      if(p.is_current){
+        head.append(el('span','pc-status pc-current','Current'));
+      }
+      if(p.status==='ok'){
+        head.append(el('span','pc-status pc-working','Roster valid'));
+      }else if(p.status==='no_teams'){
+        head.append(el('span','pc-status','No teams'));
+      }else if(p.status==='source_unavailable'){
+        head.append(el('span','pc-status pc-blocked','Source unavailable'));
+      }else if(p.status==='roster_error'){
+        head.append(el('span','pc-status pc-blocked','Roster error'));
+      }else if(p.status==='unknown'){
+        head.append(el('span','pc-status','Unknown'));
+      }
+      info.append(head);
+      if(p.reason){
+        info.append(el('small','pc-reason',p.reason));
+      }
+      item.append(chk,info);
+      checklist.append(item);
+    });
+
+    panel.append(checklist);
+    updateChecklistDisplay();
+    return panel;
+  }
+
   function render(){const v=document.getElementById('projects-view');v.replaceChildren();const body=el('div','pc-body');const warn=warning();if(warn)body.append(warn);
+    if(view==='overview'){
+      const known=allKnownProjects();
+      const controls=renderVisibilityControls();
+      if(controls)body.append(controls);
+      if(!data){v.append(header('Projects',''),body);body.append(empty('Loading projects…'));return;}
+      if(!data.available){v.append(header('Projects',known.length?known.length+' known projects · status unavailable':'No project data'),body);body.append(empty(data.error||'Project status is unavailable.'));return;}
+      const ps=projects();
+      v.append(header('Projects',ps.length+' projects · updated '+when(data.snapshot.generated_at)));
+      const grid=el('div','pc-grid');
+      [...ps].sort((a,b)=>pending(b).length-pending(a).length).forEach(p=>grid.append(card(p)));
+      if(ps.length){body.append(grid);}else{const emptyMsg=el('p','empty');emptyMsg.textContent=allProjects().length?'All projects are hidden by filter. Click "Restore all" above to show all projects.':'No projects in the snapshot.';body.append(emptyMsg);}
+      v.append(body);
+      return;
+    }
     if(!data){body.append(empty('Loading projects…'));v.append(header('Projects',''),body);return;}
     if(!data.available){v.append(header('Projects','No project data'),body);body.append(empty(data.error||'Project status is unavailable.'));return;}
     const ps=projects();
-    if(view==='overview'){v.append(header('Projects',ps.length+' projects · updated '+when(data.snapshot.generated_at)));const grid=el('div','pc-grid');[...ps].sort((a,b)=>pending(b).length-pending(a).length).forEach(p=>grid.append(card(p)));body.append(ps.length?grid:empty('No projects in the snapshot.'));}
-    else if(view==='inbox'){const rank=d=>[d.urgency==='urgent'?0:1,d.due||'9999',d.requested_at].join('|');const all=ps.flatMap(p=>pending(p).map(d=>[d,p])).sort(([a],[b])=>rank(a)<rank(b)?-1:rank(a)>rank(b)?1:0);v.append(header('Waiting for you',all.length+' explicit owner decisions'));const ul=el('ul','pc-decisions pc-inbox');all.forEach(([d,p])=>ul.append(decisionItem(d,p)));body.append(all.length?ul:empty('Nothing is waiting for you.'));}
+    if(view==='inbox'){const rank=d=>[d.urgency==='urgent'?0:1,d.due||'9999',d.requested_at].join('|');const all=ps.flatMap(p=>pending(p).map(d=>[d,p])).sort(([a],[b])=>rank(a)<rank(b)?-1:rank(a)>rank(b)?1:0);v.append(header('Waiting for you',all.length+' explicit owner decisions'));const ul=el('ul','pc-decisions pc-inbox');all.forEach(([d,p])=>ul.append(decisionItem(d,p)));body.append(all.length?ul:empty('Nothing is waiting for you.'));}
     else{const p=ps.find(x=>x.id===view);if(!p){v.append(header('Project','Not in snapshot'));body.append(empty('This project is no longer in the snapshot.'));}else{v.append(header(p.name,STATUS[p.status]+(p.manager?' · '+p.manager:'')));
       const split=el('div','pm-split-layout');
       split.id='pm-split-layout';
@@ -1030,10 +1212,10 @@
   function renderList(){const list=document.getElementById('project-list');if(!list)return;list.replaceChildren();const n=document.getElementById('projects-notice');
     if(!data?.available){n.textContent=data?data.error:'Loading…';return;}n.textContent=problem?'Update failed; showing last valid data':'';const total=projects().reduce((s,p)=>s+pending(p).length,0);
     const row=(label,meta,key,cls)=>{const b=el('button','personal-row'+(cls?' '+cls:''));b.type='button';b.setAttribute('aria-pressed',String(!document.getElementById('projects-view').hidden&&view===key));const copy=el('span','session-copy');copy.append(el('strong',null,label),el('small',null,meta));b.append(copy);b.onclick=()=>open(key);list.append(b);};
-    row('Overview',projects().length+' projects','overview');row('Waiting for you',total+' decisions','inbox',total?'pc-attention':'');projects().forEach(p=>row(p.name,(STATUS[p.status]||p.status)+(pending(p).length?' · '+pending(p).length+' waiting':''),p.id));}
+    const visiblePs=projects();const countLabel=getVisibleProjectIds()!==null?`${visiblePs.length}/${allProjects().length} projects`:`${visiblePs.length} projects`;row('Overview',countLabel,'overview');row('Waiting for you',total+' decisions','inbox',total?'pc-attention':'');visiblePs.forEach(p=>row(p.name,(STATUS[p.status]||p.status)+(pending(p).length?' · '+pending(p).length+' waiting':''),p.id));}
   function open(key){view=key;officeMedia.stop();officeSpeech.stop();officeView='projects';selectMenu('projects');for(const id of ['room-view','personal-view','session-detail'])document.getElementById(id).hidden=true;document.getElementById('projects-view').hidden=false;
     const title=key==='overview'?'Projects':key==='inbox'?'Waiting for you':(projects().find(p=>p.id===key)?.name||'Project');addConversation('project',key,title);render();renderList();load();if(key!=='overview'&&key!=='inbox'){loadProjectChat(key);loadProjectActivity(key);}}
-  window.officeProjects={open,load,hide(){document.getElementById('projects-view').hidden=true;renderList();}};
+  window.officeProjects={open,load,hide(){document.getElementById('projects-view').hidden=true;renderList();},isProjectVisible,getVisibleProjectIds,setVisibleProjectIds,allKnownProjects};
   setInterval(()=>{
     if(document.getElementById('projects-view').hidden) return;
     load();

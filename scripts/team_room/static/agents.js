@@ -94,13 +94,17 @@
   function renderCards(){
     const grid=$('agent-grid');if(!grid)return;
     grid.replaceChildren();
-    const agents=(data?.agents||[]).filter(a=>{
+    const visibleScope=(data?.agents||[]).filter(a=>{
+      if(a.project_id && window.officeProjects && !window.officeProjects.isProjectVisible(a.project_id)) return false;
+      return true;
+    });
+    const agents=visibleScope.filter(a=>{
       const e=effective(a);
       return (!filters.project||(a.project_id||'standalone')===filters.project)&&(!filters.team||(a.team_name||'none')===filters.team)&&
         (filters.mode==='all'||(filters.mode==='attention'?e.reasons.length:e.uncertain))&&
         (!filters.query||[a.name,a.role,a.bot_id,a.project_name,a.team_name].join(' ').toLowerCase().includes(filters.query.toLowerCase()));
     });
-    $('agent-count').textContent=agents.length+' agents · '+(data?.agents||[]).filter(a=>effective(a).reasons.length).length+' need attention · '+(data?.agents||[]).filter(a=>effective(a).uncertain).length+' stale / unknown';
+    $('agent-count').textContent=agents.length+' agents · '+visibleScope.filter(a=>effective(a).reasons.length).length+' need attention · '+visibleScope.filter(a=>effective(a).uncertain).length+' stale / unknown';
     for(const a of agents){
       const e=effective(a),card=el('article','agent-card');
       const button=el('button','agent-card-open');button.type='button';button.dataset.agentKey=a.bot_key;
@@ -132,8 +136,13 @@
       const lab=el('label',null,label),s=el('select');s.id=id;
       for(const [v,t] of options){const o=el('option',null,t);o.value=v;s.append(o);}s.value=filters[key];s.onchange=()=>{filters[key]=s.value;renderCards();};lab.append(s);toolbar.append(lab);
     };
-    select('agent-project','Project','project',[['','All projects'],...new Map((data?.agents||[]).map(a=>[a.project_id||'standalone',a.project_name])).entries()]);
-    select('agent-team','Team','team',[['','All teams'],...new Map((data?.agents||[]).map(a=>[a.team_name||'none',a.team_name||'No team'])).entries()]);
+    const visibleScope=(data?.agents||[]).filter(a=>!a.project_id||!window.officeProjects||window.officeProjects.isProjectVisible(a.project_id));
+    const projectOptions=[['','All projects'],...new Map(visibleScope.map(a=>[a.project_id||'standalone',a.project_name])).entries()];
+    if(filters.project && !projectOptions.some(([val])=>val===filters.project)) filters.project='';
+    select('agent-project','Project','project',projectOptions);
+    const teamOptions=[['','All teams'],...new Map(visibleScope.map(a=>[a.team_name||'none',a.team_name||'No team'])).entries()];
+    if(filters.team && !teamOptions.some(([val])=>val===filters.team)) filters.team='';
+    select('agent-team','Team','team',teamOptions);
     select('agent-mode','Show','mode',[['all','All agents'],['attention','Needs attention'],['unknown','Stale / unknown']]);
     const lab=el('label',null,'Search'),search=el('input');search.type='search';search.id='agent-search';search.value=filters.query;search.oninput=()=>{filters.query=search.value;renderCards();};lab.append(search);toolbar.append(lab);view.append(toolbar);
     const status=el('p','agent-note');status.id='agent-view-status';status.setAttribute('role','status');view.append(status);
@@ -160,7 +169,7 @@
   }
   const dialog=el('dialog','agent-detail');dialog.id='agent-detail';dialog.setAttribute('aria-labelledby','agent-detail-title');
   dialog.addEventListener('close',()=>{selected=null;const b=[...document.querySelectorAll('[data-agent-key]')].find(x=>x.dataset.agentKey===focusCard);if(b)b.focus();});document.body.append(dialog);
-  window.officeAgents={open};
+  window.officeAgents={open,refresh(){shell();}};
   // Re-evaluate freshness while visible; never fetch, infer stalls or run agents.
   setInterval(()=>{if(!$('agents-view').hidden){const key=document.activeElement?.dataset.agentKey;renderCards();if(dialog.open&&selected)showDetail(selected,false);else if(key)[...document.querySelectorAll('[data-agent-key]')].find(x=>x.dataset.agentKey===key)?.focus();}},30000);
 })();
