@@ -192,6 +192,9 @@ function renderPrivateList(){
   const query = ($('bot-search')?.value || '').trim().toLowerCase();
   const botsToDisplay = directoryBots.length ? directoryBots : personalBots.map(b=>({bot_key: b.bot, bot_id: b.bot, name: b.name, role: b.role, project_name: 'Current', team_name: '', thread_id: b.personal_thread_id, is_current: true}));
   const filtered = botsToDisplay.filter(b => {
+    if(b.project_id && window.officeProjects && !window.officeProjects.isProjectVisible(b.project_id)){
+      return false;
+    }
     if(!query) return true;
     const hay = [b.name, b.role, b.project_name, b.team_name, b.bot_id].filter(Boolean).join(' ').toLowerCase();
     return hay.includes(query);
@@ -295,10 +298,14 @@ async function loadTeams(){
   }
 }
 function renderTeamsDirectory(){
+  window.refreshOfficeDirectoryVisibility = () => { renderPrivateList(); renderTeamsDirectory(); };
   const list = $('team-dir-list'); if(!list) return;
   list.replaceChildren();
   const byProject = new Map();
   for(const t of directoryTeams){
+    if(t.project_id && window.officeProjects && !window.officeProjects.isProjectVisible(t.project_id)){
+      continue;
+    }
     const key = String(t.project_id || t.project_name);
     if(!byProject.has(key)) byProject.set(key, {name: t.project_name, teams: []});
     byProject.get(key).teams.push(t);

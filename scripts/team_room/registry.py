@@ -132,24 +132,70 @@ def _get_display_name(proot, workspace, default_role):
 def build_overview(config_file, current_project_id=None, current_project_root=None):
     reg = load_registry(config_file)
     if reg['status'] != 'ok':
+        current_projects = []
+        if current_project_root and Path(current_project_root).exists():
+            c_root = Path(current_project_root).resolve()
+            c_roster = roster.path(c_root)
+            c_id = current_project_id or 'current'
+            if c_roster.exists():
+                try:
+                    c_data = roster.load(c_root)
+                    c_name = c_data.get('project', {}).get('name') or c_id
+                    current_projects.append({
+                        'id': c_id,
+                        'name': c_name,
+                        'root': str(c_root),
+                        'status': 'ok' if c_data.get('teams') else 'no_teams',
+                        'reason': None if c_data.get('teams') else 'No active teams defined in roster',
+                        'is_current': True,
+                        'applicable': True
+                    })
+                except Exception as e:
+                    current_projects.append({
+                        'id': c_id,
+                        'name': 'Current Project',
+                        'root': str(c_root),
+                        'status': 'roster_error',
+                        'reason': f'Roster load error: {e}',
+                        'is_current': True,
+                        'applicable': False
+                    })
         return {
             'status': reg['status'],
             'error': reg.get('error'),
+            'projects': current_projects,
             'bots': [],
             'teams': []
         }
 
     all_bots = []
     all_teams = []
+    all_projects = []
+    seen_roots = set()
 
     for p in reg['projects']:
         pid = p.get('id')
         pname = p.get('name') or pid
         proot = p.get('root')
+        p_resolved = Path(proot).resolve() if Path(proot).exists() else None
+        if p_resolved:
+            seen_roots.add(p_resolved)
 
         roster_file = roster.path(proot)
         local_bindings = roster.local_path(proot)
+        is_curr = (pid == current_project_id) or (
+            current_project_root and p_resolved and p_resolved == Path(current_project_root).resolve()
+        )
         if not Path(proot).exists() or not roster_file.exists():
+            all_projects.append({
+                'id': pid,
+                'name': pname,
+                'root': proot,
+                'status': 'source_unavailable',
+                'reason': 'Project source or roster file is missing',
+                'is_current': bool(is_curr),
+                'applicable': False
+            })
             all_teams.append({
                 'project_id': pid,
                 'project_name': pname,
@@ -159,6 +205,15 @@ def build_overview(config_file, current_project_id=None, current_project_root=No
             })
             continue
         if not _is_safe_contained(roster_file, proot) or (local_bindings.exists() and not _is_safe_contained(local_bindings, proot)):
+            all_projects.append({
+                'id': pid,
+                'name': pname,
+                'root': proot,
+                'status': 'roster_error',
+                'reason': 'Roster file or local bindings escape project boundary',
+                'is_current': bool(is_curr),
+                'applicable': False
+            })
             all_teams.append({
                 'project_id': pid,
                 'project_name': pname,
@@ -167,14 +222,19 @@ def build_overview(config_file, current_project_id=None, current_project_root=No
                 'members': []
             })
             continue
-
-        is_curr = (pid == current_project_id) or (
-            current_project_root and Path(proot).resolve() == Path(current_project_root).resolve()
-        )
 
         try:
             rdata = roster.load(proot)
         except Exception:
+            all_projects.append({
+                'id': pid,
+                'name': pname,
+                'root': proot,
+                'status': 'roster_error',
+                'reason': 'Roster load error',
+                'is_current': bool(is_curr),
+                'applicable': False
+            })
             all_teams.append({
                 'project_id': pid,
                 'project_name': pname,
@@ -183,6 +243,17 @@ def build_overview(config_file, current_project_id=None, current_project_root=No
                 'members': []
             })
             continue
+
+        has_teams = bool(rdata.get('teams'))
+        all_projects.append({
+            'id': pid,
+            'name': pname,
+            'root': proot,
+            'status': 'ok' if has_teams else 'no_teams',
+            'reason': None if has_teams else 'No active teams defined in roster',
+            'is_current': bool(is_curr),
+            'applicable': True
+        })
 
         # Build bots
         for part in rdata.get('participants', []):
@@ -257,8 +328,38 @@ def build_overview(config_file, current_project_id=None, current_project_root=No
             'is_current': False
         })
 
+    if current_project_root and Path(current_project_root).exists():
+        c_root = Path(current_project_root).resolve()
+        if c_root not in seen_roots:
+            c_roster = roster.path(c_root)
+            c_local = roster.local_path(c_root)
+            c_id = current_project_id or 'current'
+            if c_roster.exists() and _is_safe_contained(c_roster, c_root) and (not c_local.exists() or _is_safe_contained(c_local, c_root)):
+                try:
+                    c_data = roster.load(c_root)
+                    c_name = c_data.get('project', {}).get('name') or c_id
+                    all_projects.append({
+                        'id': c_id,
+                        'name': c_name,
+                        'root': str(c_root),
+                        'status': 'ok' if c_data.get('teams') else 'no_teams',
+                        'reason': None if c_data.get('teams') else 'No active teams defined in roster',
+                        'is_current': True,
+                        'applicable': True
+                    })
+                except Exception as e:
+                    all_projects.append({
+                        'id': c_id,
+                        'name': 'Current Project',
+                        'root': str(c_root),
+                        'status': 'roster_error',
+                        'reason': f'Roster load error: {e}',
+                        'is_current': True,
+                        'applicable': False
+                    })
     return {
         'status': 'ok',
+        'projects': all_projects,
         'bots': all_bots,
         'teams': all_teams
     }
