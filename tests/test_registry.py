@@ -202,6 +202,29 @@ class RegistryTests(unittest.TestCase):
                 self.assertFalse(projects['esc']['applicable'])
                 self.assertIn('escape', projects['esc']['reason'].lower())
 
+    def test_fallback_current_project_rejects_escaping_roster(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            p_curr = root / 'curr_esc'
+            p_curr.mkdir()
+            outside = root / 'outside_roster.json'
+            outside.write_text('{}', encoding='utf-8')
+            sym = p_curr / '.bot-mode/roster.json'
+            sym.parent.mkdir(parents=True)
+            try:
+                sym.symlink_to(outside)
+            except (OSError, NotImplementedError):
+                pass
+
+            if sym.is_symlink():
+                overview = registry.build_overview(None, current_project_root=str(p_curr))
+                self.assertEqual(overview['status'], 'not_configured')
+                self.assertEqual(len(overview['projects']), 1)
+                curr = overview['projects'][0]
+                self.assertEqual(curr['status'], 'roster_error')
+                self.assertFalse(curr['applicable'])
+                self.assertIn('escape', curr['reason'].lower())
+
     def test_resolve_project_bots(self):
         with tempfile.TemporaryDirectory() as tmp:
             p1 = Path(tmp) / 'alpha'

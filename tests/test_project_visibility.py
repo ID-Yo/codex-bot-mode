@@ -241,7 +241,47 @@ officeProjects.setVisibleProjectIds(null);
 if (filterBots(mockBots).length !== 3) throw new Error('All bots must return after restore');
 
 // Test 5: Agents.js shell dropdown & renderCards filtering
-context.window.officeAgents.open();
+const agentsCode = fs.readFileSync(agentsJsPath, 'utf-8');
+vm.runInContext(agentsCode, context);
+
+// Test 5a: Snapshot-only projects marked unknown and not applicable
+context.window.data = {
+  available: false,
+  error: 'Project status unavailable',
+  snapshot: {
+    projects: [{ id: 'snapshot_orphan', name: 'Snapshot Orphan' }]
+  }
+};
+context.window.registryData = {
+  status: 'ok',
+  projects: [{ id: 'alpha', name: 'Alpha', status: 'ok', applicable: true }]
+};
+const known = officeProjects.allKnownProjects();
+const orphan = known.find(p => p.id === 'snapshot_orphan');
+if (!orphan) throw new Error('Snapshot orphan must be in known projects');
+if (orphan.status !== 'unknown') throw new Error('Snapshot orphan status must be unknown');
+if (orphan.applicable !== false) throw new Error('Snapshot orphan must not be applicable');
+if (orphan.reason !== 'Not in project registry') throw new Error('Snapshot orphan reason mismatch');
+
+// Test 5b: Overview renders visibility controls even when data.available is false
+context.window.officeProjects.open('overview');
+const pvBody = getEl('projects-view').children;
+if (!pvBody || !pvBody.length) throw new Error('Projects view must have content when status is unavailable');
+
+// Test 5c: agents.js resets orphaned filters when project/team is hidden
+const agentsData = {
+  agents: [
+    { bot_key: 'alpha:dev', bot_id: 'dev', name: 'Alpha Dev', project_id: 'alpha', project_name: 'Alpha', team_name: 'AlphaTeam' },
+    { bot_key: 'beta:dev', bot_id: 'dev', name: 'Beta Dev', project_id: 'beta', project_name: 'Beta', team_name: 'BetaTeam' }
+  ]
+};
+context.window.data = agentsData; // For agents.js data
+context.window.filters = { project: 'beta', team: 'BetaTeam', mode: 'all', query: '' };
+context.window.officeProjects.setVisibleProjectIds(['alpha']);
+// When shell() executes after hiding beta:
+context.window.officeAgents.refresh();
+if (context.window.filters.project !== '') throw new Error('Orphaned project filter must be reset to empty string');
+if (context.window.filters.team !== '') throw new Error('Orphaned team filter must be reset to empty string');
 
 console.log('NODE_VISIBILITY_CONTRACT_PASS');
 console.log('NODE_VISIBILITY_CONTRACT_PASS');

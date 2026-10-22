@@ -137,8 +137,12 @@
       for(const [v,t] of options){const o=el('option',null,t);o.value=v;s.append(o);}s.value=filters[key];s.onchange=()=>{filters[key]=s.value;renderCards();};lab.append(s);toolbar.append(lab);
     };
     const visibleScope=(data?.agents||[]).filter(a=>!a.project_id||!window.officeProjects||window.officeProjects.isProjectVisible(a.project_id));
-    select('agent-project','Project','project',[['','All projects'],...new Map(visibleScope.map(a=>[a.project_id||'standalone',a.project_name])).entries()]);
-    select('agent-team','Team','team',[['','All teams'],...new Map(visibleScope.map(a=>[a.team_name||'none',a.team_name||'No team'])).entries()]);
+    const projectOptions=[['','All projects'],...new Map(visibleScope.map(a=>[a.project_id||'standalone',a.project_name])).entries()];
+    if(filters.project && !projectOptions.some(([val])=>val===filters.project)) filters.project='';
+    select('agent-project','Project','project',projectOptions);
+    const teamOptions=[['','All teams'],...new Map(visibleScope.map(a=>[a.team_name||'none',a.team_name||'No team'])).entries()];
+    if(filters.team && !teamOptions.some(([val])=>val===filters.team)) filters.team='';
+    select('agent-team','Team','team',teamOptions);
     select('agent-mode','Show','mode',[['all','All agents'],['attention','Needs attention'],['unknown','Stale / unknown']]);
     const lab=el('label',null,'Search'),search=el('input');search.type='search';search.id='agent-search';search.value=filters.query;search.oninput=()=>{filters.query=search.value;renderCards();};lab.append(search);toolbar.append(lab);view.append(toolbar);
     const status=el('p','agent-note');status.id='agent-view-status';status.setAttribute('role','status');view.append(status);

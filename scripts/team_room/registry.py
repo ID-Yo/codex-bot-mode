@@ -136,30 +136,39 @@ def build_overview(config_file, current_project_id=None, current_project_root=No
         if current_project_root and Path(current_project_root).exists():
             c_root = Path(current_project_root).resolve()
             c_roster = roster.path(c_root)
+            c_local = roster.local_path(c_root)
             c_id = current_project_id or 'current'
-            if c_roster.exists():
+            if not c_roster.exists():
+                c_status = 'source_unavailable'
+                c_reason = 'Project roster file is missing'
+                c_app = False
+                c_name = 'Current Project'
+            elif not _is_safe_contained(c_roster, c_root) or (c_local.exists() and not _is_safe_contained(c_local, c_root)):
+                c_status = 'roster_error'
+                c_reason = 'Roster file or local bindings escape project boundary'
+                c_app = False
+                c_name = 'Current Project'
+            else:
                 try:
                     c_data = roster.load(c_root)
                     c_name = c_data.get('project', {}).get('name') or c_id
-                    current_projects.append({
-                        'id': c_id,
-                        'name': c_name,
-                        'root': str(c_root),
-                        'status': 'ok' if c_data.get('teams') else 'no_teams',
-                        'reason': None if c_data.get('teams') else 'No active teams defined in roster',
-                        'is_current': True,
-                        'applicable': True
-                    })
+                    c_status = 'ok' if c_data.get('teams') else 'no_teams'
+                    c_reason = None if c_data.get('teams') else 'No active teams defined in roster'
+                    c_app = True
                 except Exception as e:
-                    current_projects.append({
-                        'id': c_id,
-                        'name': 'Current Project',
-                        'root': str(c_root),
-                        'status': 'roster_error',
-                        'reason': f'Roster load error: {e}',
-                        'is_current': True,
-                        'applicable': False
-                    })
+                    c_status = 'roster_error'
+                    c_reason = f'Roster load error: {e}'
+                    c_app = False
+                    c_name = 'Current Project'
+            current_projects.append({
+                'id': c_id,
+                'name': c_name,
+                'root': str(c_root),
+                'status': c_status,
+                'reason': c_reason,
+                'is_current': True,
+                'applicable': c_app
+            })
         return {
             'status': reg['status'],
             'error': reg.get('error'),

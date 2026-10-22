@@ -61,7 +61,7 @@
     for(const p of fromSnap){
       if(!p.id||seen.has(p.id))continue;
       seen.add(p.id);
-      list.push({id:p.id,name:p.name||p.id,root:'',status:'ok',reason:null,is_current:false,applicable:true});
+      list.push({id:p.id,name:p.name||p.id,root:'',status:'unknown',reason:'Not in project registry',is_current:false,applicable:false});
     }
     return list;
   }
@@ -1148,6 +1148,8 @@
         head.append(el('span','pc-status pc-blocked','Source unavailable'));
       }else if(p.status==='roster_error'){
         head.append(el('span','pc-status pc-blocked','Roster error'));
+      }else if(p.status==='unknown'){
+        head.append(el('span','pc-status','Unknown'));
       }
       info.append(head);
       if(p.reason){
@@ -1163,11 +1165,24 @@
   }
 
   function render(){const v=document.getElementById('projects-view');v.replaceChildren();const body=el('div','pc-body');const warn=warning();if(warn)body.append(warn);
+    if(view==='overview'){
+      const known=allKnownProjects();
+      const controls=renderVisibilityControls();
+      if(controls)body.append(controls);
+      if(!data){v.append(header('Projects',''),body);body.append(empty('Loading projects…'));return;}
+      if(!data.available){v.append(header('Projects',known.length?known.length+' known projects · status unavailable':'No project data'),body);body.append(empty(data.error||'Project status is unavailable.'));return;}
+      const ps=projects();
+      v.append(header('Projects',ps.length+' projects · updated '+when(data.snapshot.generated_at)));
+      const grid=el('div','pc-grid');
+      [...ps].sort((a,b)=>pending(b).length-pending(a).length).forEach(p=>grid.append(card(p)));
+      if(ps.length){body.append(grid);}else{const emptyMsg=el('p','empty');emptyMsg.textContent=allProjects().length?'All projects are hidden by filter. Click "Restore all" above to show all projects.':'No projects in the snapshot.';body.append(emptyMsg);}
+      v.append(body);
+      return;
+    }
     if(!data){body.append(empty('Loading projects…'));v.append(header('Projects',''),body);return;}
     if(!data.available){v.append(header('Projects','No project data'),body);body.append(empty(data.error||'Project status is unavailable.'));return;}
     const ps=projects();
-    if(view==='overview'){v.append(header('Projects',ps.length+' projects · updated '+when(data.snapshot.generated_at)));const controls=renderVisibilityControls();if(controls)body.append(controls);const grid=el('div','pc-grid');[...ps].sort((a,b)=>pending(b).length-pending(a).length).forEach(p=>grid.append(card(p)));if(ps.length){body.append(grid);}else{const emptyMsg=el('p','empty');emptyMsg.textContent=allProjects().length?'All projects are hidden by filter. Click "Restore all" above to show all projects.':'No projects in the snapshot.';body.append(emptyMsg);}}
-    else if(view==='inbox'){const rank=d=>[d.urgency==='urgent'?0:1,d.due||'9999',d.requested_at].join('|');const all=ps.flatMap(p=>pending(p).map(d=>[d,p])).sort(([a],[b])=>rank(a)<rank(b)?-1:rank(a)>rank(b)?1:0);v.append(header('Waiting for you',all.length+' explicit owner decisions'));const ul=el('ul','pc-decisions pc-inbox');all.forEach(([d,p])=>ul.append(decisionItem(d,p)));body.append(all.length?ul:empty('Nothing is waiting for you.'));}
+    if(view==='inbox'){const rank=d=>[d.urgency==='urgent'?0:1,d.due||'9999',d.requested_at].join('|');const all=ps.flatMap(p=>pending(p).map(d=>[d,p])).sort(([a],[b])=>rank(a)<rank(b)?-1:rank(a)>rank(b)?1:0);v.append(header('Waiting for you',all.length+' explicit owner decisions'));const ul=el('ul','pc-decisions pc-inbox');all.forEach(([d,p])=>ul.append(decisionItem(d,p)));body.append(all.length?ul:empty('Nothing is waiting for you.'));}
     else{const p=ps.find(x=>x.id===view);if(!p){v.append(header('Project','Not in snapshot'));body.append(empty('This project is no longer in the snapshot.'));}else{v.append(header(p.name,STATUS[p.status]+(p.manager?' · '+p.manager:'')));
       const split=el('div','pm-split-layout');
       split.id='pm-split-layout';
