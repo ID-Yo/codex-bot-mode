@@ -21,6 +21,8 @@ try {
     $Built = Join-Path $Output 'office-service.exe'
     Remove-Item -LiteralPath $Built -Force -ErrorAction SilentlyContinue
     $HiddenImports = @(
+        'tomllib',
+        'scripts.bot_mode',
         'component_release',
         'profile_update',
         'component_update_service',
