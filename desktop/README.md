@@ -118,3 +118,23 @@ regular users download the packaged installer instead.
 Validation is local. No hosted CI build is required or automatically dispatched
 for this publication. Generated binaries, icons and native build outputs are
 excluded from source control; release binaries are attached separately.
+
+
+## Packaged profile regression check
+
+The 0.1.2 service includes `tomllib` and the profile helper import graph in its
+frozen bundle. Existing projects can load both the root Manager helper and the
+separately installed agent helper without a Python installation.
+
+After building, run the following with the **synthetic** Codex protocol fixture
+(the check refuses a real Codex executable). It creates temporary profiles using
+the actual repository helpers, verifies authenticated health, the bundled
+Projects visibility asset and safe shutdown, and removes only its own processes:
+
+```powershell
+python -B desktop/tests/smoke_packaged_profiles.py --sidecar <built-office-service.exe> --codex-fixture <fixture_codex.exe>
+```
+
+This check does not claim real Desktop/provider, interactive installer, tray or
+uninstall acceptance. The native controller's startup failure message remains
+generic; richer sanitized diagnostics are a separate follow-up.
