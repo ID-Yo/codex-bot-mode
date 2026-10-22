@@ -43,6 +43,15 @@ class Images:
         path, mime = self.path(key)
         return path.read_bytes(), mime
 
+    def delete(self, key):
+        try:
+            path, _ = self.path(key)
+            path.unlink(missing_ok=True)
+            (self.root / (key + '.json')).unlink(missing_ok=True)
+            return True
+        except (ValueError, OSError):
+            return False
+
     def attach(self, text, keys):
         if not isinstance(text, str) or not isinstance(keys, list) or len(keys) > 4:
             raise ValueError('Enter text and attach at most 4 images')

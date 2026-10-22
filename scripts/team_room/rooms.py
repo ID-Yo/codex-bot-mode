@@ -17,6 +17,7 @@ class Rooms:
         self.controllers = {}
         self.lock = threading.RLock()
         self.closed = False
+        self.draining = False
         self.default_file = self.root / 'development-settings.json'
         from . import project as served
         team_rooms = served.teams()
@@ -60,7 +61,7 @@ class Rooms:
         name = name.strip()
         bots = [bot for bot in BOTS if bot in bots]
         with self.lock:
-            if self.closed: raise RuntimeError('Rooms are closed')
+            if self.closed or self.draining: raise RuntimeError('Rooms are closing')
             previous = next((r for r in self.rows if r['client_id'] == client_id), None)
             if previous:
                 if previous['name'] != name or previous['bots'] != bots:
@@ -78,7 +79,7 @@ class Rooms:
 
     def get(self, key):
         with self.lock:
-            if self.closed: raise RuntimeError('Rooms are closed')
+            if self.closed or self.draining: raise RuntimeError('Rooms are closing')
             if key == 'development': return self.base
             row = next((r for r in self.rows if r['id'] == key),None)
             if row is None: raise ValueError('Unknown room')
@@ -101,7 +102,7 @@ class Rooms:
         if not isinstance(name,str) or not 1 <= len(name.strip()) <= 80: raise ValueError('Room name must be 1–80 characters')
         if not isinstance(instructions,str) or len(instructions.encode('utf-8')) > 8000: raise ValueError('Room instructions must be at most 8000 bytes')
         with self.lock:
-            if self.closed: raise RuntimeError('Rooms are closed')
+            if self.closed or self.draining: raise RuntimeError('Rooms are closing')
             if self.settings(key)['version'] != expected: raise ValueError('Room changed since opening. Reload before saving.')
             if any(r['id'] != key and r['name'].casefold() == name.strip().casefold() for r in self.metadata()): raise ValueError('A room with this name already exists')
             updated = {'name':name.strip(), 'instructions':instructions}

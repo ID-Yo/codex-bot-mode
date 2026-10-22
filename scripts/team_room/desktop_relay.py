@@ -1,3 +1,6 @@
+from datetime import datetime, timezone
+import copy
+import time
 """Keep naturally inherited Desktop context outside the Office host lifecycle."""
 import argparse
 import hmac
@@ -20,8 +23,22 @@ TOOLS = {'list_threads', 'read_thread', 'wait_threads', 'send_message_to_thread'
 
 
 def targets():
-    """Appointed chats, read from the roster on every call so replaced chats apply at once."""
-    return {t for t in (work.MANAGER, *work.WORKERS.values(), *project.threads().values()) if t}
+    """Appointed chats, read from the roster and explicit registry on every call so replaced chats apply at once."""
+    chats = {t for t in (work.MANAGER, *work.WORKERS.values(), *project.threads().values()) if t}
+    # Under owner CBM-104 authorization, include appointed Managers resolved via registry
+    try:
+        from . import registry
+        reg_file = registry.registry_path(project.PROJECT)
+        if reg_file:
+            reg = registry.load_registry(reg_file)
+            for p in reg.get('projects', []):
+                pid = p.get('id')
+                res = registry.resolve_project_manager(reg_file, pid, current_project_root=project.PROJECT)
+                if res and res.get('status') == 'ok' and res.get('thread_id'):
+                    chats.add(res['thread_id'])
+    except Exception:
+        pass
+    return chats
 
 
 def validate(name, arguments):
@@ -34,6 +51,263 @@ def validate(name, arguments):
         raise ValueError('Unappointed Desktop recipient refused')
     if name == 'wait_threads' and any(t.get('threadId') not in allowed or t.get('hostId', 'local') != 'local' for t in arguments.get('targets', [])):
         raise ValueError('Unappointed Desktop recipient refused')
+
+
+
+_ACTIVITY_CACHE = {}
+_ACTIVITY_INFLIGHT = {}
+FOLLOWER_WAIT_TIMEOUT = 35.0
+_ACTIVITY_CACHE_LOCK = threading.Lock()
+
+
+def now_utc():
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace('+00:00', 'Z')
+
+
+def get_project_activity(bridge, project_id, current_project_root=None):
+    if not project_id or not isinstance(project_id, str):
+        return {
+            'project_id': project_id,
+            'status': 'unknown',
+            'fetched_at': now_utc(),
+            'source': 'desktop_relay',
+            'active_bots': [],
+            'bots': [],
+            'error': 'Invalid project_id'
+        }
+
+    # Resolve validated registry first so roster/binding changes apply immediately
+    from . import registry
+    reg_file = registry.registry_path(current_project_root)
+    res = registry.resolve_project_bots(reg_file, project_id, current_project_root=current_project_root)
+    if res.get('status') != 'ok':
+        return {
+            'project_id': project_id,
+            'status': 'unknown',
+            'fetched_at': now_utc(),
+            'source': 'desktop_relay',
+            'active_bots': [],
+            'bots': [],
+            'error': 'Project bots could not be resolved from registry'
+        }
+
+    bots = res.get('bots', [])
+    if not bots:
+        return {
+            'project_id': project_id,
+            'status': 'unknown',
+            'fetched_at': now_utc(),
+            'source': 'desktop_relay',
+            'active_bots': [],
+            'bots': [],
+            'error': 'No appointed bots resolved'
+        }
+
+    # Key cache by project root, project_id, and EVERY appointed bot identity including unbound
+    fp = tuple(sorted((b['bot_id'], b.get('thread_id') or '') for b in bots))
+    cache_key = (str(current_project_root), project_id, fp)
+
+    with _ACTIVITY_CACHE_LOCK:
+        cached = _ACTIVITY_CACHE.get(cache_key)
+        if cached and time.monotonic() < cached['expires_at']:
+            return copy.deepcopy(cached['data'])
+        inflight = _ACTIVITY_INFLIGHT.get(cache_key)
+        if inflight is not None:
+            evt, res_box = inflight
+            wait_needed = True
+        else:
+            evt = threading.Event()
+            res_box = []
+            _ACTIVITY_INFLIGHT[cache_key] = (evt, res_box)
+            wait_needed = False
+
+    if wait_needed:
+        signaled = evt.wait(timeout=FOLLOWER_WAIT_TIMEOUT)
+        with _ACTIVITY_CACHE_LOCK:
+            if signaled and res_box:
+                return copy.deepcopy(res_box[0])
+            cached = _ACTIVITY_CACHE.get(cache_key)
+            if cached and time.monotonic() < cached['expires_at']:
+                return copy.deepcopy(cached['data'])
+        # Follower timed out: return explicit timed out unknown result.
+        # Must NOT fall through into the fetch body or remove owner's in-flight registration.
+        return {
+            'project_id': project_id,
+            'status': 'unknown',
+            'fetched_at': now_utc(),
+            'source': 'desktop_relay',
+            'active_bots': [],
+            'bots': [{'bot': b['bot_id'], 'name': b.get('name') or b.get('role') or b['bot_id'], 'role': b.get('role'), 'status': 'unknown'} for b in bots],
+            'partial_failure': True,
+            'error': 'Activity metadata fetch in-flight timed out'
+        }
+
+    data = None
+    try:
+        valid_bots = [b for b in bots if b.get('thread_id')]
+        if not valid_bots:
+            data = {
+                'project_id': project_id,
+                'status': 'unknown',
+                'fetched_at': now_utc(),
+                'source': 'desktop_relay',
+                'active_bots': [],
+                'bots': [{'bot': b['bot_id'], 'name': b.get('name') or b.get('role') or b['bot_id'], 'role': b.get('role'), 'status': 'unknown'} for b in bots],
+                'partial_failure': True,
+                'error': 'Metadata partially unavailable'
+            }
+            with _ACTIVITY_CACHE_LOCK:
+                _ACTIVITY_CACHE[cache_key] = {'data': copy.deepcopy(data), 'expires_at': time.monotonic() + 10.0}
+            return data
+
+        # Query all valid_bots in bounded batches of <= 8
+        BATCH_SIZE = 8
+        poll_map = {}
+        batch_error = False
+        source = 'desktop_relay'
+
+        for i in range(0, len(valid_bots), BATCH_SIZE):
+            batch = valid_bots[i:i + BATCH_SIZE]
+            targets = [{'threadId': b['thread_id'], 'hostId': 'local'} for b in batch]
+            try:
+                raw_res = bridge.call('wait_threads', {'targets': targets, 'timeoutMs': 0})
+                polls = raw_res.get('polls', []) if isinstance(raw_res, dict) else []
+                for poll in polls:
+                    th = poll.get('thread') or {}
+                    tid = th.get('id')
+                    host = poll.get('hostId') or th.get('hostId') or 'local'
+                    if host != 'local' or not tid:
+                        continue
+                    st = th.get('status')
+                    if isinstance(st, dict):
+                        st_type = st.get('type')
+                    elif isinstance(st, str):
+                        st_type = st
+                    else:
+                        st_type = None
+                    if st_type in ('active', 'idle', 'completed'):
+                        poll_map[tid] = st_type
+                    else:
+                        poll_map[tid] = 'unknown'
+            except Exception:
+                batch_error = True
+
+        # On wait failure, use bounded list_threads metadata fallback (max limit 50)
+        if batch_error:
+            try:
+                raw_list = bridge.call('list_threads', {'limit': 50})
+                all_threads = (raw_list.get('pinnedThreads', []) if isinstance(raw_list, dict) else []) +                               (raw_list.get('threads', []) if isinstance(raw_list, dict) else [])
+                list_statuses = {}
+                for t in all_threads:
+                    tid = t.get('id')
+                    host = t.get('hostId') or 'local'
+                    st = t.get('status')
+                    if host == 'local' and tid and isinstance(st, str):
+                        if tid not in list_statuses:
+                            list_statuses[tid] = set()
+                        list_statuses[tid].add(st)
+
+                # Reconcile status per thread ID without false inactive on conflicting duplicates
+                list_map = {}
+                for tid, s_set in list_statuses.items():
+                    if 'active' in s_set:
+                        list_map[tid] = 'active'
+                    elif s_set == {'idle'} or s_set == {'completed'} or s_set == {'idle', 'completed'}:
+                        list_map[tid] = 'idle'
+                    else:
+                        # Conflicting or unsupported status (e.g. notLoaded) maps to unknown
+                        list_map[tid] = 'unknown'
+
+                source = 'desktop_relay_list_threads'
+                fallback_omissions = False
+
+                for b in valid_bots:
+                    tid = b['thread_id']
+                    st_wait = poll_map.get(tid)
+                    st_list = list_map.get(tid)
+
+                    # 1. Any active bot wins (from either wait_threads or list_threads)
+                    if st_wait == 'active' or st_list == 'active':
+                        poll_map[tid] = 'active'
+                    # 2. Preserve clean idle from successful wait_threads batch even if omitted from list_threads
+                    elif st_wait == 'idle':
+                        poll_map[tid] = 'idle'
+                    # 3. If wait_threads failed/unresolved for this target, resolve from list_threads
+                    elif st_list == 'idle':
+                        poll_map[tid] = 'idle'
+                    else:
+                        poll_map[tid] = 'unknown'
+                        fallback_omissions = True
+
+                batch_error = fallback_omissions
+            except Exception:
+                batch_error = True
+
+        bot_statuses = []
+        has_active = False
+        all_idle = True
+        partial_failure = batch_error
+        active_bot_names = []
+
+        for b in bots:
+            tid = b.get('thread_id')
+            b_name = b.get('name') or b.get('role') or b.get('bot_id')
+            if not tid:
+                bot_statuses.append({'bot': b['bot_id'], 'name': b_name, 'role': b.get('role'), 'status': 'unknown'})
+                all_idle = False
+                partial_failure = True
+                continue
+
+            st_type = poll_map.get(tid)
+            if st_type == 'active':
+                bot_statuses.append({'bot': b['bot_id'], 'name': b_name, 'role': b.get('role'), 'status': 'active'})
+                has_active = True
+                active_bot_names.append(b_name)
+            elif st_type in ('idle', 'completed'):
+                bot_statuses.append({'bot': b['bot_id'], 'name': b_name, 'role': b.get('role'), 'status': 'idle'})
+            else:
+                bot_statuses.append({'bot': b['bot_id'], 'name': b_name, 'role': b.get('role'), 'status': 'unknown'})
+                all_idle = False
+                partial_failure = True
+
+        if len(valid_bots) < len(bots):
+            partial_failure = True
+            all_idle = False
+
+        if has_active:
+            agg_status = 'active'
+        elif all_idle and not partial_failure and len(valid_bots) > 0:
+            agg_status = 'inactive'
+        else:
+            agg_status = 'unknown'
+
+        err_msg = 'Metadata partially unavailable' if (partial_failure and not has_active) else None
+        post_fetch_mono = time.monotonic()
+
+        data = {
+            'project_id': project_id,
+            'status': agg_status,
+            'fetched_at': now_utc(),
+            'source': source,
+            'active_bots': active_bot_names,
+            'bots': bot_statuses,
+            'partial_failure': partial_failure
+        }
+        if err_msg:
+            data['error'] = err_msg
+
+        with _ACTIVITY_CACHE_LOCK:
+            _ACTIVITY_CACHE[cache_key] = {'data': copy.deepcopy(data), 'expires_at': post_fetch_mono + 10.0}
+
+        return data
+    finally:
+        with _ACTIVITY_CACHE_LOCK:
+            cur_inflight = _ACTIVITY_INFLIGHT.get(cache_key)
+            if cur_inflight is not None and cur_inflight[0] is evt:
+                _ACTIVITY_INFLIGHT.pop(cache_key, None)
+            if data is not None:
+                res_box.append(data)
+            evt.set()
 
 
 def create_relay(bridge, root, port=24243):
@@ -58,6 +332,13 @@ def create_relay(bridge, root, port=24243):
                 if self.path == '/health':
                     bridge.call('list_threads', {'limit':1})
                     self.respond(200, {'origin':work.MANAGER}); return
+                if self.path == '/activity':
+                    pid = data.get('project_id')
+                    if not pid or not isinstance(pid, str):
+                        raise ValueError('Valid project_id required')
+                    from . import project as served
+                    res = get_project_activity(bridge, pid, current_project_root=served.PROJECT)
+                    self.respond(200, res); return
                 if self.path != '/call': raise ValueError('Unknown relay endpoint')
                 name, arguments = data.get('name'), data.get('arguments')
                 validate(name, arguments)
@@ -104,6 +385,8 @@ class RelayBridge(DesktopBridge):
         except (HTTPError, URLError, OSError, ValueError):
             raise Uncertain('Desktop relay unavailable or request outcome unconfirmed; do not resend') from None
     def health(self): return self._post('/health', {})
+    def activity(self, project_id):
+        return self._post('/activity', {'project_id': project_id})
     def call(self, name, arguments):
         validate(name, arguments)
         return self._post('/call', {'name':name, 'arguments':arguments})['result']

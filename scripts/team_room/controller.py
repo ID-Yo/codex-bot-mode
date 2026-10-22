@@ -1,5 +1,6 @@
 """One serialized model worker with durable holds and conservative reconciliation."""
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 import re
 import threading
@@ -38,9 +39,11 @@ class Controller:
         self.mutex = threading.RLock()
         self.wake = threading.Event()
         self.closing = False
+        self.draining = False
         self.model = model
         self.partial = {}
         self.active = None
+        self._activation_snapshot = None
         self.work = None
         bindings_file = self.store.root / 'owned-threads.json'
         bindings = json.loads(bindings_file.read_text()) if bindings_file.exists() else {}
@@ -100,6 +103,13 @@ class Controller:
         if self.session_kind == 'room' and self.room_instructions:
             text += '\n\n## Owner room instructions\n' + self.room_instructions
         return text
+
+    def participant_instructions_with_snapshot(self, bot):
+        text, snapshot = profiles.instructions_with_snapshot(
+            bot, self.session_kind, self.profile_project)
+        if self.session_kind == 'room' and self.room_instructions:
+            text += '\n\n## Owner room instructions\n' + self.room_instructions
+        return text, snapshot
 
     def _new_participant(self, bot, bindings, bindings_file):
         cwd = self.store.root / 'workspaces' / bot
@@ -170,6 +180,8 @@ class Controller:
         if not isinstance(client_id, str) or not client_id or len(client_id) > 128:
             raise ValueError('Valid client_message_id required')
         with self.mutex:
+            if self.closing or self.draining:
+                raise Conflict('Office is draining; no new work was accepted')
             self.expire_intents()
             old = self.store.client_delivery(client_id)
             if old:
@@ -290,6 +302,8 @@ class Controller:
     def _dispatch(self):
         if self.work and self.work.current(): return None
         with self.mutex:
+            if self.closing or self.draining:
+                return None
             self.expire_intents()
             room = self.store.room()
             if room['hold'] or self.active:
@@ -355,7 +369,7 @@ class Controller:
                     if used or not empty_history:
                         raise
                     baseline = []  # A new empty thread may not have a rollout yet.
-                refreshed_instructions = self.participant_instructions(d['bot'])
+                refreshed_instructions, profile_snapshot = self.participant_instructions_with_snapshot(d['bot'])
                 full_prompt = refreshed_instructions + '\n\n' + prompt
                 with self.store.transaction() as db:
                     db.execute("UPDATE deliveries SET state='sending',thread_id=?,input_text=?,baseline=?,watermark=? WHERE id=?",
@@ -372,6 +386,10 @@ class Controller:
                     **({'images': image_paths} if image_paths else {}))
                 turn_id = result['turn']['id']
                 self.active['turn_id'] = turn_id
+                self._activation_snapshot = {
+                    'bot': d['bot'], 'thread_id': tid, 'turn_id': turn_id,
+                    'profile_files': profile_snapshot,
+                }
                 with self.store.transaction() as db:
                     db.execute("UPDATE deliveries SET state='accepted',turn_id=? WHERE id=?", (turn_id, d['id']))
                 return dict(self.active)
@@ -385,6 +403,8 @@ class Controller:
 
     def _consume(self, active):
         items = {}
+        completed_status = None
+        completed_at = None
         stop_attempted = False
         stopping_since = None
         while not self.closing:
@@ -424,6 +444,9 @@ class Controller:
                         if terminal['state'] != 'completed':
                             db.execute("UPDATE room SET hold=1,error=?", (terminal['error'] or terminal['state'],))
                         db.execute("UPDATE room SET status=CASE WHEN hold=1 THEN 'held' ELSE 'idle' END")
+                    if p.get('status') == 'completed' and terminal['state'] == 'completed':
+                        completed_status = 'completed'
+                        completed_at = datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')
                     break
             # Early Stop can race task installation; retry interrupt only once streaming is observed.
             if self.store.room()['hold'] and event['method'] == 'item/agentMessage/delta' and not stop_attempted:
@@ -432,6 +455,30 @@ class Controller:
         with self.mutex:
             self.partial.pop(active['bot'], None)
             self.active = None
+            snapshot, self._activation_snapshot = self._activation_snapshot, None
+            room = self.store.room()
+            pending_writes = any(delivery['state'] not in TERMINAL
+                                 for delivery in self.store.deliveries())
+            if (completed_status == 'completed' and isinstance(snapshot, dict)
+                    and snapshot.get('bot') == active['bot']
+                    and snapshot.get('thread_id') == active['thread_id']
+                    and snapshot.get('turn_id') == active['turn_id']
+                    and room['status'] == 'idle' and not room['hold'] and not self.closing):
+                try:
+                    try:
+                        from ..component_activation_host import ActivationHost
+                    except ImportError:
+                        from component_activation_host import ActivationHost
+                    bindings = {item['bot']: item['thread_id'] for item in self.store.participants()
+                                if item.get('thread_id')}
+                    ActivationHost(self.profile_project).complete_office_turn(
+                        bot=active['bot'], thread_id=active['thread_id'], turn_id=active['turn_id'],
+                        terminal_status=completed_status, profile_files=snapshot['profile_files'],
+                        current_bindings=bindings, idle=True, paused=False, ownership='office',
+                        pending_writes=pending_writes, completed_at=completed_at)
+                except Exception:
+                    # Receipt persistence is best-effort and must never fail the normal Office turn.
+                    pass
 
     def _worker(self):
         while not self.closing:
@@ -463,6 +510,8 @@ class Controller:
         self.closing = True
         self.wake.set()
         if self.work: self.work.close()
+        pm = getattr(self, 'project_managers', None)
+        if pm: pm.close()
         self.transport.close()
         if self.worker.is_alive():
             self.worker.join(timeout=40)
@@ -567,6 +616,8 @@ class Controller:
 
     def process_intents(self, *, recovery_id=None):
         with self.mutex:
+            if self.draining or self.closing:
+                return False
             if not recovery_id:self.expire_intents()
             if self.active or (self.store.room()['hold'] and not recovery_id): return False
             ready = (self.store.rows('SELECT * FROM message_intents WHERE id=?',(recovery_id,)) if recovery_id else

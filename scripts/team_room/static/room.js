@@ -184,19 +184,153 @@ async function api(path, options={}){
   const response=await fetch(path,{...options,headers:{'X-Room-Token':token,...(options.headers||{})}});
   const result=await response.json();if(!response.ok)throw Error(result.error||'Request failed');return result;
 }
+let directoryBots = [];
+let directoryTeams = [];
 function renderPrivateList(){
-  const list=$('personal-list');list.replaceChildren();
-  for(const item of personalBots){
-    const bot=item.bot,button=document.createElement('button');button.type='button';button.className='personal-row';button.setAttribute('aria-pressed',String(selectedPrivateBot===bot));button.setAttribute('aria-label',`Personal · ${botName(bot)}`);
-    const avatar=document.createElement('span');avatar.className=`avatar ${botClass(bot)}`;avatar.textContent=botName(bot)[0];avatar.setAttribute('aria-hidden','true');
-    const copy=document.createElement('span');copy.className='session-copy';const title=document.createElement('strong');title.textContent=`Personal · ${botName(bot)}`;const meta=document.createElement('small');const pending=item.requests&&item.requests.open?` · ${item.requests.open} open${item.requests.overdue?`, ${item.requests.overdue} overdue`:''}`:'';meta.textContent=(item.backend==='desktop'?'Shared with Codex Desktop':item.personal_thread_id?'Office-only conversation':'Thread created when opened')+pending;if(item.requests&&item.requests.overdue)meta.classList.add('overdue');copy.append(title,meta);button.append(avatar,copy);
-    button.onclick=()=>openPrivate(bot);list.append(button);
+  const list=$('personal-list'); if(!list) return;
+  list.replaceChildren();
+  const query = ($('bot-search')?.value || '').trim().toLowerCase();
+  const botsToDisplay = directoryBots.length ? directoryBots : personalBots.map(b=>({bot_key: b.bot, bot_id: b.bot, name: b.name, role: b.role, project_name: 'Current', team_name: '', thread_id: b.personal_thread_id, is_current: true}));
+  const filtered = botsToDisplay.filter(b => {
+    if(!query) return true;
+    const hay = [b.name, b.role, b.project_name, b.team_name, b.bot_id].filter(Boolean).join(' ').toLowerCase();
+    return hay.includes(query);
+  });
+  for(const item of filtered){
+    const button=document.createElement('button'); button.type='button'; button.className='personal-row';
+    const isCurrentBot = item.is_current && selectedPrivateBot === item.bot_id;
+    button.setAttribute('aria-pressed', String(isCurrentBot));
+    const avatar=document.createElement('span'); avatar.className='avatar ' + botClass(item.bot_id); avatar.textContent=(item.name || item.bot_id)[0]; avatar.setAttribute('aria-hidden','true');
+    const copy=document.createElement('span'); copy.className='session-copy';
+    const title=document.createElement('strong'); title.textContent=item.name || item.role || item.bot_id;
+    const meta=document.createElement('small');
+    meta.textContent = (item.project_name ? item.project_name + ' · ' : '') + (item.role || '') + (item.team_name ? ' (' + item.team_name + ')' : '');
+    copy.append(title, meta); button.append(avatar, copy);
+    if(!item.is_current && !item.thread_id){
+      button.disabled = true;
+      button.style.opacity = '0.6';
+      button.title = 'No active chat thread appointed';
+    } else {
+      button.onclick = async () => {
+        if(item.is_current){
+          openPrivate(item.bot_id);
+        } else if(item.thread_id){
+          try {
+            await mutate('/api/registry/open', {bot_key: item.bot_key});
+            $('personal-notice').textContent = 'Navigated to ' + item.name + ' in Codex.';
+          } catch(err) {
+            $('personal-notice').textContent = err.message;
+          }
+        }
+      };
+    }
+    list.append(button);
+  }
+  if(!filtered.length){
+    const empty = document.createElement('p');
+    empty.className = 'empty';
+    empty.textContent = 'No matching bots.';
+    list.append(empty);
   }
 }
 async function loadBots(){
-  $('personal-notice').textContent='Loading personal chats…';
-  try{const data=await api('/api/bots');personalBots=data.bots||[];applyBots(personalBots,data.lead);renderPrivateList();$('personal-notice').textContent=personalBots.length?'':'No personal chats available.';}
-  catch(error){personalBots=['manager','developer','verifier'].map(bot=>({bot,personal_thread_id:null}));renderPrivateList();$('personal-notice').textContent=error.message;}
+  $('personal-notice').textContent='Loading appointed bots…';
+  let dirError = null;
+  let localData = {bots:[]};
+  let dirData = {bots:[],teams:[]};
+  try {
+    const results = await Promise.allSettled([
+      api('/api/bots'),
+      api('/api/registry/overview')
+    ]);
+    if(results[0].status === 'fulfilled') localData = results[0].value;
+    if(results[1].status === 'fulfilled') {
+      dirData = results[1].value;
+      if(dirData.status === 'invalid_config' || dirData.status === 'roster_error') {
+        dirError = dirData.error || 'Registry error';
+      } else if(dirData.teams && dirData.teams.some(t=>t.status==='source_unavailable'||t.status==='roster_error')) {
+        const unavail = dirData.teams.filter(t=>t.status==='source_unavailable'||t.status==='roster_error');
+        dirError = unavail.length + ' project source(s) unavailable';
+      }
+    } else {
+      dirError = results[1].reason?.message || 'Directory unavailable';
+    }
+    personalBots = localData.bots || [];
+    applyBots(personalBots, localData.lead);
+    if(dirData && dirData.bots && dirData.bots.length){
+      directoryBots = dirData.bots;
+    } else {
+      directoryBots = personalBots.map(b=>({bot_key: b.bot, bot_id: b.bot, name: b.name, role: b.role, project_name: 'Current', team_name: localData.team, thread_id: b.personal_thread_id, is_current: true}));
+    }
+    renderPrivateList();
+    if(results[0].status === 'rejected' && (!dirData.bots || !dirData.bots.length)){
+      const localErr = results[0].reason?.message || 'Local bots unavailable';
+      $('personal-notice').textContent = 'Error: ' + localErr + (dirError ? '; Directory: ' + dirError : '');
+    } else if(dirError){
+      $('personal-notice').textContent = 'Directory warning: ' + dirError + ' (showing available bots)';
+    } else {
+      $('personal-notice').textContent = directoryBots.length ? '' : 'No appointed bots found.';
+    }
+  } catch(error){
+    $('personal-notice').textContent = error.message;
+  }
+}
+async function loadTeams(){
+  if(!document.getElementById('team-dir-list')) return;
+  $('teams-notice').textContent='Loading teams…';
+  try{
+    const dirData = await api('/api/registry/overview');
+    directoryTeams = dirData.teams || [];
+    renderTeamsDirectory();
+    if(dirData.status === 'invalid_config' || dirData.status === 'roster_error'){
+      $('teams-notice').textContent = 'Registry warning: ' + (dirData.error || 'Invalid configuration');
+    } else if(dirData.teams && dirData.teams.some(t=>t.status==='source_unavailable'||t.status==='roster_error')){
+      const unavail = dirData.teams.filter(t=>t.status==='source_unavailable'||t.status==='roster_error');
+      $('teams-notice').textContent = 'Notice: ' + unavail.length + ' project source(s) unavailable or in error.';
+    } else {
+      $('teams-notice').textContent = directoryTeams.length ? '' : 'No teams found.';
+    }
+  } catch(error){
+    $('teams-notice').textContent = error.message;
+  }
+}
+function renderTeamsDirectory(){
+  const list = $('team-dir-list'); if(!list) return;
+  list.replaceChildren();
+  const byProject = new Map();
+  for(const t of directoryTeams){
+    const key = String(t.project_id || t.project_name);
+    if(!byProject.has(key)) byProject.set(key, {name: t.project_name, teams: []});
+    byProject.get(key).teams.push(t);
+  }
+  for(const p of byProject.values()){
+    const pheader = document.createElement('div');
+    pheader.className = 'section-label';
+    pheader.style.marginTop = '12px';
+    pheader.textContent = p.name.toUpperCase();
+    list.append(pheader);
+    for(const item of p.teams){
+      const row = document.createElement('div');
+      row.className = 'personal-row';
+      row.style.flexDirection = 'column';
+      row.style.alignItems = 'flex-start';
+      row.style.cursor = 'default';
+      const title = document.createElement('strong');
+      title.textContent = item.team || (item.status === 'source_unavailable' ? 'Source unavailable' : 'No teams');
+      const meta = document.createElement('small');
+      if(item.status === 'source_unavailable'){
+        meta.textContent = 'Project source unavailable';
+      } else if(item.status === 'roster_error'){
+        meta.textContent = 'Roster error';
+      } else if(!item.members.length){
+        meta.textContent = 'No active members';
+      } else {
+        meta.textContent = item.members.map(m=>m.display_name ? m.display_name + ' (' + m.role + ')' : m.role).join(', ');
+      }
+      row.append(title, meta);
+      list.append(row);
+    }
+  }
 }
 function renderPrivate(state, bot){
   if(!state||bot!==selectedPrivateBot)return;
@@ -238,7 +372,7 @@ async function openPrivate(bot){
   officeMedia.stop();officeSpeech.enter('personal:'+bot);addConversation('personal',bot,'Personal · '+botName(bot));
   if(selectedPrivateBot&&selectedPrivateBot!==bot)privateDrafts.set(selectedPrivateBot,$('personal-topic').value);
   selectedPrivateBot=bot;officeView='personal';
-  selectMenu('bots');$('room-view').hidden=true;$('session-detail').hidden=true;$('personal-view').hidden=false;
+  selectMenu('bots');document.getElementById('agents-view').hidden=true;officeProjects.hide();$('room-view').hidden=true;$('session-detail').hidden=true;$('personal-view').hidden=false;
   $('personal-topic').value=privateDrafts.get(bot)||'';
   officeMedia.refresh();
   $('personal-title').textContent=`Personal · ${botName(bot)}`;$('personal-avatar').className=`avatar ${botClass(bot)}`;$('personal-avatar').textContent=botName(bot)[0];$('personal-topic').placeholder=`Message ${botName(bot)} privately…`;
@@ -281,9 +415,9 @@ for(const action of ['stop','resume'])$('personal-'+action).onclick=async()=>{
   finally{privateInflight.delete(bot);if(selectedPrivateBot===bot){const state=privateStates.get(bot);if(state)renderPrivate(state,bot);}}
 };
 function officeTab(tab){
-  selectMenu(tab);if(tab==='sessions')loadSessions();if(tab==='rooms')loadRooms();
+  selectMenu(tab);if(tab==='sessions')loadSessions();if(tab==='rooms')loadRooms();if(tab==='bots'){loadBots();officeAgents.open();}if(tab==='teams')loadTeams();if(tab==='projects')officeProjects.open('overview');if(tab==='updates')officeUpdates.open();
 }
-function selectMenu(tab){for(const name of ['sessions','bots','rooms']){const selected=name===tab;$(name+'-tab').setAttribute('aria-selected',String(selected));$(name+'-tab').tabIndex=selected?0:-1;$(name+'-pane').hidden=!selected;}}
+function selectMenu(tab){const updates=document.getElementById('updates-view');if(updates&&tab!=='updates')updates.hidden=true;const agents=document.getElementById('agents-view');if(agents&&tab!=='bots')agents.hidden=true;for(const name of ['sessions','bots','teams','rooms','projects','updates']){const selected=name===tab;const btn=$(name+'-tab');if(btn){btn.setAttribute('aria-selected',String(selected));btn.tabIndex=selected?0:-1;}const pane=$(name+'-pane');if(pane)pane.hidden=!selected;}}
 function renderSessions(){
   const query=$('session-search').value.toLocaleLowerCase();$('session-list').replaceChildren();
   for(const s of sessions.filter(s=>(s.title+' '+s.project+' '+(s.kind==='office-private'?`Personal ${botName(s.bot)}`:'')).toLocaleLowerCase().includes(query))){
@@ -301,18 +435,23 @@ async function loadSessions(){
   catch(e){$('sessions-notice').textContent=e.message;}
   finally{sessionsLoading=false;$('sessions-refresh').disabled=false;}
 }
-for(const tab of ['sessions','bots','rooms'])$(tab+'-tab').onclick=()=>officeTab(tab);$('sessions-refresh').onclick=loadSessions;$('session-search').oninput=renderSessions;
-document.querySelector('.sidebar-tabs').addEventListener('keydown',e=>{if(['ArrowLeft','ArrowRight','Home','End'].includes(e.key)){e.preventDefault();const menus=['sessions','bots','rooms'],index=menus.findIndex(name=>$(name+'-tab').getAttribute('aria-selected')==='true');const tab=menus[e.key==='Home'?0:e.key==='End'?2:(index+(e.key==='ArrowRight'?1:2))%3];officeTab(tab);$(tab+'-tab').focus();}});
+for(const tab of ['projects','bots','teams','rooms','updates'])$(tab+'-tab').onclick=()=>officeTab(tab);$('sessions-refresh').onclick=loadSessions;
+if($('bot-search')) $('bot-search').oninput = renderPrivateList;
+if($('bots-refresh')) $('bots-refresh').onclick = loadBots;
+$('session-search').oninput=renderSessions;
+document.querySelector('.sidebar-tabs').addEventListener('keydown',e=>{if(['ArrowLeft','ArrowRight','Home','End'].includes(e.key)){e.preventDefault();const menus=['projects','bots','teams','rooms','updates'],index=menus.findIndex(name=>$(name+'-tab').getAttribute('aria-selected')==='true');const tab=menus[e.key==='Home'?0:e.key==='End'?4:(index+(e.key==='ArrowRight'?1:4))%5];officeTab(tab);$(tab+'-tab').focus();}});
 $('session-open').onclick=async()=>{if(!selectedSession)return;$('session-open').disabled=true;$('session-open-status').textContent='Opening…';try{await mutate('/api/sessions/open',{thread_id:selectedSession.id});$('session-open-status').textContent='Opened in Codex.';}catch(e){$('session-open-status').textContent=e.message;}finally{$('session-open').disabled=false;}};
 setInterval(()=>{if(!$('sessions-pane').hidden)loadSessions();},30000);
 window.addEventListener('DOMContentLoaded',()=>{
-  officeSpeech.initialize();addConversation('room','development','Development');loadRooms();connect();setInterval(()=>{if(officeView==='room')refresh();},1000);loadBots();
+  officeSpeech.initialize();connect();loadRooms();loadBots();loadTeams();
+  officeProjects.open('overview');
+  setInterval(()=>{if(officeView==='room')refresh();},1000);
   setInterval(()=>{if(officeView==='personal'&&selectedPrivateBot)refreshPrivate(selectedPrivateBot);},1000);
 });
 
 const conversations=new Map();let activeConversation='room:development';
 function addConversation(kind,id,title,data){const key=kind+':'+id;conversations.set(key,{kind,id,title,data});activeConversation=key;renderConversations();}
-function activateConversation(item){if(item.kind==='room')openRoom(item.id);else if(item.kind==='personal')openPrivate(item.id);else openSession(item.data);}
+function activateConversation(item){if(item.kind==='room')openRoom(item.id);else if(item.kind==='personal')openPrivate(item.id);else if(item.kind==='project')officeProjects.open(item.id);else openSession(item.data);}
 function renderConversations(){
   const nav=$('conversation-tabs');nav.replaceChildren();
   for(const [key,item] of conversations){
@@ -322,7 +461,7 @@ function renderConversations(){
     wrap.append(button,close);nav.append(wrap);
   }
 }
-function openSession(session){officeMedia.stop();officeSpeech.stop();selectedSession=session;officeView='sessions';selectMenu('sessions');$('room-view').hidden=true;$('personal-view').hidden=true;$('session-detail').hidden=false;$('session-title').textContent=session.title;$('session-meta').textContent=session.project+' · '+session.status;$('session-open').hidden=false;$('session-open-status').textContent='';addConversation('session',session.id,session.title,session);renderSessions();}
+function openSession(session){officeMedia.stop();officeSpeech.stop();selectedSession=session;officeView='sessions';selectMenu('sessions');officeProjects.hide();$('room-view').hidden=true;$('personal-view').hidden=true;$('session-detail').hidden=false;$('session-title').textContent=session.title;$('session-meta').textContent=session.project+' · '+session.status;$('session-open').hidden=false;$('session-open-status').textContent='';addConversation('session',session.id,session.title,session);renderSessions();}
 async function loadRooms(){try{const data=await api('/api/rooms');rooms=data.rooms;renderRooms();for(const room of rooms){const tab=conversations.get('room:'+room.id);if(tab)tab.title=room.name;}renderConversations();const current=rooms.find(room=>room.id===currentRoomId);if(current){$('room-title').textContent=current.name;$('room-avatar').textContent=current.name[0];}}catch(error){$('rooms-notice').textContent=error.message;}}
 function renderRooms(){
   const list=$('room-list');list.replaceChildren();
@@ -331,7 +470,7 @@ function renderRooms(){
 async function openRoom(id){
   const room=rooms.find(item=>item.id===id);if(!room)return;
   officeMedia.stop();officeSpeech.stop();roomDrafts.set(currentRoomId,$('topic').value);currentRoomId=id;officeView='room';cursor=0;pendingRequest=roomPending.get(id)||null;actionError='';state=null;
-  selectMenu('rooms');$('room-view').hidden=false;$('personal-view').hidden=true;$('session-detail').hidden=true;$('topic').value=roomDrafts.get(id)||'';officeMedia.refresh();closeMentions();
+  selectMenu('rooms');officeProjects.hide();$('room-view').hidden=false;$('personal-view').hidden=true;$('session-detail').hidden=true;$('topic').value=roomDrafts.get(id)||'';officeMedia.refresh();closeMentions();
   $('room-title').textContent=room.name;$('room-avatar').textContent=room.name[0];$('room-description').textContent=room.bots.map(botName).join(' + ');$('room-view').setAttribute('aria-label',room.name+' conversation');$('journal').replaceChildren();$('work-status').replaceChildren();$('intent-status').replaceChildren();$('deliveries').replaceChildren();$('provisional').replaceChildren();$('error').textContent='';$('status').textContent='Loading';$('connection').textContent='Connecting';$('send').disabled=true;$('stop').disabled=true;$('resume').disabled=true;
   addConversation('room',id,room.name);renderRooms();officeSpeech.enter('room:'+id);const cached=roomStates.get(id);if(cached)render(cached);officeSpeech.enter('room:'+id);await refresh();
 }

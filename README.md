@@ -6,6 +6,23 @@
 
 Unofficial community project; not affiliated with or endorsed by OpenAI. "Codex" is the name of an OpenAI product.
 
+## Windows Office app
+
+A Windows x64 installer is available in the Office desktop release. It provides
+Start, Stop, Restart, service status and recent activity, with the work UI in
+external Chrome. Codex Desktop is required; a separate Python/Node/Rust install
+is not required to run the packaged app. The Windows executable is currently
+unsigned; compare its published SHA-256 before installation.
+
+On first run select the root folder of your existing CBM project (the folder
+containing `.bot-mode/roster.json` and your teams), then Start and Open Office
+in Chrome. The folder is the service workspace. Other configured projects are
+listed through that workspace's Office registry. See [desktop instructions](desktop/README.md).
+
+Profile/reference updates require an explicitly configured trusted source and
+approval of an exact preview. Installation does not automatically update all
+agents. See [update configuration](docs/operations/office-update-host.md).
+
 ## Why
 
 Most multi-agent tools build a new environment: their own runtime, their own chat UI, their own permissions. Codex Desktop already has what an agent needs: chats that keep context, project folders, skills, plugins, connectors, sandboxed tools and your approval rules. CBM does not replace any of that. It adds structure on top of it:

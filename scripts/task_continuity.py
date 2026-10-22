@@ -332,7 +332,7 @@ class RouteLock:
                     raise RuntimeError(f"Concurrent routing in progress by PID {data.get('pid')} since {data.get('acquired_at')}")
             except (ValueError, OSError):
                 pass
-        
+
         lock_data = {
             "pid": os.getpid(),
             "acquired_at": now_ts,
@@ -390,7 +390,7 @@ def parse_markdown_metadata(txt):
 
 def default_desktop_relay_adapter(project_path, bot_id, req_id, summary):
     """Attempt dispatch via local Desktop Relay if available.
-    
+
     Reads appointed thread from roster.json. If relay.json exists in project,
     posts send_message_to_thread via POST /call. If configuration is missing before
     connect, raises PreconnectConfigurationError.
@@ -399,14 +399,14 @@ def default_desktop_relay_adapter(project_path, bot_id, req_id, summary):
     roster_file = project_path / ".bot-mode" / "roster.json"
     if not roster_file.exists():
         raise PreconnectConfigurationError(f"Roster not found for {project_path}")
-    
+
     r_data = json.loads(roster_file.read_text(encoding="utf-8"))
     thread_id = None
     for p in r_data.get("participants", []):
         if p.get("bot") == bot_id or p.get("bot_id") == bot_id:
             thread_id = p.get("thread_id")
             break
-    
+
     if not thread_id:
         bindings_file = project_path / ".bot-mode" / "local" / "bindings.json"
         if bindings_file.exists():

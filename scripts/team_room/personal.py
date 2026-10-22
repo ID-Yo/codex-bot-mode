@@ -24,6 +24,7 @@ class PersonalSessions:
         self.controllers = {}
         self.lock = threading.RLock()
         self.closed = False
+        self.draining = False
         binding_file = self.root / 'desktop-bindings.json'
         self.native_bindings = json.loads(binding_file.read_text(encoding='utf-8')) if binding_file.exists() else {}
         if native_bridge:
@@ -40,8 +41,8 @@ class PersonalSessions:
         if bot not in self.bots:
             raise ValueError('Unknown agent.')
         with self.lock:
-            if self.closed:
-                raise RuntimeError('Personal sessions are closed')
+            if self.closed or self.draining:
+                raise RuntimeError('Personal sessions are closing; no new work was accepted')
             if self.native_bindings and not self.native_bridge:
                 raise RuntimeError('Desktop connection unavailable; this personal chat remains bound to Codex')
             controller = self.controllers.get(bot)

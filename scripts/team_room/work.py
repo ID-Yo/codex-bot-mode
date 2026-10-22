@@ -415,7 +415,7 @@ class Work:
                 return
             self.preserved(task,artifact=step['role']=='verifier')
             with self.c.mutex:
-                if self.current()['hold']: return
+                if self.c.draining or self.current()['hold']: return
                 with self.store.transaction() as db:
                     db.execute("UPDATE work_steps SET state='sending',baseline_turn=?,cursor=?,sent_at=? WHERE id=?",
                         ((snap.get('latestTurn') or {}).get('id'),snap.get('cursor'),time.time(),step['id']))
@@ -466,7 +466,7 @@ class Work:
             # Stop and publication share this lock. Read the hold only after
             # acquiring it; a pre-lock snapshot can miss a completed Stop.
             current = self.current()
-            if not current or current['id']!=task['id'] or current['hold']: return
+            if not current or current['id']!=task['id'] or current['hold'] or self.c.draining: return
             task = current
             # Persist the plan before writing so recovery recognizes an exact
             # publication without replaying the model turn.
@@ -505,13 +505,15 @@ class Work:
                     task = self.current()
                 self.poll_step(task,pending)
                 return True
+            if self.c.draining:
+                return False
             if task['hold']: return True
             if time.time()>=task['deadline']:
                 self.update(task['id'],hold=1,error='900-second work budget expired; accepted turn may continue')
                 return True
             if task['issue_phase']=='pending':
                 with self.c.mutex:
-                    if self.current()['hold']: return True
+                    if self.c.draining or self.current()['hold']: return False
                     self.update(task['id'],issue_phase='creating',state='creating_issue')
                 try: url = self.github.create(task['id'],json.loads(task['specification']))
                 except Exception as error:
@@ -544,7 +546,7 @@ class Work:
                 raise ValueError('Verifier did not attest the actual artifact and expected hash')
             self.preserved(task,artifact=True)
             with self.c.mutex:
-                if self.current()['hold']: return True
+                if self.c.draining or self.current()['hold']: return False
                 with self.store.transaction() as db:
                     verdict = 'completed' if result['verdict']=='PASS' else 'review_required'
                     db.execute('UPDATE work_tasks SET state=?,verification=? WHERE id=?',

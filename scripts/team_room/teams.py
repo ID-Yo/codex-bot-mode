@@ -5,6 +5,7 @@ source. Installing writes only after explicit confirmation and never overwrites
 an existing workspace, team or memory.
 """
 from datetime import datetime, timezone
+import hashlib
 import io
 import json
 import os
@@ -15,7 +16,7 @@ import subprocess
 import tarfile
 import tempfile
 
-from . import manifest, roster
+from . import installation_inventory, manifest, roster
 
 REPO = Path(__file__).resolve().parents[2]
 PLACEHOLDER = re.compile(r'\{\{([a-z_]+)\}\}')
@@ -298,9 +299,10 @@ def _agent_plan(project, catalog, source, template, bot, team, workspace, host, 
         f'.agents/skills/codex-{bot}/SKILL.md': render(read(base / 'SKILL.md.tmpl'), context),
         f'.agents/skills/codex-{bot}/agents/openai.yaml': render(read(base / 'openai.yaml.tmpl'), context),
     }
-    return {'bot': bot, 'role': role, 'template': template, 'team': team, 'workspace': workspace,
+    return {'bot': bot, 'role': role, 'template': template, 'template_version': spec['version'], 'team': team, 'workspace': workspace,
             'display_name': values['display_name'], 'values': values, 'sources': sources,
-            'files': files, 'helper': str(base / 'scripts' / 'bot_mode.py')}
+            'files': files, 'helper': str(base / 'scripts' / 'bot_mode.py'),
+            'helper_sha256': hashlib.sha256((base / 'scripts' / 'bot_mode.py').read_bytes()).hexdigest()}
 
 
 def _bot_id(data, role, team, taken=()):
@@ -479,6 +481,7 @@ def _has_director(data):
 def plan_team(project, template, answers=None, source=None, team_answers=None):
     project = Path(project).resolve(strict=True)
     catalog, label = fetch(source)
+    source_revision = installation_inventory.catalog_revision(label)
     folder, spec = team_template(catalog, template)
     team_values, team_sources = resolve(spec.get('parameters'), team_answers or {})
     work_tracking = tracking(team_values)
@@ -497,10 +500,14 @@ def plan_team(project, template, answers=None, source=None, team_answers=None):
     agents, taken = [], []
     for role in roles:
         _, aspec = agent_template(catalog, role)
+        raw_role_refs = aspec.get('references')
+        if raw_role_refs is not None and not isinstance(raw_role_refs, list):
+            raise TeamError(f'References declaration in agent {role} must be a list of reference names')
         bot = _bot_id(data, aspec['role'], team, taken)
         taken.append(bot)
         agents.append(_agent_plan(project, catalog, label, role, bot, team, f'team/{team}/{bot}', '../../..',
                                   (answers or {}).get(role, {})))
+        agents[-1]['references'] = list(raw_role_refs or [])
     conflicts = [a['workspace'] for a in agents if (project / a['workspace']).exists()]
     if conflicts:
         raise TeamError('Workspace already exists: ' + ', '.join(conflicts))
@@ -522,7 +529,7 @@ def plan_team(project, template, answers=None, source=None, team_answers=None):
                 references.append(r)
     ref_files = _reference_files(project, catalog, references)
     all_proj_files = {**_project_files(project, catalog), **ref_files}
-    return {'kind': 'team', 'project': str(project), 'catalog': label, 'template': template,
+    return {'kind': 'team', 'project': str(project), 'catalog': label, 'source_revision': source_revision, 'template': template,
             'template_version': spec['version'], 'team': team, 'team_sources': team_sources,
             'work_tracking': work_tracking,
             'section': render(spec.get('section') or '{{project}} · {{team}}', context),
@@ -534,6 +541,7 @@ def plan_team(project, template, answers=None, source=None, team_answers=None):
 def plan_agent(project, team, template, answers=None, source=None, extra=None):
     project = Path(project).resolve(strict=True)
     catalog, label = fetch(source)
+    source_revision = installation_inventory.catalog_revision(label)
     data = roster.load(project)
     _, spec = agent_template(catalog, template)
     if template == 'director':
@@ -552,8 +560,9 @@ def plan_agent(project, team, template, answers=None, source=None, extra=None):
     if (project / workspace).exists():
         raise TeamError(f'Workspace already exists: {workspace}')
     agent = _agent_plan(project, catalog, label, template, bot, team, workspace, host, answers or {}, extra)
+    agent['references'] = list(spec.get('references') or [])
     kind = 'director' if template == 'director' else ('custom-agent' if spec.get('custom') else 'catalog-agent')
-    return {'kind': kind, 'project': str(project), 'catalog': label, 'template': template, 'team': team,
+    return {'kind': kind, 'project': str(project), 'catalog': label, 'source_revision': source_revision, 'template': template, 'team': team,
             'project_files': {**_project_files(project, catalog), **_reference_files(project, catalog, spec.get('references') if spec.get('references') is None or isinstance(spec.get('references'), list) else (_ for _ in ()).throw(TeamError('References declaration in agent must be a list of reference names')))}, 'references': list(spec.get('references') or []) if isinstance(spec.get('references'), list) else [], 'agents': [agent]}
 
 
@@ -574,6 +583,8 @@ def install(plan):
     if plan['kind'] == 'team':
         require_tracking(plan.get('work_tracking') or {})
     project = Path(plan['project'])
+    if installation_inventory.catalog_revision(plan.get('catalog')) != plan.get('source_revision'):
+        raise TeamError('Catalog changed after planning; create a new plan before installing')
     data = roster.load(project)
     expected = roster.version(data)
     for agent in plan['agents']:
@@ -618,6 +629,20 @@ def install(plan):
                 _validate_reference_index(target_ref_dir, ref_name)
 
     created = []
+    inventory_created = []
+    inventory_expected = {}
+    shared_tools = ('.bot-mode/roster.py', '.bot-mode/requests.py')
+    shared_tools_preexisting = {rel for rel in shared_tools if (project / rel).exists()}
+    from . import requests
+    shared_expected = {
+        '.bot-mode/roster.py': hashlib.sha256(Path(roster.__file__).read_bytes()).hexdigest(),
+        '.bot-mode/requests.py': hashlib.sha256(Path(requests.__file__).read_bytes()).hexdigest(),
+    }
+    inventory_before = installation_inventory.snapshot(project)
+    inventory_before_digest = (hashlib.sha256(inventory_before).hexdigest()
+                               if inventory_before is not None else None)
+    inventory_written_digest = None
+    roster_committed = False
     try:
         for relative, text in plan.get('project_files', {}).items():
             target = project / relative
@@ -625,11 +650,16 @@ def install(plan):
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_text(text, encoding='utf-8', newline='\n')
                 created.append(target)
+                inventory_created.append(relative)
+                inventory_expected[relative] = hashlib.sha256(text.encode('utf-8')).hexdigest()
         if plan['kind'] == 'team' and plan.get('room_file'):
             target = project / 'team' / plan['team'] / 'ROOM.md'
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(plan['room_file'], encoding='utf-8', newline='\n')
             created.append(target)
+            relative = target.relative_to(project).as_posix()
+            inventory_created.append(relative)
+            inventory_expected[relative] = hashlib.sha256(plan['room_file'].encode('utf-8')).hexdigest()
         for agent in plan['agents']:
             root = project / agent['workspace']
             root.mkdir(parents=True)
@@ -638,25 +668,60 @@ def install(plan):
                 target = root / relative
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_text(text, encoding='utf-8', newline='\n')
+                project_relative = (root / relative).relative_to(project).as_posix()
+                inventory_created.append(project_relative)
+                inventory_expected[project_relative] = hashlib.sha256(text.encode('utf-8')).hexdigest()
             (root / 'scripts').mkdir()
-            shutil.copyfile(agent['helper'], root / 'scripts' / 'bot_mode.py')
+            helper = root / 'scripts' / 'bot_mode.py'
+            shutil.copyfile(agent['helper'], helper)
+            project_relative = helper.relative_to(project).as_posix()
+            inventory_created.append(project_relative)
+            inventory_expected[project_relative] = agent['helper_sha256']
         if plan['kind'] == 'team':
             roster.add_team(data, plan['team'], plan['section'], plan['room'])
             next(t for t in data['teams'] if t['name'] == plan['team'])['work_tracking'] = plan['work_tracking']
         for agent in plan['agents']:
             roster.add_participant(data, agent['bot'], agent['role'], agent['team'], agent['workspace'])
         data['project'].setdefault('tooling', str(REPO))
-        roster.save(project, data, expected)
         roster.install_cli(project)
-        from . import requests
         requests.install_cli(project)
+        inventory_created.extend(rel for rel in shared_tools if rel not in shared_tools_preexisting)
+        inventory_expected.update({rel: shared_expected[rel] for rel in shared_tools if rel not in shared_tools_preexisting})
+        inventory_written_digest = installation_inventory.record_new_install(
+            project, plan['agents'], plan.get('references'), plan.get('catalog'), inventory_created,
+            inventory_expected, plan.get('source_revision'), inventory_before_digest)
+        roster.save(project, data, expected)
+        roster_committed = True
         register_project(project)
-    except Exception:
-        for path in reversed(created):
-            if path.is_dir():
-                shutil.rmtree(path, ignore_errors=True)
-            elif path.exists():
-                path.unlink()
+    except Exception as error:
+        if roster_committed:
+            raise
+        rollback_error = None
+        preserve_created = False
+        def remove_created():
+            for created_path in reversed(created):
+                if created_path.is_dir():
+                    shutil.rmtree(created_path, ignore_errors=True)
+                elif created_path.exists():
+                    created_path.unlink()
+        if inventory_written_digest is not None:
+            try:
+                restored = installation_inventory.restore(project, inventory_before, inventory_written_digest,
+                                                          cleanup=remove_created)
+                preserve_created = restored is False
+            except Exception as failure:
+                rollback_error = failure
+                preserve_created = True
+        elif (isinstance(error, installation_inventory.InventoryError)
+              and ('changed since it was read' in str(error) or 'Another inventory writer' in str(error))):
+            preserve_created = True
+        else:
+            remove_created()
+        if preserve_created:
+            detail = ('; inventory rollback failed: ' + str(rollback_error)) if rollback_error else ''
+            raise TeamError('Install failed; generated files were preserved because inventory ownership changed' + detail) from error
+        if rollback_error:
+            raise TeamError(f'Install failed and inventory rollback also failed: {rollback_error}') from error
         raise
     return [{'bot': a['bot'], 'role': a['role'], 'display_name': a['display_name'], 'workspace': a['workspace'],
              'skill': f'codex-{a["bot"]}', 'needs_chat': True} for a in plan['agents']]

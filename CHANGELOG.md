@@ -5,6 +5,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/). Versions follow [SemVer
 ## [Unreleased]
 
 ### Added
+- Windows x64 Codex Office controller with tray, external Chrome workflow and bundled service; scoped signed component updates, inventory, preview, recovery and separate activation evidence.
 - Evidence-aware LinkedIn editorial handbook, drafting/review checklist and post-audit template, discoverable by team and standalone Strategist, Content Writer and Content Reviewer roles.
 - One canonical SVG working-structure diagram in the public README and website, with four unified tiers (Human owner, Chief of Staff, Project Director, Teams A/B/C), Project grouping and scoped two-way communication.
 - Empty Chief of Staff personal knowledge scaffold, selective owner-confirmed knowledge guidance, manual preservation instructions and complete template-package privacy checks.
