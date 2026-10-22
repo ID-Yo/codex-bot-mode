@@ -141,6 +141,12 @@ class NativeSourceContractTests(unittest.TestCase):
         self.assertIn("can_stop: false", function_body(self.source, "status_template"))
         self.assertIn("recover_startup", self.source)
 
+    def test_sidecar_uses_basename_for_flat_installed_layout(self):
+        body = function_body(self.source, "start_inner")
+        self.assertIn('.sidecar("office-service")', body)
+        self.assertNotIn('.sidecar("binaries/', body)
+        self.assertNotIn('.sidecar("binaries\\', body)
+
     def test_unverified_startup_has_an_explicit_preserve_and_exit_boundary(self):
         helper = function_body(self.source, "preserved_child_for")
         self.assertIn("startup_recovery_available(state)", helper)

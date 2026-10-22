@@ -771,7 +771,7 @@ fn start_inner(app: &AppHandle, controller: &Arc<OfficeController>) -> Result<Vi
     if project.join(".bot-mode/desktop-relay/relay.json").is_file() {
         args.push("--desktop-relay".to_owned());
     }
-    let sidecar = match app.shell().sidecar("binaries/office-service") {
+    let sidecar = match app.shell().sidecar("office-service") {
         Ok(command) => command,
         Err(error) => {
             let message = display_error(error);

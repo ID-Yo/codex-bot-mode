@@ -5,7 +5,7 @@ service. It starts the service bundled beside the Tauri application; it does
 not install Python system-wide or replace the existing Office web interface.
 The web interface remains in Chrome at `http://localhost:24242`.
 
-## Windows release
+## Windows release 0.1.1
 
 The Windows x64 controller and bundled Python service were built locally on
 2026-10-22 using Rust/Cargo 1.90.0, MSVC v143 and Windows SDK 26100.
@@ -14,7 +14,7 @@ signing is not configured; Ed25519 component signatures are a separate mechanism
 Use the release checksum to compare the downloaded bytes. A checksum alone is
 not a Windows publisher identity.
 
-Native Rust tests (15), controller source checks (11), packaged service health,
+Native Rust tests (15), controller source checks (12), packaged service health,
 safe shutdown and child survival were verified. These checks do not establish
 clean-machine installation, interactive tray behavior or uninstall acceptance.
 
