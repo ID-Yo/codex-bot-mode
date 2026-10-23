@@ -221,7 +221,7 @@ def unique_object(pairs):
 
 
 
-def update_monitor_state(state_file_path, findings, snapshot=None, now=None, *, complete=True):
+def update_monitor_state(state_file_path, findings, snapshot=None, now=None, *, complete=True, run_id=None):
     now = now or datetime.now(timezone.utc)
     now_str = now.strftime("%Y-%m-%dT%H:%M:%SZ")
     state_path = Path(state_file_path).resolve()
@@ -253,6 +253,15 @@ def update_monitor_state(state_file_path, findings, snapshot=None, now=None, *, 
                       "observed_at": audit.get("observed_at"), "next_check_at": audit.get("next_check_at"),
                       "unavailable_scopes": audit.get("unavailable_scopes", []),
                       "delivery_status": state.get("delivery_status", "unconfirmed")})
+    if run_id:
+        # The checkpoint always belongs to this invocation, even when the snapshot was missing or invalid.
+        if not (isinstance(snapshot, dict) and isinstance(snapshot.get("monitor_audit"), dict)):
+            state.update({"audit_status": "incomplete", "coverage": "none", "observed_at": now_str,
+                          "next_check_at": now_str, "unavailable_scopes": ["snapshot"]})
+            state.setdefault("delivery_status", "not_attempted")
+        state["run_id"] = run_id
+        if not complete:
+            state["audit_status"] = "incomplete"
 
     task_deadlines = {}
     if isinstance(snapshot, dict) and isinstance(snapshot.get("tasks"), list):
@@ -306,7 +315,7 @@ def update_monitor_state(state_file_path, findings, snapshot=None, now=None, *, 
     if complete:
         existing_ledger = {fp: data for fp, data in existing_ledger.items() if fp in current_fps}
     state["alert_ledger"] = existing_ledger
-    if isinstance(snapshot, dict) and isinstance(snapshot.get("monitor_audit"), dict):
+    if run_id or (isinstance(snapshot, dict) and isinstance(snapshot.get("monitor_audit"), dict)):
         state["active_alert_count"] = len(existing_ledger)
 
     if state_path.suffix.lower() == ".md":
@@ -1073,7 +1082,8 @@ def main(argv=None):
             cycle = check_monitor_cycle(snapshot or {}, current_run_id=args.run_id) if args.command == "monitor-audit" else None
             findings = cycle["findings"] if cycle else result["findings"]
             complete = cycle["audit_complete"] if cycle else True
-            state, new_alerts = update_monitor_state(args.state_file, findings, snapshot, complete=complete)
+            state, new_alerts = update_monitor_state(args.state_file, findings, snapshot, complete=complete,
+                                                     run_id=args.run_id if args.command == "monitor-audit" else None)
         except Exception as error:
             print(f"ERROR: {error}", file=sys.stderr)
             return 1

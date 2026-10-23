@@ -6,6 +6,7 @@ import os
 import tempfile
 
 STATE_READ_LIMIT = 16 * 1024
+DELIVERY_STATUSES = {"sent", "acknowledged", "unconfirmed", "delivery_unknown", "not_attempted", "not_required"}
 FIELDS = ("version", "run_id", "audit_status", "coverage", "observed_at",
           "next_check_at", "active_alert_count", "delivery_status", "alert_ledger",
           "unavailable_scopes")
@@ -70,13 +71,26 @@ def save_checkpoint(path, data):
 
 
 def set_delivery_status(path, status):
-    if status not in {"sent", "acknowledged", "unconfirmed", "delivery_unknown"}:
+    if status not in DELIVERY_STATUSES:
         raise ValueError("Invalid delivery status")
     data = load_checkpoint(path)
     if not data:
         raise ValueError("Monitor checkpoint is unavailable")
     data["delivery_status"] = status
     save_checkpoint(path, data)
+    finish_lease(path, data.get("run_id"))
+
+
+def finish_lease(state_path, run_id):
+    """The Monitor's own run lease ends once the delivery result is recorded."""
+    import datetime
+    import re
+    if not isinstance(run_id, str) or not run_id:
+        return
+    lease = Path(state_path).parent / "runs" / (re.sub(r"[^A-Za-z0-9._-]", "_", run_id)[:100] + ".lease.json")
+    if lease.exists():
+        stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        lease.write_text(json.dumps({"run_id": run_id, "status": "finished", "updated_at": stamp}), encoding="utf-8")
 
 
 def read_initial_context(state_path, memory_path=None):
@@ -118,7 +132,7 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--state", type=Path, required=True)
     parser.add_argument("--memory", type=Path)
-    parser.add_argument("--set-delivery-status", choices=("sent", "acknowledged", "unconfirmed", "delivery_unknown"))
+    parser.add_argument("--set-delivery-status", choices=sorted(DELIVERY_STATUSES))
     args = parser.parse_args(argv)
     try:
         if args.set_delivery_status:
