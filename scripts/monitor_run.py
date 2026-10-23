@@ -193,10 +193,14 @@ def run(monitor_dir, run_id, now=None):
         if concurrent:
             findings.append({"code": "concurrent_audit", "scope": "monitor", "detail": "Another fresh monitor invocation is active"})
         complete = False
-    state_file = monitor_dir / "agent" / (f"run-{safe_id}-state.md" if concurrent else "STATE.md")
+    # Shared state is written only when other runs were observed and this run was registered.
+    private = concurrent or not available
+    state_file = monitor_dir / "agent" / (f"run-{safe_id}-state.md" if private else "STATE.md")
     state, new_alerts = tc.update_monitor_state(state_file, findings, snapshot, now, complete=complete, run_id=run_id)
     audit = (snapshot or {}).get("monitor_audit", {})
-    unavailable = audit.get("unavailable_scopes") or (["snapshot"] if snapshot is None else [])
+    unavailable = list(audit.get("unavailable_scopes") or (["snapshot"] if snapshot is None else []))
+    if not available and "invocation-metadata" not in unavailable:
+        unavailable.append("invocation-metadata")
     coverage = audit.get("coverage", "none")
     report = (not complete) or bool(new_alerts)
     state["delivery_status"] = "not_attempted" if report else "not_required"
@@ -213,7 +217,7 @@ def run(monitor_dir, run_id, now=None):
             "coverage": coverage, "projects": stats["projects"], "projects_covered": stats["projects_covered"],
             "tasks": len((snapshot or {}).get("tasks", [])), "unavailable_scopes": unavailable,
             "findings": [{"code": f["code"], "scope": f["scope"]} for f in findings[:MAX_FINDINGS]],
-            "new_alerts": len(new_alerts), "state_file": str(state_file), "private_state": concurrent,
+            "new_alerts": len(new_alerts), "state_file": str(state_file), "private_state": private,
             "report_required": report, "report_thread_id": config.get("report_target_thread_id") if report else None,
             "report_text": text, "delivery_status": state["delivery_status"]}
 

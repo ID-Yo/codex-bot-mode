@@ -146,6 +146,40 @@ class MonitorRunTests(unittest.TestCase):
         self.assertIn("invocation-metadata", result["unavailable_scopes"])
         self.assertTrue(result["report_required"])
 
+    def test_unobservable_leases_write_only_private_state_and_do_not_claim_concurrency(self):
+        for name, registry_ok in (("valid empty registry", True), ("bad registry", False)):
+            with self.subTest(name):
+                fx = Fixture(self)
+                fx.write()
+                if registry_ok:
+                    (fx.dir / "registry.json").write_text(json.dumps({"schema": 1, "projects": [], "standalone": []}), encoding="utf-8")
+                else:
+                    (fx.dir / "registry.json").write_text("{broken", encoding="utf-8")
+                fx.lease("broken", raw="{not json")
+                before = (fx.monitor / "agent" / "STATE.md").read_bytes()
+                result = fx.run("run-x")
+                self.assertTrue(result["private_state"])
+                self.assertFalse(result["audit_complete"])
+                self.assertTrue(result["report_required"])
+                self.assertEqual(result["report_thread_id"], "thread-cos")
+                self.assertIn("invocation-metadata", result["unavailable_scopes"])
+                self.assertNotIn("concurrent_audit", {f["code"] for f in result["findings"]})
+                self.assertEqual((fx.monitor / "agent" / "STATE.md").read_bytes(), before)
+                self.assertEqual(fx.checkpoint("run-run-x-state.md")["audit_status"], "incomplete")
+
+    def test_failed_own_lease_registration_writes_only_private_state(self):
+        fx = Fixture(self)
+        fx.project("alpha")
+        fx.write()
+        (fx.monitor / "agent" / "runs").write_text("a file where the runs folder should be", encoding="utf-8")
+        before = (fx.monitor / "agent" / "STATE.md").read_bytes()
+        result = fx.run("run-y")
+        self.assertTrue(result["private_state"])
+        self.assertFalse(result["audit_complete"])
+        self.assertIn("invocation-metadata", result["unavailable_scopes"])
+        self.assertNotIn("concurrent_audit", {f["code"] for f in result["findings"]})
+        self.assertEqual((fx.monitor / "agent" / "STATE.md").read_bytes(), before)
+
     def test_delivery_status_ends_the_lease(self):
         fx = Fixture(self)
         fx.project("gone", exists=False)
