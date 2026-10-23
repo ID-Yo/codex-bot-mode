@@ -40,6 +40,18 @@ The Monitor evaluates task follow-through per canonical policy ([Task Ownership 
 - **Canonical Pause**: If the project or agent is in a paused state, the Monitor respects the pause and suppresses stall alerts.
 - **Deduplication**: The Monitor emits exactly one evidence-backed alert per event using its `agent/STATE.md` fingerprint ledger.
 
+## Run and Audit Reliability
+
+The scheduled turn and the audit it was meant to perform are separate outcomes. A completed heartbeat invocation alone never means that project inspection or checkpoint persistence completed.
+
+- Keep a compact JSON checkpoint block at the start of the Monitor's own `agent/STATE.md`, before narrative history. `scripts/monitor_checkpoint.py` reads at most 16 KiB for this block and checks memory size without reading memory contents. Missing, malformed, stale or out-of-bound checkpoint data is `unknown`.
+- `scripts/task_continuity.py monitor-audit` requires a fresh checkpoint bound to the current invocation ID, explicit covered task IDs, full coverage and fresh invocation metadata. A second currently active invocation makes the cycle fail. Old `active` records are stale/unknown, not proof of concurrent execution.
+- Partial coverage still reports findings for the task scopes actually inspected. The cycle is marked incomplete, unavailable scopes remain unknown, and existing fingerprints for unobserved scopes are preserved. A later complete cycle clears resolved fingerprints.
+- An incomplete or failed audit is a health finding. Persist the failure and send a concise, deduplicated report to the configured Chief of Staff with known task findings, coverage limits, delivery status and next check. Do not report clean from partial or old evidence.
+- The Monitor reports and does not dispatch. The Chief of Staff validates the project scope and routes an authorized handoff to its Project Manager. That Manager decides whether to start the next stage or record a blocker. A delivered alert does not prove work resumed; only later observed stage evidence does.
+
+The checker validates a supplied snapshot; it does not independently fetch live scheduler metadata, project data, or deliver messages. Those remain explicit inputs/actions of the appointed Monitor and Chief of Staff. Public tests demonstrate the contract with synthetic invocation metadata and do not claim installed-schedule or live continuation acceptance.
+
 ## Quota Exhaustion and Standby Guidance
 
 - **Explicit Evidence Required**: The Monitor reports only verified, explicit quota exhaustion messages from the provider. Generic test failures, network timeouts, access errors, or application exceptions must never be attributed to quota limits without evidence.

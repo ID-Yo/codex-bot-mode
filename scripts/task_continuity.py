@@ -221,7 +221,7 @@ def unique_object(pairs):
 
 
 
-def update_monitor_state(state_file_path, findings, snapshot=None, now=None):
+def update_monitor_state(state_file_path, findings, snapshot=None, now=None, *, complete=True):
     now = now or datetime.now(timezone.utc)
     now_str = now.strftime("%Y-%m-%dT%H:%M:%SZ")
     state_path = Path(state_file_path).resolve()
@@ -229,8 +229,12 @@ def update_monitor_state(state_file_path, findings, snapshot=None, now=None):
     state = {}
     if state_path.exists():
         try:
-            content = state_path.read_text(encoding="utf-8")
-            state = json.loads(content)
+            if state_path.suffix.lower() == ".md":
+                from monitor_checkpoint import load_checkpoint
+                state = load_checkpoint(state_path)
+            else:
+                content = state_path.read_text(encoding="utf-8")
+                state = json.loads(content)
             if not isinstance(state, dict):
                 raise ValueError("State root must be a JSON object")
         except Exception as e:
@@ -240,7 +244,15 @@ def update_monitor_state(state_file_path, findings, snapshot=None, now=None):
         "as_of_utc": now_str,
         "active_findings": len(findings),
     }
-    state["last_status"] = "clean" if not findings else "findings"
+    state["last_status"] = ("audit_incomplete" if not complete else "clean" if not findings else "findings")
+    state["audit_success"] = bool(complete)
+    if isinstance(snapshot, dict) and isinstance(snapshot.get("monitor_audit"), dict):
+        audit = snapshot["monitor_audit"]
+        state.update({"run_id": audit.get("run_id"), "audit_status": "complete" if complete else "incomplete",
+                      "coverage": audit.get("coverage", "unknown"),
+                      "observed_at": audit.get("observed_at"), "next_check_at": audit.get("next_check_at"),
+                      "unavailable_scopes": audit.get("unavailable_scopes", []),
+                      "delivery_status": state.get("delivery_status", "unconfirmed")})
 
     task_deadlines = {}
     if isinstance(snapshot, dict) and isinstance(snapshot.get("tasks"), list):
@@ -291,8 +303,16 @@ def update_monitor_state(state_file_path, findings, snapshot=None, now=None):
             else:
                 entry["status"] = "deduplicated"
 
-    existing_ledger = {fp: data for fp, data in existing_ledger.items() if fp in current_fps}
+    if complete:
+        existing_ledger = {fp: data for fp, data in existing_ledger.items() if fp in current_fps}
     state["alert_ledger"] = existing_ledger
+    if isinstance(snapshot, dict) and isinstance(snapshot.get("monitor_audit"), dict):
+        state["active_alert_count"] = len(existing_ledger)
+
+    if state_path.suffix.lower() == ".md":
+        from monitor_checkpoint import save_checkpoint
+        save_checkpoint(state_path, state)
+        return state, new_alerts
 
     import os, tempfile
     tmp_fd, tmp_path = tempfile.mkstemp(dir=str(state_path.parent), prefix="monitor-state-", suffix=".tmp")
@@ -301,6 +321,89 @@ def update_monitor_state(state_file_path, findings, snapshot=None, now=None):
         out.write(chr(10))
     os.replace(tmp_path, str(state_path))
     return state, new_alerts
+
+
+def check_monitor_cycle(snapshot, now=None, *, current_run_id=None):
+    """Check task evidence and whether this invocation completed a fresh, covered audit."""
+    now = now or datetime.now(timezone.utc)
+    result = check(snapshot, now)
+    findings = list(result["findings"])
+    audit = snapshot.get("monitor_audit") if isinstance(snapshot, dict) else None
+    ids = {task.get("id") for task in snapshot.get("tasks", [])
+           if isinstance(task, dict) and isinstance(task.get("id"), str)} if isinstance(snapshot, dict) else set()
+    raw_covered = audit.get("covered_tasks", []) if isinstance(audit, dict) else []
+    covered = {value for value in raw_covered if isinstance(value, str)} if isinstance(raw_covered, list) else set()
+    complete = isinstance(audit, dict)
+
+    def fail(code, detail):
+        nonlocal complete
+        complete = False
+        findings.append({"code": code, "scope": "monitor", "detail": detail})
+
+    if not isinstance(audit, dict):
+        fail("audit_incomplete", "Monitor audit checkpoint is missing")
+        audit = {}
+    observed = None
+    try:
+        observed = datetime.fromisoformat(audit.get("observed_at", "").replace("Z", "+00:00"))
+        if observed.tzinfo is None or observed > now or (now - observed).total_seconds() > 30 * 60:
+            raise ValueError()
+    except (ValueError, TypeError, AttributeError):
+        fail("audit_stale", "Monitor audit observation is missing, stale, or invalid")
+    if not isinstance(current_run_id, str) or not current_run_id or audit.get("run_id") != current_run_id:
+        fail("audit_run_mismatch", "Checkpoint does not belong to this invocation")
+    if audit.get("status") != "complete":
+        fail("audit_incomplete", "Monitor audit did not complete")
+    if audit.get("coverage") != "complete" or not ids <= covered:
+        fail("audit_incomplete", "Monitor task coverage is partial; unobserved findings were retained")
+    unavailable = audit.get("unavailable_scopes")
+    if not isinstance(unavailable, list) or not all(isinstance(value, str) and value.strip() for value in unavailable):
+        fail("audit_incomplete", "Unavailable scopes must be explicitly listed")
+    elif unavailable:
+        fail("audit_incomplete", "Some project/task scopes were unavailable")
+    try:
+        next_check = datetime.fromisoformat(audit.get("next_check_at", "").replace("Z", "+00:00"))
+        if next_check.tzinfo is None or next_check <= now:
+            raise ValueError()
+    except (ValueError, TypeError, AttributeError):
+        fail("audit_incomplete", "A future next-check time is required")
+    if not isinstance(audit.get("evidence"), list) or not audit["evidence"] or not all(isinstance(value, str) and value.strip() for value in audit["evidence"]):
+        fail("audit_incomplete", "Monitor audit has no evidence references")
+
+    invocations = audit.get("invocations")
+    current = [row for row in invocations if isinstance(row, dict) and row.get("run_id") == current_run_id] if isinstance(invocations, list) else []
+    if len(current) != 1 or current[0].get("status") not in ("active", "completed"):
+        fail("audit_incomplete", "Current invocation identity/status is not verified")
+    else:
+        try:
+            current_time = datetime.fromisoformat(current[0].get("updated_at", "").replace("Z", "+00:00"))
+            if current_time.tzinfo is None or current_time > now or (now - current_time).total_seconds() > 30 * 60:
+                raise ValueError()
+        except (ValueError, TypeError, AttributeError):
+            fail("audit_stale", "Current invocation metadata is not fresh")
+    active = []
+    for row in invocations if isinstance(invocations, list) else []:
+        if not isinstance(row, dict) or row.get("status") not in ("active", "running") or row.get("run_id") == current_run_id:
+            continue
+        try:
+            stamp = datetime.fromisoformat(row.get("updated_at", "").replace("Z", "+00:00"))
+            if stamp.tzinfo is None or stamp > now:
+                raise ValueError()
+            if (now - stamp).total_seconds() <= 120:
+                active.append(row)
+        except (ValueError, TypeError, AttributeError):
+            fail("concurrency_unknown", "Another invocation has no trustworthy fresh timestamp")
+    if active:
+        fail("concurrent_audit", "Another fresh monitor invocation is active")
+    elif any(isinstance(row, dict) and row.get("status") in ("active", "running") and row.get("run_id") != current_run_id for row in invocations or []):
+        fail("concurrency_unknown", "An older active record cannot prove current concurrency")
+
+    audit_complete = complete
+    if not audit_complete:
+        findings.append({"code": "audit_incomplete", "scope": "monitor", "detail": "Audit did not complete with fresh invocation identity and full coverage"})
+    return {"ok": audit_complete and not findings, "audit_complete": audit_complete,
+            "findings": findings, "current_run_id": current_run_id,
+            "limits": "Task findings apply only to listed snapshot evidence; stale invocation metadata is unknown, not concurrency proof."}
 
 
 
@@ -332,7 +435,7 @@ class RouteLock:
                     raise RuntimeError(f"Concurrent routing in progress by PID {data.get('pid')} since {data.get('acquired_at')}")
             except (ValueError, OSError):
                 pass
-
+        
         lock_data = {
             "pid": os.getpid(),
             "acquired_at": now_ts,
@@ -390,7 +493,7 @@ def parse_markdown_metadata(txt):
 
 def default_desktop_relay_adapter(project_path, bot_id, req_id, summary):
     """Attempt dispatch via local Desktop Relay if available.
-
+    
     Reads appointed thread from roster.json. If relay.json exists in project,
     posts send_message_to_thread via POST /call. If configuration is missing before
     connect, raises PreconnectConfigurationError.
@@ -399,14 +502,14 @@ def default_desktop_relay_adapter(project_path, bot_id, req_id, summary):
     roster_file = project_path / ".bot-mode" / "roster.json"
     if not roster_file.exists():
         raise PreconnectConfigurationError(f"Roster not found for {project_path}")
-
+    
     r_data = json.loads(roster_file.read_text(encoding="utf-8"))
     thread_id = None
     for p in r_data.get("participants", []):
         if p.get("bot") == bot_id or p.get("bot_id") == bot_id:
             thread_id = p.get("thread_id")
             break
-
+    
     if not thread_id:
         bindings_file = project_path / ".bot-mode" / "local" / "bindings.json"
         if bindings_file.exists():
@@ -919,6 +1022,11 @@ def main(argv=None):
     audit_parser.add_argument("--file", type=Path, required=True, help="Explicit snapshot JSON file")
     audit_parser.add_argument("--state-file", type=Path, default=Path("monitor-state.json"), help="State file path")
 
+    monitor_parser = subparsers.add_parser("monitor-audit", help="Audit one scheduled monitor cycle and record truthful completion")
+    monitor_parser.add_argument("--file", type=Path, required=True, help="Explicit reconciled monitor snapshot")
+    monitor_parser.add_argument("--state-file", type=Path, required=True, help="Monitor-owned dedup/checkpoint file")
+    monitor_parser.add_argument("--run-id", required=True, help="Fresh invocation ID from supported scheduler metadata")
+
     snap_parser = subparsers.add_parser("snapshot", help="Produce valid ODD snapshot from live project")
     snap_parser.add_argument("--project", type=Path, default=Path("."), help="Project root directory")
     snap_parser.add_argument("--output", type=Path, help="Optional output JSON path")
@@ -950,28 +1058,36 @@ def main(argv=None):
                                                   "detail": type(error).__name__ + ": input unavailable or invalid"}]}
         print(json.dumps(result, indent=2))
         return 0 if result["ok"] else 1
-    elif args.command == "audit":
+    elif args.command in ("audit", "monitor-audit"):
+        snapshot = None
         try:
             snapshot = json.loads(args.file.read_text(encoding="utf-8-sig"), object_pairs_hook=unique_object)
             result = check(snapshot)
         except (OSError, ValueError, UnicodeError) as error:
             result = {"ok": False, "findings": [{"code": "unreadable_snapshot", "scope": "snapshot",
                                                   "detail": type(error).__name__ + ": input unavailable or invalid"}]}
-            print(json.dumps(result, indent=2))
-            return 1
+            if args.command == "audit":
+                print(json.dumps(result, indent=2))
+                return 1
         try:
-            state, new_alerts = update_monitor_state(args.state_file, result["findings"], snapshot)
+            cycle = check_monitor_cycle(snapshot or {}, current_run_id=args.run_id) if args.command == "monitor-audit" else None
+            findings = cycle["findings"] if cycle else result["findings"]
+            complete = cycle["audit_complete"] if cycle else True
+            state, new_alerts = update_monitor_state(args.state_file, findings, snapshot, complete=complete)
         except Exception as error:
             print(f"ERROR: {error}", file=sys.stderr)
             return 1
         print(json.dumps({
             "ok": result["ok"],
-            "findings": result["findings"],
+            "audit_complete": complete,
+            "findings": findings,
+            "new_alerts": new_alerts,
             "last_check": state["last_check"],
             "alert_ledger_count": len(state["alert_ledger"]),
             "new_alerts_count": len(new_alerts),
+            "limits": cycle["limits"] if cycle else result.get("limits"),
         }, indent=2))
-        return 0 if result["ok"] else 1
+        return 0 if (cycle["ok"] if cycle else result["ok"]) else 1
     elif args.command == "snapshot":
         try:
             snap = produce_snapshot(args.project)
