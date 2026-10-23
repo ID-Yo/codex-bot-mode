@@ -2,6 +2,9 @@ const { invoke } = window.__TAURI__.core;
 const dialog = window.__TAURI__.dialog;
 const byId = (id) => document.getElementById(id);
 let busy = false;
+let busyState;
+let refreshTask;
+let viewRevision = 0;
 let lastView;
 
 function notify(message) {
@@ -58,7 +61,8 @@ function render(view) {
   byId('project-path').title = view.projectPath || '';
   byId('codex-path').textContent = view.codexPath || 'Codex Desktop runtime not found. Install Codex or locate codex.exe.';
   byId('codex-path').title = view.codexPath || '';
-  setStatus(view.status || {});
+  setStatus(busyState ? { state: busyState } : (view.status || {}));
+  for (const id of ['choose-project', 'choose-codex', 'refresh', 'quit']) byId(id).disabled = busy;
   byId('logs').textContent = (view.logs || []).join('\n') || 'No verified service log is available.';
 
   const ready = !busy && Boolean(view.projectPath) && Boolean(view.codexPath);
@@ -79,16 +83,28 @@ function render(view) {
 }
 
 async function refresh() {
+  if (refreshTask) return refreshTask;
+  const revision = viewRevision;
+  refreshTask = (async () => {
+    try {
+      const view = await invoke('get_view');
+      if (revision === viewRevision) render(view);
+    } catch (error) {
+      if (revision === viewRevision) actionMessage(String(error), 'error');
+    }
+  })();
   try {
-    render(await invoke('get_view'));
-  } catch (error) {
-    actionMessage(String(error), 'error');
+    await refreshTask;
+  } finally {
+    refreshTask = undefined;
   }
 }
 
-async function act(label, command) {
+async function act(label, command, state) {
   if (busy) return;
   busy = true;
+  viewRevision += 1;
+  busyState = state;
   actionMessage(label);
   render(lastView || { status: { state: 'unverified' } });
   try {
@@ -102,6 +118,8 @@ async function act(label, command) {
     actionMessage(String(error), 'error');
   } finally {
     busy = false;
+    busyState = undefined;
+    if (refreshTask) await refreshTask;
     await refresh();
   }
 }
@@ -125,11 +143,11 @@ byId('choose-codex').addEventListener('click', async () => {
   } catch (error) { notify(String(error)); }
 });
 
-byId('start').addEventListener('click', () => act('Starting the bundled Office service…', () => invoke('start_service')));
-byId('stop').addEventListener('click', () => act('Requesting a safe drain…', () => invoke('stop_service')));
-byId('restart').addEventListener('click', () => act('Stopping safely before restart…', () => invoke('restart_service')));
+byId('start').addEventListener('click', () => act('Starting the bundled Office service…', () => invoke('start_service'), 'starting'));
+byId('stop').addEventListener('click', () => act('Requesting a safe drain…', () => invoke('stop_service'), 'stopping'));
+byId('restart').addEventListener('click', () => act('Stopping safely before restart…', () => invoke('restart_service'), 'stopping'));
 byId('cancel-stop').addEventListener('click', () => act('Requesting cancellation of the pending stop…', () => invoke('cancel_stop')));
-byId('recover-startup').addEventListener('click', () => act('Rechecking the existing owned service; no new process will start…', () => invoke('recover_startup')));
+byId('recover-startup').addEventListener('click', () => act('Rechecking the existing owned service; no new process will start…', () => invoke('recover_startup'), 'starting'));
 byId('preserve-startup').addEventListener('click', async () => {
   const confirmed = await dialog.ask(
     'The controller will quit without stopping or killing this exact startup child. Office work may still be active and will no longer be monitored here. A safety lock will block another start next time until you verify this process has stopped and clear the lock.',

@@ -56,6 +56,8 @@ struct Descriptor {
     version: String,
     pid: u32,
     port: u16,
+    #[serde(default)]
+    parent_pid: u32,
     instance_id: String,
     token: String,
     state: String,
@@ -64,6 +66,7 @@ struct Descriptor {
 struct ChildState<T = tauri_plugin_shell::process::CommandChild> {
     child: Option<T>,
     pid: Option<u32>,
+    launch_token: String,
     running: bool,
     starting: bool,
     safe_to_exit: bool,
@@ -75,6 +78,7 @@ impl<T> Default for ChildState<T> {
         Self {
             child: None,
             pid: None,
+            launch_token: String::new(),
             running: false,
             starting: false,
             safe_to_exit: true,
@@ -88,6 +92,8 @@ struct OfficeController {
     settings: Mutex<Settings>,
     child: Mutex<ChildState>,
     action: Mutex<()>,
+    #[cfg(test)]
+    test_port: u16,
 }
 
 #[derive(Clone, Serialize)]
@@ -120,6 +126,13 @@ struct View {
 }
 
 impl OfficeController {
+    fn expected_port(&self) -> u16 {
+        #[cfg(test)]
+        { self.test_port }
+        #[cfg(not(test))]
+        { PORT }
+    }
+
     fn load(app: &AppHandle) -> Result<Self, String> {
         let directory = app.path().app_local_data_dir().map_err(display_error)?;
         fs::create_dir_all(&directory).map_err(display_error)?;
@@ -133,6 +146,8 @@ impl OfficeController {
             settings: Mutex::new(settings),
             child: Mutex::new(ChildState { safe_to_exit: true, ..ChildState::default() }),
             action: Mutex::new(()),
+            #[cfg(test)]
+            test_port: PORT,
         };
         controller.save_settings()?;
         Ok(controller)
@@ -209,12 +224,16 @@ fn descriptor_path(project: &Path) -> PathBuf {
 }
 
 fn read_descriptor(project: &Path) -> Result<Descriptor, String> {
+    read_descriptor_at_port(project, PORT)
+}
+
+fn read_descriptor_at_port(project: &Path, port: u16) -> Result<Descriptor, String> {
     let runtime = checked_existing_runtime(project)?;
     let bytes = fs::read(runtime.join("desktop.json")).map_err(|_| "No controller descriptor is available.".to_owned())?;
     let descriptor: Descriptor = serde_json::from_slice(&bytes)
         .map_err(|_| "Controller descriptor is invalid; the listener remains untouched.".to_owned())?;
     if descriptor.protocol != 1 || descriptor.service != SERVICE_NAME || descriptor.version != SERVICE_VERSION
-        || descriptor.port != PORT || descriptor.pid == 0 || descriptor.token.is_empty()
+        || descriptor.port != port || descriptor.pid == 0 || descriptor.token.is_empty()
         || descriptor.instance_id.is_empty()
     {
         return Err("Controller descriptor identity does not match this Office build.".to_owned());
@@ -234,7 +253,8 @@ fn http_request(descriptor: &Descriptor, method: &str, endpoint: &str) -> Result
         .map_err(display_error)?.next().ok_or_else(|| "Loopback address is unavailable.".to_owned())?;
     let mut stream = TcpStream::connect_timeout(&address, Duration::from_secs(2))
         .map_err(|_| "The authenticated Office listener did not respond.".to_owned())?;
-    let wait = if endpoint == "/desktop/shutdown" { 65 } else { 4 };
+    // Native Desktop safety inspection can outlast a health probe (e.g. stale relay).
+    let wait = match endpoint { "/desktop/shutdown" => 65, "/desktop/status" => 10, _ => 4 };
     stream.set_read_timeout(Some(Duration::from_secs(wait))).map_err(display_error)?;
     stream.set_write_timeout(Some(Duration::from_secs(4))).map_err(display_error)?;
     write!(stream,
@@ -260,6 +280,7 @@ fn identity_matches(descriptor: &Descriptor, response: &Value) -> bool {
         && response.get("service").and_then(Value::as_str) == Some(SERVICE_NAME)
         && response.get("version").and_then(Value::as_str) == Some(SERVICE_VERSION)
         && response.get("pid").and_then(Value::as_u64) == Some(descriptor.pid as u64)
+        && response.get("parent_pid").and_then(Value::as_u64) == Some(descriptor.parent_pid as u64)
         && response.get("port").and_then(Value::as_u64) == Some(descriptor.port as u64)
         && response.get("instance_id").and_then(Value::as_str) == Some(&descriptor.instance_id)
 }
@@ -345,7 +366,7 @@ fn status_for(controller: &OfficeController, settings: &Settings) -> (ServiceSta
         status.can_start = !child_running && !child_starting && settings.codex_path.is_some();
         return (status, Vec::new());
     }
-    let descriptor = match read_descriptor(project) {
+    let descriptor = match read_descriptor_at_port(project, controller.expected_port()) {
         Ok(descriptor) => descriptor,
         Err(reason) => return (unverified_owned_child(&reason, can_recover), Vec::new()),
     };
@@ -375,12 +396,15 @@ fn status_for(controller: &OfficeController, settings: &Settings) -> (ServiceSta
     if status_code != 200 || !identity_matches(&descriptor, &details) {
         return (unverified_owned_child("Authenticated status identity did not match; control is disabled.", can_recover), Vec::new());
     }
+    (verified_status(&health, &details, settings.codex_path.is_some()), read_logs(&descriptor))
+}
+
+fn verified_status(health: &Value, details: &Value, configured: bool) -> ServiceStatus {
     let safety = details.get("safety").and_then(Value::as_str).unwrap_or("unknown");
     let stop_pending = details.get("stop_pending").and_then(Value::as_bool).unwrap_or(false);
     let state = if stop_pending || health.get("state").and_then(Value::as_str) == Some("stopping") {
         "stopping"
     } else { "running" };
-    let configured = settings.codex_path.is_some();
     let mut status = ServiceStatus {
         state: state.to_owned(), safety: safety.to_owned(),
         busy_count: details.get("busy_count").and_then(Value::as_u64).unwrap_or(0),
@@ -400,7 +424,7 @@ fn status_for(controller: &OfficeController, settings: &Settings) -> (ServiceSta
     if safety == "unknown" && status.reason.is_empty() {
         status.reason = "Office is responding, but owned work is not fully verified.".to_owned();
     }
-    (status, read_logs(&descriptor))
+    status
 }
 
 fn read_logs(descriptor: &Descriptor) -> Vec<String> {
@@ -542,8 +566,9 @@ fn validate_project(path: &str) -> Result<PathBuf, String> {
 }
 
 #[tauri::command]
-fn get_view(controller: State<'_, Arc<OfficeController>>) -> Result<View, String> {
-    make_view(controller.inner())
+async fn get_view(controller: State<'_, Arc<OfficeController>>) -> Result<View, String> {
+    let controller = controller.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || make_view(&controller)).await.map_err(display_error)?
 }
 
 #[tauri::command]
@@ -579,8 +604,8 @@ fn configure_codex(codex_path: String, controller: State<'_, Arc<OfficeControlle
     make_view(controller.inner())
 }
 
-fn verify_owned_health(settings: &Settings, project: &Path) -> Result<Descriptor, String> {
-    let descriptor = read_descriptor(project)?;
+fn verify_owned_health(settings: &Settings, project: &Path, port: u16) -> Result<Descriptor, String> {
+    let descriptor = read_descriptor_at_port(project, port)?;
     if !owner_matches(settings, project, &descriptor) {
         return Err("The service identity is not owned by this controller.".to_owned());
     }
@@ -611,7 +636,7 @@ fn stop_inner(controller: &OfficeController) -> Result<ServiceStatus, String> {
     if status.state == "stopped" || status.state == "notStarted" { return Ok(status); }
     if status.stop_pending { return Ok(status); }
     if !status.can_stop { return Err("Office ownership or shutdown safety is unverified; stop was refused.".to_owned()); }
-    let descriptor = verify_owned_health(&settings, project)?;
+    let descriptor = verify_owned_health(&settings, project, controller.expected_port())?;
     let (code, response) = http_request(&descriptor, "POST", "/desktop/shutdown")?;
     if code == 202 {
         let (latest, _) = status_for(controller, &settings);
@@ -649,7 +674,7 @@ async fn cancel_stop(controller: State<'_, Arc<OfficeController>>) -> Result<Vie
         let _action = controller.action.lock().map_err(display_error)?;
         let settings = controller.settings()?;
         let project = settings.project_path.as_deref().ok_or("Choose an Office project first.")?;
-        let descriptor = verify_owned_health(&settings, project)?;
+        let descriptor = verify_owned_health(&settings, project, controller.expected_port())?;
         let (code, response) = http_request(&descriptor, "POST", "/desktop/cancel-stop")?;
         if code != 200 { return Err(response.get("reason").and_then(Value::as_str)
             .unwrap_or("The pending stop could not be cancelled safely.").to_owned()); }
@@ -693,55 +718,83 @@ fn verify_startup_probes(descriptor: &Descriptor) -> Result<(), String> {
     Ok(())
 }
 
-fn wait_for_startup(controller: &OfficeController, project: &Path, pid: u32) -> Result<View, String> {
-    let deadline = Instant::now() + Duration::from_secs(60);
-    let mut last_error = "Waiting for an authenticated service descriptor.".to_owned();
+fn startup_matches(descriptor: &Descriptor, pid: u32, launch_token: &str) -> bool {
+    !launch_token.is_empty() && descriptor.token == launch_token
+        && (descriptor.pid == pid || descriptor.parent_pid == pid)
+        && descriptor.state == "running"
+}
+
+fn wait_for_descriptor(
+    project: &Path, pid: u32, launch_token: &str, port: u16, timeout: Duration,
+    mut is_live: impl FnMut() -> bool,
+) -> Result<Descriptor, String> {
+    let deadline = Instant::now() + timeout;
     loop {
-        {
-            let child = controller.child_state()?;
-            if !child.running || child.pid != Some(pid) || child.child.is_none() {
-                return Err("The owned service exited before startup health was confirmed.".to_owned());
-            }
+        if !is_live() {
+            return Err("The owned service exited before startup health was confirmed.".to_owned());
         }
-        match read_descriptor(project) {
-            Ok(descriptor) if descriptor.pid == pid && descriptor.state == "running" => {
-                let owner = Owner { project_path: project.to_path_buf(), pid, instance_id: descriptor.instance_id.clone() };
+        let last_error = match read_descriptor_at_port(project, port) {
+            Ok(descriptor) if startup_matches(&descriptor, pid, launch_token) => {
                 match verify_startup_probes(&descriptor) {
-                    Ok(()) => {
-                        persist_owner(controller, Some(owner))?;
-                        let mut child = controller.child_state()?;
-                        if !child.running || child.pid != Some(pid) || child.child.is_none() {
-                            drop(child);
-                            persist_owner(controller, None)?;
-                            return Err("The owned service exited before startup health was confirmed.".to_owned());
-                        }
-                        drop(child);
-                        let view = make_view(controller)?;
-                        if view.status.state != "running" {
-                            return Err("The owned service did not remain verified and running after startup probes.".to_owned());
-                        }
-                        let mut child = controller.child_state()?;
-                        if !child.running || child.pid != Some(pid) || child.child.is_none() {
-                            drop(child);
-                            persist_owner(controller, None)?;
-                            return Err("The owned service exited before startup health was confirmed.".to_owned());
-                        }
-                        child.starting = false;
-                        child.startup_error = None;
-                        child.safe_to_exit = false;
-                        return Ok(view);
-                    }
-                    Err(error) => last_error = error,
+                    Ok(()) if is_live() => return Ok(descriptor),
+                    Ok(()) => return Err("The owned service exited during startup probes.".to_owned()),
+                    Err(error) => error,
                 }
             }
-            Ok(_) => last_error = "The service descriptor does not match the spawned child identity.".to_owned(),
-            Err(error) => last_error = error,
-        }
+            Ok(_) => "The service descriptor does not match the bound launch identity.".to_owned(),
+            Err(error) => error,
+        };
         if Instant::now() >= deadline {
             return Err(format!("Startup is unverified; the owned process is retained for recheck. {last_error}"));
         }
         std::thread::sleep(Duration::from_millis(250));
     }
+}
+
+fn wait_for_startup(controller: &OfficeController, project: &Path, pid: u32) -> Result<View, String> {
+    let launch_token = controller.child_state()?.launch_token.clone();
+    let is_live = || controller.child_state().is_ok_and(|child| {
+        child.running && child.pid == Some(pid) && child.child.is_some()
+    });
+    let descriptor = wait_for_descriptor(project, pid, &launch_token, controller.expected_port(), Duration::from_secs(60), is_live)?;
+    let owner = Owner { project_path: project.to_path_buf(), pid: descriptor.pid, instance_id: descriptor.instance_id.clone() };
+    persist_owner(controller, Some(owner))?;
+    if !is_live() {
+        persist_owner(controller, None)?;
+        return Err("The owned service exited before startup health was confirmed.".to_owned());
+    }
+    let view = make_view(controller)?;
+    if view.status.state != "running" {
+        return Err("The owned service did not remain verified and running after startup probes.".to_owned());
+    }
+    let mut child = controller.child_state()?;
+    if !child.running || child.pid != Some(pid) || child.child.is_none() {
+        drop(child);
+        persist_owner(controller, None)?;
+        return Err("The owned service exited before startup health was confirmed.".to_owned());
+    }
+    child.starting = false;
+    child.startup_error = None;
+    child.safe_to_exit = false;
+    Ok(view)
+}
+
+fn new_launch_token() -> Result<String, String> {
+    let mut bytes = [0u8; 32];
+    #[cfg(windows)]
+    {
+        #[link(name = "bcrypt")]
+        extern "system" {
+            fn BCryptGenRandom(algorithm: *mut std::ffi::c_void, buffer: *mut u8, size: u32, flags: u32) -> i32;
+        }
+        // System RNG, no provider handle. Never fall back to a predictable launch binding.
+        if unsafe { BCryptGenRandom(std::ptr::null_mut(), bytes.as_mut_ptr(), 32, 2) } != 0 {
+            return Err("A secure Office launch identity could not be created.".to_owned());
+        }
+    }
+    #[cfg(not(windows))]
+    fs::File::open("/dev/urandom").and_then(|mut file| file.read_exact(&mut bytes)).map_err(display_error)?;
+    Ok(bytes.iter().map(|byte| format!("{byte:02x}")).collect())
 }
 
 fn start_inner(app: &AppHandle, controller: &Arc<OfficeController>) -> Result<View, String> {
@@ -754,12 +807,14 @@ fn start_inner(app: &AppHandle, controller: &Arc<OfficeController>) -> Result<Vi
     }
     if !project.is_dir() || !codex.is_file() { return Err("The saved project or Codex path is unavailable.".to_owned()); }
     let runtime = runtime_for(project)?;
+    let launch_token = new_launch_token()?;
     {
         let mut child = controller.child_state()?;
         if child.running || child.starting { return Err("The managed Office process is already starting or running.".to_owned()); }
         child.starting = true;
         child.safe_to_exit = false;
         child.startup_error = None;
+        child.launch_token = launch_token.clone();
     }
     let mut args = vec![
         "--codex-path".to_owned(), codex.display().to_string(),
@@ -779,8 +834,8 @@ fn start_inner(app: &AppHandle, controller: &Arc<OfficeController>) -> Result<Vi
             return Err(message);
         }
     };
-    let command = sidecar.args(args).current_dir(project);
-    let (mut events, child_handle) = match command.spawn() {
+    let command = sidecar.args(args).current_dir(project).env("CODEX_OFFICE_LAUNCH_TOKEN", launch_token);
+    let (events, child_handle) = match command.spawn() {
         Ok(child) => child,
         Err(error) => {
             let message = format!("Bundled Office service could not start: {error}");
@@ -796,7 +851,17 @@ fn start_inner(app: &AppHandle, controller: &Arc<OfficeController>) -> Result<Vi
         child.child = Some(child_handle);
         child.startup_error = None;
     }
-    let event_controller = controller.clone();
+    track_child_events(controller.clone(), events);
+    match wait_for_startup(controller, project, pid) {
+        Ok(view) => Ok(view),
+        Err(error) => {
+            record_startup_failure(controller, error.clone());
+            Err(error)
+        }
+    }
+}
+
+fn track_child_events(event_controller: Arc<OfficeController>, mut events: tauri::async_runtime::Receiver<CommandEvent>) {
     tauri::async_runtime::spawn(async move {
         while let Some(event) = events.recv().await {
             if matches!(event, CommandEvent::Terminated(_)) {
@@ -808,17 +873,11 @@ fn start_inner(app: &AppHandle, controller: &Arc<OfficeController>) -> Result<Vi
                 child.starting = false;
                 child.pid = None;
                 child.child = None;
+                child.launch_token.clear();
                 break;
             }
         }
     });
-    match wait_for_startup(controller, project, pid) {
-        Ok(view) => Ok(view),
-        Err(error) => {
-            record_startup_failure(controller, error.clone());
-            Err(error)
-        }
-    }
 }
 
 fn recover_startup_inner(controller: &OfficeController) -> Result<View, String> {
@@ -1158,10 +1217,226 @@ mod tests {
         std::os::unix::fs::symlink(target, link)
     }
 
+    #[test]
+    fn frozen_worker_requires_bound_launch_and_exact_parent() {
+        let descriptor: Descriptor = serde_json::from_value(serde_json::json!({
+            "protocol": 1, "service": SERVICE_NAME, "version": SERVICE_VERSION,
+            "pid": 5678, "parent_pid": 4321, "port": PORT,
+            "instance_id": "fixture", "token": "launch-secret", "state": "running"
+        })).unwrap();
+        assert!(startup_matches(&descriptor, 4321, "launch-secret"));
+        assert!(!startup_matches(&descriptor, 9999, "launch-secret"));
+        assert!(!startup_matches(&descriptor, 4321, "foreign-secret"));
+        assert!(!startup_matches(&descriptor, 4321, ""));
+    }
+
+    #[test]
+    fn direct_binary_and_authenticated_identity_match_exactly() {
+        let descriptor: Descriptor = serde_json::from_value(serde_json::json!({
+            "protocol": 1, "service": SERVICE_NAME, "version": SERVICE_VERSION,
+            "pid": 4321, "parent_pid": 1234, "port": PORT,
+            "instance_id": "fixture", "token": "launch-secret", "state": "running"
+        })).unwrap();
+        assert!(startup_matches(&descriptor, 4321, "launch-secret"));
+        assert!(!startup_matches(&descriptor, 4321, "foreign-secret"));
+        let mut health = serde_json::json!({
+            "protocol": 1, "service": SERVICE_NAME, "version": SERVICE_VERSION,
+            "pid": 4321, "parent_pid": 1234, "port": PORT, "instance_id": "fixture"
+        });
+        assert!(identity_matches(&descriptor, &health));
+        health["parent_pid"] = serde_json::json!(9999);
+        assert!(!identity_matches(&descriptor, &health));
+        health["parent_pid"] = serde_json::json!(1234);
+        health["instance_id"] = serde_json::json!("foreign-instance");
+        assert!(!identity_matches(&descriptor, &health));
+        let first = new_launch_token().unwrap();
+        assert_eq!(first.len(), 64);
+        assert_ne!(first, new_launch_token().unwrap());
+    }
+
+    #[test]
+    fn slow_unknown_status_passes_production_probes_but_cannot_stop() {
+        use std::net::TcpListener;
+        let root = TestDir::new("slow-status");
+        let project = root.0.canonicalize().unwrap();
+        let runtime = runtime_for(&project).unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let data = serde_json::json!({
+            "protocol": 1, "service": SERVICE_NAME, "version": SERVICE_VERSION,
+            "pid": 5678, "parent_pid": 4321, "port": port,
+            "instance_id": "fixture", "token": "owned", "state": "running"
+        });
+        fs::write(runtime.join("desktop.json"), data.to_string()).unwrap();
+        let server = std::thread::spawn(move || {
+            for index in 0..2 {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut request = Vec::new();
+                while !request.ends_with(b"\r\n\r\n") {
+                    let mut byte = [0];
+                    stream.read_exact(&mut byte).unwrap();
+                    request.push(byte[0]);
+                }
+                if index == 1 { std::thread::sleep(Duration::from_millis(4250)); }
+                let mut response = data.clone();
+                response.as_object_mut().unwrap().remove("token");
+                response["safety"] = serde_json::json!("unknown");
+                let body = response.to_string();
+                write!(stream, "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", body.len(), body).unwrap();
+            }
+        });
+        let started = Instant::now();
+        let descriptor = wait_for_descriptor(&project, 4321, "owned", port, Duration::from_secs(15), || true).unwrap();
+        assert!(started.elapsed() >= Duration::from_secs(4));
+        assert_eq!(descriptor.pid, 5678);
+        let status = verified_status(&serde_json::json!({"state":"running"}),
+            &serde_json::json!({"safety":"unknown"}), true);
+        assert_eq!(status.state, "running");
+        assert!(status.can_open);
+        assert!(!status.can_stop && !status.can_restart && !status.can_start);
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn foreign_launch_is_refused_before_http_and_timeout_remains_recoverable() {
+        use std::net::TcpListener;
+        let root = TestDir::new("foreign-launch");
+        let project = root.0.canonicalize().unwrap();
+        let runtime = runtime_for(&project).unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        for (parent, token) in [(4321, "foreign"), (9999, "owned"), (4321, "")] {
+            let data = serde_json::json!({
+                "protocol": 1, "service": SERVICE_NAME, "version": SERVICE_VERSION,
+                "pid": 5678, "parent_pid": parent, "port": port,
+                "instance_id": "fixture", "token": token, "state": "running"
+            });
+            fs::write(runtime.join("desktop.json"), data.to_string()).unwrap();
+            let error = wait_for_descriptor(&project, 4321, "owned", port, Duration::ZERO, || true)
+                .err().expect("foreign launch must time out");
+            assert!(error.contains("retained for recheck"));
+            assert_eq!(listener.accept().unwrap_err().kind(), std::io::ErrorKind::WouldBlock);
+            let mut state = fake_startup_child();
+            record_startup_failure_state(&mut state, error);
+            assert!(startup_recovery_available(&state));
+            assert_eq!(preserved_child_for(&state, &root.0).unwrap().pid, 4321);
+        }
+        assert!(wait_for_descriptor(&project, 4321, "owned", port, Duration::ZERO, || false)
+            .err().unwrap().contains("exited"));
+    }
+
+    // Run explicitly with synthetic fixture env paths; never uses the owner port or Codex.
+    #[test]
+    fn status_over_budget_fails_closed_and_retains_child() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let descriptor: Descriptor = serde_json::from_value(serde_json::json!({
+            "protocol": 1, "service": SERVICE_NAME, "version": SERVICE_VERSION,
+            "pid": 5678, "parent_pid": 4321, "port": port,
+            "instance_id": "fixture", "token": "owned", "state": "running"
+        })).unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = Vec::new();
+            while !request.ends_with(b"\r\n\r\n") {
+                let mut byte = [0];
+                stream.read_exact(&mut byte).unwrap();
+                request.push(byte[0]);
+            }
+            assert!(String::from_utf8(request).unwrap().starts_with("GET /desktop/status "));
+            std::thread::sleep(Duration::from_millis(10500));
+        });
+        let started = Instant::now();
+        let error = http_request(&descriptor, "GET", "/desktop/status").err().expect("bounded timeout");
+        assert!(started.elapsed() < Duration::from_secs(13));
+        let mut child = fake_startup_child();
+        record_startup_failure_state(&mut child, error);
+        assert!(startup_recovery_available(&child));
+        assert_eq!(child.pid, Some(4321));
+        assert!(!child.safe_to_exit);
+        let controls = unverified_owned_child("timeout", true);
+        assert!(!controls.can_start && !controls.can_stop && !controls.can_open);
+        server.join().unwrap();
+    }
+
+    // Explicit synthetic integration; not a GUI or installed-owner acceptance test.
+    #[test]
+    #[ignore = "requires packaged service and isolated synthetic project"]
+    fn packaged_service_passes_production_rust_startup_and_shutdown() {
+        use std::process::{Command, Stdio};
+        let project = PathBuf::from(std::env::var_os("OFFICE_TEST_PROJECT").expect("synthetic project")).canonicalize().unwrap();
+        let fixture = PathBuf::from(std::env::var_os("OFFICE_TEST_CODEX").expect("synthetic Codex fixture"));
+        assert_eq!(fixture.file_name().unwrap(), "fixture_codex.exe");
+        let sidecar = PathBuf::from(std::env::var_os("OFFICE_TEST_SIDECAR").expect("packaged sidecar"));
+        assert!(project.join(".synthetic-office-test").is_file());
+        assert!(!project.join(".bot-mode/desktop-relay/relay.json").exists());
+        let runtime = runtime_for(&project).unwrap();
+        let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+        assert_ne!(port, PORT);
+        let app = tauri::test::mock_builder().plugin(tauri_plugin_shell::init())
+            .build(tauri::test::mock_context(tauri::test::noop_assets())).unwrap();
+        let controller = Arc::new(OfficeController {
+            settings_file: project.join("controller-test.json"),
+            settings: Mutex::new(Settings { project_path: Some(project.clone()),
+                codex_path: Some(fixture.clone()), ..Settings::default() }),
+            child: Mutex::new(ChildState::default()), action: Mutex::new(()), test_port: port,
+        });
+        controller.save_settings().unwrap();
+        assert!(make_view(&controller).unwrap().status.can_start);
+        for attempt in 0..2 {
+            let token = new_launch_token().unwrap();
+            let (events, handle) = app.shell().command(&sidecar)
+                .args(["--project", project.to_str().unwrap(), "--runtime-root", runtime.to_str().unwrap(),
+                    "--codex-path", fixture.to_str().unwrap(), "--port", &port.to_string(), "--desktop-managed"])
+                .env("CODEX_OFFICE_LAUNCH_TOKEN", &token).spawn().unwrap();
+            let pid = handle.pid();
+            *controller.child_state().unwrap() = ChildState {
+                child: Some(handle), pid: Some(pid), launch_token: token.clone(),
+                running: true, starting: true, safe_to_exit: false, startup_error: None,
+            };
+            track_child_events(controller.clone(), events);
+            let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let view = if attempt == 0 {
+                    wait_for_startup(&controller, &project, pid).unwrap()
+                } else {
+                    record_startup_failure(&controller, "synthetic interrupted startup".to_owned());
+                    assert!(startup_recovery_available(&controller.child_state().unwrap()));
+                    recover_startup_inner(&controller).unwrap()
+                };
+                assert_eq!(view.status.state, "running");
+                assert!(view.status.can_open && view.status.can_stop && view.status.can_restart);
+                assert!(!view.status.can_start);
+                let descriptor = read_descriptor_at_port(&project, port).unwrap();
+                assert_ne!(descriptor.pid, pid, "onefile worker must differ from launcher");
+                assert_eq!(descriptor.parent_pid, pid);
+                let settings = controller.settings().unwrap();
+                assert!(owner_matches(&settings, &project, &descriptor));
+                assert_eq!(settings.owner.unwrap().pid, descriptor.pid);
+                assert_eq!(controller.child_state().unwrap().pid, Some(pid));
+                let stopped = stop_inner(&controller).unwrap();
+                assert_eq!(stopped.state, "stopped");
+                assert!(controller.settings().unwrap().owner.is_none());
+                assert!(!controller.child_state().unwrap().running);
+                assert!(controller.child_state().unwrap().safe_to_exit);
+                assert!(make_view(&controller).unwrap().status.can_start);
+                assert_eq!(read_descriptor_at_port(&project, port).unwrap().state, "stopped");
+            }));
+            if controller.child_state().unwrap().running {
+                // Only this exact synthetic child tree if assertions failed.
+                let _ = Command::new("taskkill").args(["/PID", &pid.to_string(), "/T", "/F"])
+                    .stdout(Stdio::null()).stderr(Stdio::null()).status();
+                assert!(wait_for_child_exit(&controller, Duration::from_secs(10)));
+            }
+            if let Err(error) = outcome { std::panic::resume_unwind(error); }
+        }
+    }
+
     fn fake_startup_child() -> ChildState<&'static str> {
         ChildState {
             child: Some("fake-owned-child"),
             pid: Some(4321),
+            launch_token: "fixture-launch".to_owned(),
             running: true,
             starting: true,
             safe_to_exit: false,
@@ -1240,6 +1515,7 @@ mod tests {
         let mut state = ChildState::<&str> {
             child: Some("fake-owned-child"),
             pid: Some(4321),
+            launch_token: "fixture-launch".to_owned(),
             running: true,
             starting: true,
             safe_to_exit: false,
@@ -1313,6 +1589,7 @@ mod tests {
             service: SERVICE_NAME.to_owned(),
             version: SERVICE_VERSION.to_owned(),
             pid: 4321,
+            parent_pid: 1234,
             port,
             instance_id: "fixture-instance".to_owned(),
             token: "fixture-token".to_owned(),
@@ -1396,6 +1673,8 @@ mod tests {
             settings: Mutex::new(settings),
             child: Mutex::new(ChildState::default()),
             action: Mutex::new(()),
+            #[cfg(test)]
+            test_port: PORT,
         };
         fs::write(path.with_extension("json.tmp"), b"partial interrupted rewrite")
             .expect("force unresolved write failure");
@@ -1437,6 +1716,8 @@ mod tests {
             settings: Mutex::new(saved),
             child: Mutex::new(ChildState::default()),
             action: Mutex::new(()),
+            #[cfg(test)]
+            test_port: PORT,
         };
         let resumed_view = make_view(&resumed_controller).expect("show post-relaunch safety lock");
         assert_eq!(resumed_view.status.state, "preserved");
@@ -1463,6 +1744,8 @@ mod tests {
             settings: Mutex::new(settings.clone()),
             child: Mutex::new(ChildState::default()),
             action: Mutex::new(()),
+            #[cfg(test)]
+            test_port: PORT,
         };
         fs::write(&settings_file, serde_json::to_vec(&settings).expect("serialize safety marker"))
             .expect("write saved settings");
@@ -1481,6 +1764,8 @@ mod tests {
             settings: Mutex::new(settings.clone()),
             child: Mutex::new(active_child),
             action: Mutex::new(()),
+            #[cfg(test)]
+            test_port: PORT,
         };
         assert!(clear_preserved_child_inner(&active_controller, true).is_err());
         assert!(active_controller.settings().expect("active marker retained").preserved_child.is_some());
@@ -1511,6 +1796,7 @@ mod tests {
         let mut state = ChildState::<&str> {
             child: None,
             pid: None,
+            launch_token: String::new(),
             running: false,
             starting: true,
             safe_to_exit: false,

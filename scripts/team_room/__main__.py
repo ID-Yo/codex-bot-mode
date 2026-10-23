@@ -18,6 +18,8 @@ from scripts.office_desktop import DesktopLifecycle, LifecycleBusy, inspect_shut
 
 
 def main():
+    # Consume before spawning Codex so the launch secret stays in the service.
+    launch_token = os.environ.pop('CODEX_OFFICE_LAUNCH_TOKEN', None)
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--codex-path', type=Path)
     parser.add_argument('--port', type=int, default=24242, help='Loopback port (default: 24242; 0 selects a test port)')
@@ -94,7 +96,7 @@ def main():
         controller.close()
         raise
     lifecycle = (DesktopLifecycle(runtime,version=(runtime_identity or {}).get('runtime_version','0.1.0'),
-                                  runtime_identity=runtime_identity) if args.desktop_managed else None)
+                                  runtime_identity=runtime_identity, token=launch_token) if args.desktop_managed else None)
     try:
         server = (create_server(controller,args.port,desktop_lifecycle=lifecycle) if lifecycle
                   else create_server(controller,args.port))

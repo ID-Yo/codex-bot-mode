@@ -83,7 +83,7 @@ class NativeSourceContractTests(unittest.TestCase):
         self.assertIn("is_link_or_reparse", inspection)
         self.assertNotIn("fs::create_dir_all(", body)
         self.assertIn("FILE_ATTRIBUTE_REPARSE_POINT", self.source)
-        descriptor = function_body(self.source, "read_descriptor")
+        descriptor = function_body(self.source, "read_descriptor_at_port")
         self.assertLess(descriptor.index("checked_existing_runtime(project)"), descriptor.index("fs::read("))
         self.assertIn("checked_existing_runtime(&project)", body)
         fixture = function_body(self.source, "runtime_refuses_a_link_at_each_existing_component_before_creating_children")
@@ -108,7 +108,8 @@ class NativeSourceContractTests(unittest.TestCase):
         self.assertIn('health.get("state").and_then(Value::as_str) != Some("running")', probes)
         self.assertGreaterEqual(probes.count("identity_matches(descriptor"), 2)
         wait = function_body(self.source, "wait_for_startup")
-        self.assertIn("verify_startup_probes(&descriptor)", wait)
+        polling = function_body(self.source, "wait_for_descriptor")
+        self.assertIn("verify_startup_probes(&descriptor)", polling)
         self.assertLess(wait.index("let view = make_view(controller)?"), wait.index("child.startup_error = None"))
         self.assertIn('view.status.state != "running"', wait)
 
@@ -174,7 +175,7 @@ class NativeSourceContractTests(unittest.TestCase):
         self.assertIn("invoke('clear_preserved_child', { confirmedstopped: true })", ui)
         self.assertIn("invoke('quit_preserved_controller', { confirmed: true })", ui)
         status = function_body(self.source, "status_for")
-        self.assertLess(status.index("settings.preserved_child"), status.index("read_descriptor(project)"))
+        self.assertLess(status.index("settings.preserved_child"), status.index("read_descriptor_at_port(project,"))
         self.assertIn('status_template("preserved"', function_body(self.source, "preserved_child_status"))
         self.assertIn("no_tracked_child", status)
 
