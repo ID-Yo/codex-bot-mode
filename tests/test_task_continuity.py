@@ -146,6 +146,24 @@ class ContinuityTests(unittest.TestCase):
             self.assertEqual(delivery.returncode, 0, delivery.stderr)
             self.assertEqual(monitor_checkpoint.load_checkpoint(state)["delivery_status"], "delivery_unknown")
 
+    def test_monitor_audit_cli_ok_reflects_whole_cycle(self):
+        import contextlib, io
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as temp:
+            source, state = Path(temp) / "snapshot.json", Path(temp) / "STATE.md"
+            data = snapshot()
+            data["monitor_audit"] = monitor_audit(datetime.now(timezone.utc))
+            data["monitor_audit"]["status"] = "started"
+            source.write_text(json.dumps(data), encoding="utf-8")
+            out = io.StringIO()
+            with mock.patch.object(tc, "check", return_value={"ok": True, "findings": []}), \
+                    contextlib.redirect_stdout(out):
+                code = tc.main(["monitor-audit", "--file", str(source), "--state-file", str(state), "--run-id", "run-current"])
+            payload = json.loads(out.getvalue())
+            self.assertEqual(code, 1)
+            self.assertFalse(payload["audit_complete"])
+            self.assertFalse(payload["ok"])
+
     def test_bounded_checkpoint_read_omits_large_history_and_memory(self):
         import monitor_checkpoint
         with tempfile.TemporaryDirectory() as temp:

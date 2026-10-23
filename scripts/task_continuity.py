@@ -1077,8 +1077,9 @@ def main(argv=None):
         except Exception as error:
             print(f"ERROR: {error}", file=sys.stderr)
             return 1
+        overall_ok = cycle["ok"] if cycle else result["ok"]
         print(json.dumps({
-            "ok": result["ok"],
+            "ok": overall_ok,
             "audit_complete": complete,
             "findings": findings,
             "new_alerts": new_alerts,
@@ -1087,7 +1088,7 @@ def main(argv=None):
             "new_alerts_count": len(new_alerts),
             "limits": cycle["limits"] if cycle else result.get("limits"),
         }, indent=2))
-        return 0 if (cycle["ok"] if cycle else result["ok"]) else 1
+        return 0 if overall_ok else 1
     elif args.command == "snapshot":
         try:
             snap = produce_snapshot(args.project)
