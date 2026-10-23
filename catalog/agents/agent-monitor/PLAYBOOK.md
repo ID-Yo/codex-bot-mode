@@ -2,7 +2,7 @@
 
 ## Before starting
 
-Read the appointed project bot roster, configured Chief of Staff recipient, and canonical project status.
+Read the small `monitor-checkpoint` block at the beginning of your own `agent/STATE.md`; never dump full history into context. Read only the minimum roster, configured Chief of Staff recipient, and canonical project task records needed for this cycle. Do not read the Monitor memory file during initial recall; it is not an audit input. If additional context is needed, retrieve only a specific bounded section.
 Inspect thread status metadata; discard thread titles, summaries, and message content.
 If the configured `recipient` is empty, record status `setup_required` in `agent/STATE.md` and stop without emitting alerts.
 Reply in the requester's language; honor the requested artifact language.
@@ -21,6 +21,8 @@ Never claim independent acceptance from self-check.
 4. **Delivery State & Unknown Handling**: Record delivery outcome (`sent`, `acknowledged`, `unconfirmed`). If delivery outcome is unconfirmed, record `delivery_unknown` and avoid blind resends.
 5. **Restart Recovery**: Upon heartbeat wakeup or compaction recovery, read `agent/STATE.md` first to restore suppressed fingerprints.
 6. **Recovery Clearing**: When an agent transitions to `active`, `verified`, or `blocked`, clear the active alert fingerprint from `agent/STATE.md`.
+7. **Checkpoint placement and size**: Keep a compact machine-readable block at the beginning of `agent/STATE.md`, before narrative history, using `<!-- monitor-checkpoint` newline, one-line JSON, newline, `-->`. It contains run ID, audit status, coverage, unavailable scopes, observation/next-check times, active alert count, delivery status and bounded alert fingerprints. The encoded block is capped at 16 KiB. Keep other history below it; do not reread that history as initial context.
+8. **Bounded extraction**: Run `python -B scripts/monitor_checkpoint.py --state agent/STATE.md --memory agent/memory/README.md` to read at most 16 KiB from the checkpoint prefix and obtain memory file size without reading memory content. A missing/malformed/out-of-bound checkpoint is `unknown` and requires a fresh audit; do not infer success from an older timestamp.
 
 ## Task Follow-Through Rules
 
@@ -42,6 +44,10 @@ Canonical task ownership and follow-through policy originates in the public repo
      6. Contradictory authoritative and local tracking records in `both` tracking mode.
      7. Hygiene anomalies: unclosed tracker issues or unarchived worktrees for completed work, or orphan processes.
    - Invariants: Do not treat elapsed time alone as evidence of a stall; verify scoped task and current stage evidence. Missing access is UNKNOWN, not a violation. Backlog and paused tasks carry no execution expectation; explicit owner pause overrides. Deduplicate actionable reports solely to Chief of Staff in own `agent/STATE.md`; no project wakeups, interventions, model changes, or new schedules. No Product or Repository Mutations: Monitor writes solely to its own `agent/STATE.md` for checkpoint and deduplication bookkeeping. Monitor detects only and never executes cleanup.
+   - **Cycle completion**: Run `python -B scripts/task_continuity.py monitor-audit --file <fresh-snapshot.json> --state-file agent/STATE.md --run-id <current-invocation-id>` with the current invocation ID and status from supported scheduler metadata. A scheduled turn marked completed is not proof that this audit completed. Write `audit_status: complete` only when the checkpoint is fresh, belongs to this invocation, task coverage is complete, and no fresh second active invocation is observed. Missing/stale invocation metadata is `unknown`; stale `active` records do not prove concurrency. A fresh second active invocation fails the cycle.
+   - **Partial coverage**: Report findings for each task whose scope was actually inspected. Mark the cycle incomplete, list unobserved scopes, preserve their previous alert fingerprints, and do not report overall clean. Pause/backlog tasks remain excluded only when their current state was observed.
+   - **Failure escalation**: Any missing/unreadable input, malformed checkpoint, partial task coverage, concurrency ambiguity, or failed audit is a health finding. Persist the incomplete checkpoint and deduplicated finding, then send a concise failure report to the configured Chief of Staff including run ID, observed coverage, known task findings, unavailable scopes, delivery status and next check. After the messaging tool result, record delivery with `python -B scripts/monitor_checkpoint.py --state agent/STATE.md --set-delivery-status sent` (or `delivery_unknown`); never present a failed/unknown delivery as success or blindly resend an unconfirmed report.
+   - **Continuity ownership**: Monitor reports evidence; it does not wake a project agent. The Chief of Staff verifies the specific project task and routes the gap to its appointed Project Manager using the already-authorized internal handoff. That Manager decides and performs the permitted next stage, or records a blocker. Monitor verifies only a later independent observation; a sent alert is not proof the Manager resumed work.
 
 ## Quota Exhaustion Protocol
 

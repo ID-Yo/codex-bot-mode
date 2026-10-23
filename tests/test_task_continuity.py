@@ -16,6 +16,15 @@ AT = "2026-01-02T11:00:00Z"
 LATER = "2026-01-02T13:00:00Z"
 
 
+def monitor_audit(now):
+    observed = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+    return {"run_id": "run-current", "status": "complete", "coverage": "complete",
+            "observed_at": observed, "next_check_at": LATER, "covered_tasks": ["task-1"],
+            "unavailable_scopes": [],
+            "evidence": ["ref:current-run"],
+            "invocations": [{"run_id": "run-current", "status": "completed", "updated_at": observed}]}
+
+
 def snapshot():
     return {
         "version": 1, "reconciled_at": AT, "next_check_at": LATER,
@@ -48,6 +57,160 @@ class ContinuityTests(unittest.TestCase):
 
     def test_running_snapshot(self):
         self.assertTrue(self.check()["ok"])
+
+    def test_monitor_cycle_requires_fresh_complete_audit_and_current_invocation(self):
+        data = snapshot()
+        data["monitor_audit"] = monitor_audit(NOW)
+        self.assertTrue(tc.check_monitor_cycle(data, NOW, current_run_id="run-current")["ok"])
+
+        data["monitor_audit"]["status"] = "started"
+        incomplete = tc.check_monitor_cycle(data, NOW, current_run_id="run-current")
+        self.assertFalse(incomplete["ok"])
+        self.assertIn("audit_incomplete", {item["code"] for item in incomplete["findings"]})
+
+    def test_stale_active_invocation_is_unknown_not_concurrency(self):
+        data = snapshot()
+        audit = monitor_audit(NOW)
+        audit["invocations"].append({"run_id": "run-old", "status": "active", "updated_at": AT})
+        data["monitor_audit"] = audit
+        result = tc.check_monitor_cycle(data, NOW, current_run_id="run-current")
+        codes = {item["code"] for item in result["findings"]}
+        self.assertNotIn("concurrent_audit", codes)
+        self.assertIn("concurrency_unknown", codes)
+        self.assertFalse(result["ok"])
+
+    def test_fresh_second_active_invocation_is_concurrency(self):
+        data = snapshot()
+        audit = monitor_audit(NOW)
+        audit["invocations"].append({"run_id": "run-other", "status": "active", "updated_at": audit["observed_at"]})
+        data["monitor_audit"] = audit
+        result = tc.check_monitor_cycle(data, NOW, current_run_id="run-current")
+        self.assertIn("concurrent_audit", {item["code"] for item in result["findings"]})
+
+    def test_partial_coverage_keeps_findings_for_known_scoped_tasks(self):
+        data = snapshot()
+        data["tasks"][0]["handoffs"][0]["started_at"] = None
+        audit = monitor_audit(NOW)
+        audit["coverage"] = "partial"
+        data["monitor_audit"] = audit
+        result = tc.check_monitor_cycle(data, NOW, current_run_id="run-current")
+        codes = {item["code"] for item in result["findings"]}
+        self.assertIn("worker_not_started", codes)
+        self.assertIn("audit_incomplete", codes)
+        self.assertFalse(result["ok"])
+
+    def test_incomplete_audit_deduplicates_and_preserves_unobserved_findings(self):
+        with tempfile.TemporaryDirectory() as temp:
+            state_path = Path(temp) / "monitor-state.json"
+            state_path.write_text(json.dumps({"alert_ledger": {
+                "worker_not_started:unseen-task": {"status": "new", "detail": "preserve"}}}), encoding="utf-8")
+            finding = {"code": "audit_incomplete", "scope": "monitor", "detail": "Coverage partial"}
+            state, new = tc.update_monitor_state(state_path, [finding], complete=False, now=NOW)
+            self.assertEqual(state["last_status"], "audit_incomplete")
+            self.assertEqual(len(new), 1)
+            self.assertIn("worker_not_started:unseen-task", state["alert_ledger"])
+            state, new = tc.update_monitor_state(state_path, [finding], complete=False, now=NOW)
+            self.assertEqual(new, [])
+            self.assertEqual(state["alert_ledger"]["audit_incomplete:monitor"]["status"], "deduplicated")
+
+    def test_completed_audit_clears_findings_for_paused_task(self):
+        with tempfile.TemporaryDirectory() as temp:
+            state_path = Path(temp) / "monitor-state.json"
+            state_path.write_text(json.dumps({"alert_ledger": {
+                "worker_not_started:task-1": {"status": "new", "detail": "old"}}}), encoding="utf-8")
+            state, _ = tc.update_monitor_state(state_path, [], complete=True, now=NOW)
+            self.assertNotIn("worker_not_started:task-1", state["alert_ledger"])
+
+    def test_monitor_audit_cli_records_incomplete_as_failure(self):
+        with tempfile.TemporaryDirectory() as temp:
+            source, state = Path(temp) / "snapshot.json", Path(temp) / "STATE.md"
+            state.write_text("Existing narrative history.\\n", encoding="utf-8")
+            data = snapshot()
+            data["monitor_audit"] = monitor_audit(datetime.now(timezone.utc))
+            data["monitor_audit"]["status"] = "started"
+            source.write_text(json.dumps(data), encoding="utf-8")
+            code = tc.main(["monitor-audit", "--file", str(source), "--state-file", str(state), "--run-id", "run-current"])
+            self.assertEqual(code, 1)
+            import monitor_checkpoint
+            saved = monitor_checkpoint.load_checkpoint(state)
+            self.assertFalse(saved["audit_success"])
+            self.assertEqual(saved["last_status"], "audit_incomplete")
+            self.assertIn("audit_incomplete:monitor", saved["alert_ledger"])
+            self.assertEqual(saved["coverage"], "complete")
+            self.assertEqual(saved["run_id"], "run-current")
+            self.assertEqual(saved["unavailable_scopes"], [])
+            self.assertIn("Existing narrative history.", state.read_text(encoding="utf-8"))
+            delivery = subprocess.run([sys.executable, "-B", str(ROOT / "scripts" / "monitor_checkpoint.py"),
+                                       "--state", str(state), "--set-delivery-status", "delivery_unknown"],
+                                      capture_output=True, text=True)
+            self.assertEqual(delivery.returncode, 0, delivery.stderr)
+            self.assertEqual(monitor_checkpoint.load_checkpoint(state)["delivery_status"], "delivery_unknown")
+
+    def test_monitor_audit_cli_ok_reflects_whole_cycle(self):
+        import contextlib, io
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as temp:
+            source, state = Path(temp) / "snapshot.json", Path(temp) / "STATE.md"
+            data = snapshot()
+            data["monitor_audit"] = monitor_audit(datetime.now(timezone.utc))
+            data["monitor_audit"]["status"] = "started"
+            source.write_text(json.dumps(data), encoding="utf-8")
+            out = io.StringIO()
+            with mock.patch.object(tc, "check", return_value={"ok": True, "findings": []}), \
+                    contextlib.redirect_stdout(out):
+                code = tc.main(["monitor-audit", "--file", str(source), "--state-file", str(state), "--run-id", "run-current"])
+            payload = json.loads(out.getvalue())
+            self.assertEqual(code, 1)
+            self.assertFalse(payload["audit_complete"])
+            self.assertFalse(payload["ok"])
+
+    def test_bounded_checkpoint_read_omits_large_history_and_memory(self):
+        import monitor_checkpoint
+        with tempfile.TemporaryDirectory() as temp:
+            state_path = Path(temp) / "STATE.md"
+            memory_path = Path(temp) / "memory.md"
+            checkpoint = {"version": 1, "run_id": "run-1", "audit_status": "incomplete",
+                          "coverage": "partial", "observed_at": AT, "next_check_at": LATER,
+                          "active_alert_count": 2, "delivery_status": "delivery_unknown"}
+            state_path.write_text("<!-- monitor-checkpoint\n" + json.dumps(checkpoint) + "\n-->\n" +
+                                  ("PRIVATE_HISTORY_SENTINEL " * 55000), encoding="utf-8")
+            memory_path.write_text("PRIVATE_MEMORY_SENTINEL " * 8000, encoding="utf-8")
+            result = monitor_checkpoint.read_initial_context(state_path, memory_path)
+            rendered = json.dumps(result)
+            self.assertLess(len(rendered), 2048)
+            self.assertNotIn("PRIVATE_HISTORY_SENTINEL", rendered)
+            self.assertNotIn("PRIVATE_MEMORY_SENTINEL", rendered)
+            self.assertFalse(result["memory_loaded"])
+            self.assertEqual(result["memory_bytes"], memory_path.stat().st_size)
+            run = subprocess.run([sys.executable, "-B", str(ROOT / "scripts" / "monitor_checkpoint.py"),
+                                  "--state", str(state_path), "--memory", str(memory_path)],
+                                 capture_output=True, text=True)
+            self.assertEqual(run.returncode, 0)
+            self.assertLess(len(run.stdout), 2048)
+            self.assertNotIn("PRIVATE_MEMORY_SENTINEL", run.stdout)
+
+    def test_checkpoint_after_read_limit_is_unknown(self):
+        import monitor_checkpoint
+        with tempfile.TemporaryDirectory() as temp:
+            state_path = Path(temp) / "STATE.md"
+            state_path.write_text("HISTORY " * 50000 + "<!-- monitor-checkpoint\n{}\n-->", encoding="utf-8")
+            result = monitor_checkpoint.read_initial_context(state_path)
+            self.assertEqual(result["checkpoint_status"], "unknown")
+            self.assertLessEqual(result["state_bytes_read"], monitor_checkpoint.STATE_READ_LIMIT)
+
+    def test_markdown_checkpoint_update_preserves_history_and_ledger(self):
+        import monitor_checkpoint
+        with tempfile.TemporaryDirectory() as temp:
+            state_path = Path(temp) / "STATE.md"
+            history = "Old narrative history\\n" + ("past details\\n" * 1000)
+            state_path.write_text(history, encoding="utf-8")
+            state, _ = tc.update_monitor_state(state_path,
+                [{"code": "audit_incomplete", "scope": "monitor", "detail": "partial"}],
+                complete=False, now=NOW)
+            reread = monitor_checkpoint.load_checkpoint(state_path)
+            self.assertEqual(state["last_status"], "audit_incomplete")
+            self.assertIn("audit_incomplete:monitor", reread["alert_ledger"])
+            self.assertIn(history, state_path.read_text(encoding="utf-8"))
 
     def test_dispatch_and_ack_are_not_start(self):
         for ack in [None, AT]:
@@ -241,7 +404,7 @@ class CbmAuditWrapperTests(unittest.TestCase):
             snap_file = Path(temp) / "snap.json"
             state_file = Path(temp) / "state.json"
             snap_file.write_text(json.dumps(live_snapshot()), encoding="utf-8")
-
+            
             run = subprocess.run(
                 [sys.executable, "-B", str(ROOT / "scripts" / "task_continuity.py"), "audit",
                  "--file", str(snap_file), "--state-file", str(state_file)],
@@ -274,11 +437,11 @@ class CbmAuditWrapperTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             snap_file = Path(temp) / "snap.json"
             state_file = Path(temp) / "state.json"
-
+            
             bad_snap = live_snapshot()
             bad_snap["tasks"][0]["handoffs"][-1]["started_at"] = None
             snap_file.write_text(json.dumps(bad_snap), encoding="utf-8")
-
+            
             run1 = subprocess.run(
                 [sys.executable, "-B", str(ROOT / "scripts" / "task_continuity.py"), "audit",
                  "--file", str(snap_file), "--state-file", str(state_file)],
@@ -289,7 +452,7 @@ class CbmAuditWrapperTests(unittest.TestCase):
             fp = "worker_not_started:task-1"
             self.assertIn(fp, state1["alert_ledger"])
             self.assertEqual(state1["alert_ledger"][fp]["status"], "new")
-
+            
             run2 = subprocess.run(
                 [sys.executable, "-B", str(ROOT / "scripts" / "task_continuity.py"), "audit",
                  "--file", str(snap_file), "--state-file", str(state_file)],
@@ -298,10 +461,10 @@ class CbmAuditWrapperTests(unittest.TestCase):
             self.assertEqual(run2.returncode, 1)
             state2 = json.loads(state_file.read_text(encoding="utf-8"))
             self.assertEqual(state2["alert_ledger"][fp]["status"], "deduplicated")
-
+            
             bad_snap["tasks"][0]["next_check_at"] = "2020-01-01T00:00:00Z"
             snap_file.write_text(json.dumps(bad_snap), encoding="utf-8")
-
+            
             run3 = subprocess.run(
                 [sys.executable, "-B", str(ROOT / "scripts" / "task_continuity.py"), "audit",
                  "--file", str(snap_file), "--state-file", str(state_file)],
@@ -320,12 +483,12 @@ class CbmAuditWrapperTests(unittest.TestCase):
         spec = importlib.util.spec_from_file_location("odd_tc", str(odd_script))
         odd_tc = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(odd_tc)
-
+        
         res_cbm = tc.check(snapshot(), NOW)
         res_odd = odd_tc.check(snapshot(), NOW)
         self.assertEqual(res_cbm["ok"], res_odd["ok"])
         self.assertEqual(res_cbm["findings"], res_odd["findings"])
-
+        
         broken = snapshot()
         broken["tasks"][0]["status"] = "review"
         broken["tasks"][0]["candidate"] = {"id": "sha-1", "author": "builder"}
