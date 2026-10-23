@@ -6,6 +6,7 @@ import os
 import tempfile
 
 STATE_READ_LIMIT = 16 * 1024
+DELIVERY_STATUSES = {"sent", "acknowledged", "unconfirmed", "delivery_unknown", "not_attempted", "not_required"}
 FIELDS = ("version", "run_id", "audit_status", "coverage", "observed_at",
           "next_check_at", "active_alert_count", "delivery_status", "alert_ledger",
           "unavailable_scopes")
@@ -70,7 +71,7 @@ def save_checkpoint(path, data):
 
 
 def set_delivery_status(path, status):
-    if status not in {"sent", "acknowledged", "unconfirmed", "delivery_unknown"}:
+    if status not in DELIVERY_STATUSES:
         raise ValueError("Invalid delivery status")
     data = load_checkpoint(path)
     if not data:
@@ -118,7 +119,7 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--state", type=Path, required=True)
     parser.add_argument("--memory", type=Path)
-    parser.add_argument("--set-delivery-status", choices=("sent", "acknowledged", "unconfirmed", "delivery_unknown"))
+    parser.add_argument("--set-delivery-status", choices=sorted(DELIVERY_STATUSES))
     args = parser.parse_args(argv)
     try:
         if args.set_delivery_status:
