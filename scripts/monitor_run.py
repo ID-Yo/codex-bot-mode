@@ -6,7 +6,9 @@ Reads agent/monitoring.json, the project registry it names and each project's ta
 records, writes agent/snapshots/run-<id>.json, runs the audit and records the checkpoint
 (run ID, status, coverage, delivery_status). Prints one compact JSON object; the model only
 delivers report_text when report_required is true and then records the delivery result.
-All output is English. Private memory, chats and transcripts are never read.
+Concurrency is checked first and on every path. Every failure is an incomplete audit with a
+report to the recipient from monitoring.json. All output is English. Private memory, chats
+and transcripts are never read.
 """
 import argparse
 import json
@@ -19,10 +21,30 @@ import monitor_checkpoint
 import task_continuity as tc
 
 MAX_FINDINGS = 12
+MARKERS = (b"Automation: Agent Monitor", b"agent-monitor-20-minutes")
+SCAN_LIMIT = 4 * 1024 * 1024
+CHUNK = 256 * 1024
 
 
 def utc(value):
     return value.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def has_marker(path):
+    """Marker search over the whole (bounded) file; the position of the marker does not matter."""
+    keep = max(len(marker) for marker in MARKERS) - 1
+    tail, seen = b"", 0
+    with path.open("rb") as stream:
+        while seen < SCAN_LIMIT:
+            chunk = stream.read(CHUNK)
+            if not chunk:
+                return False
+            seen += len(chunk)
+            window = tail + chunk
+            if any(marker in window for marker in MARKERS):
+                return True
+            tail = window[-keep:]
+    return False
 
 
 def other_invocations(sessions_root, run_id, now):
@@ -38,17 +60,18 @@ def other_invocations(sessions_root, run_id, now):
             continue
         for path in folder.glob("rollout-*.jsonl"):
             try:
-                stamp = datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc)
+                stat = path.stat()
+                stamp = datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc)
                 if run_id in path.name or (now - stamp).total_seconds() > 120 or stamp > now + timedelta(seconds=5):
                     continue
                 with path.open("rb") as stream:
-                    head = stream.read(6000)
-                    stream.seek(max(0, path.stat().st_size - 8000))
+                    stream.seek(max(0, stat.st_size - 8000))
                     tail = stream.read()
+                finished = b'"task_complete"' in tail
+                if not finished and has_marker(path):
+                    rows.append({"run_id": path.stem.split("-", 7)[-1], "status": "active", "updated_at": utc(stamp)})
             except OSError:
                 continue
-            if b"Automation: Agent Monitor" in head and b'"task_complete"' not in tail:
-                rows.append({"run_id": path.stem.split("-", 7)[-1], "status": "active", "updated_at": utc(stamp)})
     return rows
 
 
@@ -68,23 +91,33 @@ def project_tasks(pid, root):
     return tasks
 
 
-def build(monitor_dir, run_id, now, sessions_root):
+def load_config(monitor_dir):
     config = json.loads((monitor_dir / "agent" / "monitoring.json").read_text(encoding="utf-8-sig"))
+    if not isinstance(config, dict):
+        raise ValueError("monitoring.json must be an object")
+    return config
+
+
+def build(config, run_id, now, invocations, invocations_available):
     registry = json.loads(Path(config["registry_path"]).read_text(encoding="utf-8-sig"))
     interval = int(config.get("interval_minutes", 20))
     tasks, unavailable, covered_projects = [], [], 0
-    projects = [p for p in registry.get("projects", []) if isinstance(p, dict) and p.get("id") and p.get("root")]
-    for project in projects:
+    rows = registry.get("projects", [])
+    if not isinstance(rows, list):
+        raise ValueError("registry projects must be a list")
+    for index, project in enumerate(rows):
+        pid = project.get("id") if isinstance(project, dict) else None
+        root = project.get("root") if isinstance(project, dict) else None
+        if not isinstance(pid, str) or not pid or not isinstance(root, str) or not root:
+            unavailable.append(f"registry-entry:{pid if isinstance(pid, str) and pid else index} (missing id or root)")
+            continue
         try:
-            tasks.extend(project_tasks(project["id"], project["root"]))
+            tasks.extend(project_tasks(pid, root))
             covered_projects += 1
         except Exception as error:
-            unavailable.append(f"project:{project['id']} ({type(error).__name__})")
-    invocations = other_invocations(sessions_root, run_id, now)
-    if invocations is None:
+            unavailable.append(f"project:{pid} ({type(error).__name__})")
+    if not invocations_available:
         unavailable.append("invocation-metadata")
-        invocations = []
-    invocations.append({"run_id": run_id, "status": "active", "updated_at": utc(now)})
     later = utc(now + timedelta(minutes=interval + 10))
     snapshot = {
         "version": 1, "reconciled_at": utc(now), "next_check_at": later,
@@ -96,9 +129,9 @@ def build(monitor_dir, run_id, now, sessions_root):
             "coverage": "complete" if not unavailable else "partial",
             "observed_at": utc(now), "next_check_at": later,
             "covered_tasks": [task["id"] for task in tasks], "unavailable_scopes": unavailable,
-            "evidence": [f"ref:monitor-run:{run_id}", f"ref:registry-projects:{covered_projects}/{len(projects)}"],
-            "invocations": invocations}}
-    return config, snapshot, {"projects": len(projects), "projects_covered": covered_projects}
+            "evidence": [f"ref:monitor-run:{run_id}", f"ref:registry-projects:{covered_projects}/{len(rows)}"],
+            "invocations": [*invocations, {"run_id": run_id, "status": "active", "updated_at": utc(now)}]}}
+    return snapshot, {"projects": len(rows), "projects_covered": covered_projects}
 
 
 def report_text(run_id, complete, coverage, unavailable, findings, state_file, next_check):
@@ -117,45 +150,61 @@ def run(monitor_dir, run_id, now=None, sessions_root=None):
     now = now or datetime.now(timezone.utc)
     monitor_dir = Path(monitor_dir).resolve()
     sessions_root = sessions_root or Path.home() / ".codex" / "sessions"
-    shared = monitor_dir / "agent" / "STATE.md"
-    build_error = None
+    safe_id = re.sub(r"[^A-Za-z0-9._-]", "_", run_id)[:100]
+    # 1. Concurrency first, independent of everything else.
     try:
-        config, snapshot, stats = build(monitor_dir, run_id, now, sessions_root)
+        invocations = other_invocations(sessions_root, run_id, now)
+    except Exception:
+        invocations = None
+    available = invocations is not None
+    concurrent = bool(invocations)
+    # 2. Recipient and configuration, independent of the registry.
+    config, extra = {}, []
+    try:
+        config = load_config(monitor_dir)
+    except Exception as error:
+        extra.append({"code": "config_unavailable", "scope": "monitor",
+                      "detail": f"agent/monitoring.json could not be read ({type(error).__name__}); no report recipient"})
+    # 3. Snapshot.
+    snapshot, stats, build_error = None, {"projects": 0, "projects_covered": 0}, None
+    try:
+        if not config:
+            raise ValueError("no configuration")
+        snapshot, stats = build(config, run_id, now, invocations or [], available)
     except Exception as error:
         build_error = type(error).__name__
-        config, snapshot, stats = {}, None, {"projects": 0, "projects_covered": 0}
-    private = False
     snapshot_path = None
     if snapshot is not None:
         folder = monitor_dir / "agent" / "snapshots"
         folder.mkdir(parents=True, exist_ok=True)
-        snapshot_path = folder / f"run-{re.sub(r'[^A-Za-z0-9._-]', '_', run_id)[:100]}.json"
+        snapshot_path = folder / f"run-{safe_id}.json"
         snapshot_path.write_text(json.dumps(snapshot, indent=2) + "\n", encoding="utf-8")
         cycle = tc.check_monitor_cycle(snapshot, now, current_run_id=run_id)
-        private = any(f["code"] == "concurrent_audit" for f in cycle["findings"])
-        findings, complete = cycle["findings"], cycle["audit_complete"]
+        findings, complete = [*extra, *cycle["findings"]], cycle["audit_complete"]
+        concurrent = concurrent or any(f["code"] == "concurrent_audit" for f in cycle["findings"])
     else:
-        findings = [{"code": "snapshot_build_failed", "scope": "monitor", "detail": f"Snapshot could not be built ({build_error})"},
+        findings = [*extra, {"code": "snapshot_build_failed", "scope": "monitor",
+                             "detail": f"Snapshot could not be built ({build_error})"},
                     {"code": "audit_incomplete", "scope": "monitor", "detail": "Audit did not complete"}]
+        if concurrent:
+            findings.append({"code": "concurrent_audit", "scope": "monitor", "detail": "Another fresh monitor invocation is active"})
         complete = False
-    state_file = monitor_dir / "agent" / (f"run-{re.sub(r'[^A-Za-z0-9._-]', '_', run_id)[:100]}-state.md" if private else "STATE.md")
-    if not private and not shared.exists():
-        shared.parent.mkdir(parents=True, exist_ok=True)
+    state_file = monitor_dir / "agent" / (f"run-{safe_id}-state.md" if concurrent else "STATE.md")
     state, new_alerts = tc.update_monitor_state(state_file, findings, snapshot, now, complete=complete, run_id=run_id)
     audit = (snapshot or {}).get("monitor_audit", {})
     unavailable = audit.get("unavailable_scopes") or (["snapshot"] if snapshot is None else [])
     coverage = audit.get("coverage", "none")
     report = (not complete) or bool(new_alerts)
     state["delivery_status"] = "not_attempted" if report else "not_required"
-    monitor_checkpoint.save_checkpoint(state_file, {k: v for k, v in state.items()})
-    ok = complete and not findings
+    monitor_checkpoint.save_checkpoint(state_file, dict(state))
     text = report_text(run_id, complete, coverage, unavailable, new_alerts if complete else findings,
                        state_file.name, audit.get("next_check_at", "unknown")) if report else None
-    return {"ok": ok, "audit_complete": complete, "run_id": run_id, "snapshot_path": str(snapshot_path) if snapshot_path else None,
+    return {"ok": complete and not findings, "audit_complete": complete, "run_id": run_id,
+            "snapshot_path": str(snapshot_path) if snapshot_path else None,
             "coverage": coverage, "projects": stats["projects"], "projects_covered": stats["projects_covered"],
             "tasks": len((snapshot or {}).get("tasks", [])), "unavailable_scopes": unavailable,
             "findings": [{"code": f["code"], "scope": f["scope"]} for f in findings[:MAX_FINDINGS]],
-            "new_alerts": len(new_alerts), "state_file": str(state_file), "private_state": private,
+            "new_alerts": len(new_alerts), "state_file": str(state_file), "private_state": concurrent,
             "report_required": report, "report_thread_id": config.get("report_target_thread_id") if report else None,
             "report_text": text, "delivery_status": state["delivery_status"]}
 

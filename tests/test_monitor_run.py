@@ -55,6 +55,13 @@ class Fixture:
     def checkpoint(self, name="STATE.md"):
         return monitor_checkpoint.load_checkpoint(self.monitor / "agent" / name)
 
+    def other_session(self, preface=0, finished=False):
+        local = datetime.now()
+        folder = self.sessions / f"{local:%Y}" / f"{local:%m}" / f"{local:%d}"
+        folder.mkdir(parents=True, exist_ok=True)
+        body = "x" * preface + '\n{"text":"Automation: Agent Monitor"}\n' + ('{"type":"task_complete"}\n' if finished else "")
+        (folder / "rollout-2026-10-23T20-00-00-other-thread.jsonl").write_text(body, encoding="utf-8")
+
 
 class MonitorRunTests(unittest.TestCase):
     def test_complete_quiet_cycle_builds_snapshot_and_records_checkpoint(self):
@@ -127,6 +134,69 @@ class MonitorRunTests(unittest.TestCase):
         self.assertIn("snapshot_build_failed", {f["code"] for f in result["findings"]})
         saved = fx.checkpoint()
         self.assertEqual((saved["run_id"], saved["audit_status"], saved["delivery_status"]), ("run-bad", "incomplete", "not_attempted"))
+
+    def test_build_failure_with_fresh_second_audit_uses_private_state_and_reports(self):
+        fx = Fixture(self)
+        fx.write()
+        (fx.dir / "registry.json").write_text("not json", encoding="utf-8")
+        fx.other_session()
+        before = (fx.monitor / "agent" / "STATE.md").read_bytes()
+        result = fx.run("run-bad", now=datetime.now(timezone.utc))
+        self.assertTrue(result["private_state"])
+        self.assertIn("concurrent_audit", {f["code"] for f in result["findings"]})
+        self.assertTrue(result["report_required"])
+        self.assertEqual(result["report_thread_id"], "thread-cos")
+        self.assertEqual((fx.monitor / "agent" / "STATE.md").read_bytes(), before)
+        self.assertEqual(fx.checkpoint("run-run-bad-state.md")["run_id"], "run-bad")
+
+    def test_second_audit_marker_far_into_the_file_is_still_detected(self):
+        fx = Fixture(self)
+        fx.project("alpha")
+        fx.write()
+        fx.other_session(preface=600000)
+        before = (fx.monitor / "agent" / "STATE.md").read_bytes()
+        result = fx.run(now=datetime.now(timezone.utc))
+        self.assertTrue(result["private_state"])
+        self.assertFalse(result["audit_complete"])
+        self.assertTrue(result["report_required"])
+        self.assertEqual((fx.monitor / "agent" / "STATE.md").read_bytes(), before)
+
+    def test_finished_other_audit_is_not_concurrency(self):
+        fx = Fixture(self)
+        fx.project("alpha")
+        fx.write()
+        fx.other_session(preface=9000, finished=True)
+        self.assertFalse(fx.run(now=datetime.now(timezone.utc))["private_state"])
+
+    def test_corrupt_registry_still_reports_to_recipient_from_monitoring_json(self):
+        fx = Fixture(self)
+        fx.write()
+        (fx.dir / "registry.json").write_text("{broken", encoding="utf-8")
+        result = fx.run()
+        self.assertFalse(result["audit_complete"])
+        self.assertTrue(result["report_required"])
+        self.assertEqual(result["report_thread_id"], "thread-cos")
+        self.assertIn("snapshot_build_failed", {f["code"] for f in result["findings"]})
+
+    def test_unreadable_configuration_is_reported_as_missing_recipient(self):
+        fx = Fixture(self)
+        result = fx.run()
+        self.assertFalse(result["audit_complete"])
+        self.assertTrue(result["report_required"])
+        self.assertIsNone(result["report_thread_id"])
+        self.assertIn("config_unavailable", {f["code"] for f in result["findings"]})
+        self.assertIn("no report recipient", result["report_text"])
+
+    def test_registry_entry_without_root_is_an_unavailable_scope(self):
+        fx = Fixture(self)
+        fx.project("alpha")
+        fx.write({"schema": 1, "projects": [*fx.projects, {"id": "norot", "name": "No root"}, {"name": "No id", "root": "x"}], "standalone": []})
+        result = fx.run(now=datetime.now(timezone.utc))
+        self.assertFalse(result["audit_complete"])
+        self.assertEqual((result["projects"], result["projects_covered"]), (3, 1))
+        self.assertTrue(any(s.startswith("registry-entry:norot") for s in result["unavailable_scopes"]))
+        self.assertTrue(any(s.startswith("registry-entry:2") for s in result["unavailable_scopes"]))
+        self.assertTrue(result["report_required"])
 
     def test_cli_prints_compact_json_only(self):
         fx = Fixture(self)
