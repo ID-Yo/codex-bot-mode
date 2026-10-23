@@ -32,34 +32,39 @@ def request(descriptor, method, path):
         connection.close()
 
 
+def make_project(project, layout):
+    metadata = project / '.bot-mode'
+    metadata.mkdir()
+    if layout == 'legacy':
+        workspace, bot_id = 'agents/project-manager', 'project-manager'
+        profile = project / workspace
+        helper = project / 'scripts/bot_mode.py'
+        helper_source = ROOT / 'scripts/bot_mode.py'
+    else:
+        workspace, bot_id = 'team/Development/developer', 'developer'
+        profile = project / workspace / 'agent'
+        helper = project / workspace / 'scripts/bot_mode.py'
+        helper_source = ROOT / 'packages/project-manager-v1/scripts/bot_mode.py'
+    (profile / 'memory').mkdir(parents=True)
+    for name, content in {'BASE.md': '# Base', 'SOUL.md': '# Soul',
+                          'PROFILE.md': f'# Profile\n- Bot ID: `{bot_id}`',
+                          'memory/README.md': '# Memory contract'}.items():
+        (profile / name).write_text(content, encoding='utf-8')
+    helper.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(helper_source, helper)
+    roster = {'schema': 1, 'project': {'name': 'profile-smoke'},
+              'teams': [{'name': 'Development'}],
+              'participants': [{'bot': 'developer', 'bot_id': bot_id,
+                                'role': 'Developer', 'team': 'Development',
+                                'workspace': workspace, 'status': 'active'}]}
+    (metadata / 'roster.json').write_text(json.dumps(roster), encoding='utf-8')
+
+
 def check(sidecar, fixture, layout):
     with tempfile.TemporaryDirectory(prefix='office-profile-smoke-') as folder:
         project = Path(folder)
+        make_project(project, layout)
         metadata = project / '.bot-mode'
-        metadata.mkdir()
-        if layout == 'legacy':
-            workspace, bot_id = 'agents/project-manager', 'project-manager'
-            profile = project / workspace
-            helper = project / 'scripts/bot_mode.py'
-            helper_source = ROOT / 'scripts/bot_mode.py'
-        else:
-            workspace, bot_id = 'team/Development/developer', 'developer'
-            profile = project / workspace / 'agent'
-            helper = project / workspace / 'scripts/bot_mode.py'
-            helper_source = ROOT / 'packages/project-manager-v1/scripts/bot_mode.py'
-        (profile / 'memory').mkdir(parents=True)
-        for name, content in {'BASE.md': '# Base', 'SOUL.md': '# Soul',
-                              'PROFILE.md': f'# Profile\n- Bot ID: `{bot_id}`',
-                              'memory/README.md': '# Memory contract'}.items():
-            (profile / name).write_text(content, encoding='utf-8')
-        helper.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(helper_source, helper)
-        roster = {'schema': 1, 'project': {'name': 'profile-smoke'},
-                  'teams': [{'name': 'Development'}],
-                  'participants': [{'bot': 'developer', 'bot_id': bot_id,
-                                    'role': 'Developer', 'team': 'Development',
-                                    'workspace': workspace, 'status': 'active'}]}
-        (metadata / 'roster.json').write_text(json.dumps(roster), encoding='utf-8')
         runtime = metadata / 'team-room-v1/smoke'
         flags = subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
         # stdout contains a local descriptor; keep it out of test output.

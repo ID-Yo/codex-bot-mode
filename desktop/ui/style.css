@@ -30,7 +30,13 @@ body {
 button { font: inherit; }
 
 .shell {
-  width: min(100%, 680px);
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr);
+  grid-template-areas: "brand brand" "service setup" "actions logs" "footer footer";
+  gap: 16px;
+  align-content: start;
+  align-items: start;
+  width: min(100%, 1200px);
   min-height: 100vh;
   margin: 0 auto;
   padding: 27px 34px 20px;
@@ -40,6 +46,12 @@ button { font: inherit; }
 .button-row { display: flex; align-items: center; }
 
 .topbar { gap: 13px; padding-bottom: 24px; }
+.topbar { grid-area: brand; padding-bottom: 8px; }
+.service-panel { grid-area: service; }
+.setup-panel { grid-area: setup; }
+.actions-panel { grid-area: actions; }
+.logs-panel { grid-area: logs; min-width: 0; }
+.footer { grid-area: footer; }
 
 .brand-mark {
   display: grid;
@@ -66,7 +78,7 @@ h2 { margin: 0; font-size: 15px; font-weight: 650; letter-spacing: -.015em; }
 .version { color: #929893; font-size: 11px; }
 
 .service-panel, .setup-panel, .actions-panel, .logs-panel {
-  margin-bottom: 13px;
+  margin-bottom: 0;
   padding: 18px 19px;
   border: 1px solid #e8ece9;
   border-radius: 15px;
@@ -86,6 +98,7 @@ h2 { margin: 0; font-size: 15px; font-weight: 650; letter-spacing: -.015em; }
 .status-badge[data-state="unhealthy"], .status-badge[data-state="unverified"] { color: var(--red); background: #f8e9e8; }
 .status-badge[data-state="unhealthy"] .status-dot, .status-badge[data-state="unverified"] .status-dot { background: #c96864; }
 .status-detail { margin: 0 0 14px; color: var(--muted); font-size: 11px; line-height: 1.5; }
+.status-detail, .action-message { overflow-wrap: anywhere; }
 .endpoint-row { gap: 7px; min-height: 33px; padding-top: 10px; border-top: 1px solid var(--line); color: #818983; font-size: 10px; }
 .endpoint-light { width: 6px; height: 6px; border: 1px solid #b7c1ba; border-radius: 50%; }
 .endpoint-row code { margin-left: auto; color: #4f5952; font-family: ui-monospace, Consolas, monospace; font-size: 10px; }
@@ -121,11 +134,16 @@ h2 { margin: 0; font-size: 15px; font-weight: 650; letter-spacing: -.015em; }
 
 .logs-panel { margin-bottom: 0; padding: 15px 17px 13px; }
 .logs-heading { margin-bottom: 8px; }
-.logs { overflow: auto; height: 83px; margin: 0; padding: 9px 10px; border-radius: 7px; color: #66716a; background: #f6f8f6; font-family: ui-monospace, Consolas, monospace; font-size: 9px; line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; }
+.logs { overflow: auto; height: 220px; margin: 0; padding: 9px 10px; border-radius: 7px; color: #66716a; background: #f6f8f6; font-family: ui-monospace, Consolas, monospace; font-size: 9px; line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; }
 .footer { justify-content: space-between; gap: 10px; padding: 13px 3px 0; color: #939a95; font-size: 9px; }
 .quit-button { color: #717a74; font-size: 9px; }
 .toast { position: fixed; right: 24px; bottom: 24px; z-index: 2; width: min(420px, calc(100vw - 32px)); padding: 13px 15px; border: 1px solid #e8c5c2; border-radius: 10px; color: #763d3b; background: #fff5f4; box-shadow: 0 12px 38px rgba(58,36,34,.14); font-size: 11px; line-height: 1.45; }
 [hidden] { display: none !important; }
+
+@media (max-width: 800px) {
+  .shell { grid-template-columns: minmax(0, 1fr); grid-template-areas: "brand" "service" "actions" "setup" "logs" "footer"; }
+  .logs { height: 110px; }
+}
 
 @media (max-width: 560px) {
   body { min-width: 0; }

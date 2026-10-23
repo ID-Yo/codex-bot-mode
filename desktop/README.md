@@ -138,3 +138,27 @@ python -B desktop/tests/smoke_packaged_profiles.py --sidecar <built-office-servi
 This check does not claim real Desktop/provider, interactive installer, tray or
 uninstall acceptance. The native controller's startup failure message remains
 generic; richer sanitized diagnostics are a separate follow-up.
+
+
+## Controller 0.1.3 startup and landscape layout
+
+The wide desktop window places service controls and project diagnostics in two
+columns, with a compact single-column fallback. Start uses a preissued secret
+to bind the service worker to its actual launcher when their PIDs differ.
+Authenticated status has a ten-second read budget. Unknown shutdown safety
+permits opening a healthy Office in Chrome while Stop and Restart remain disabled.
+
+The native regression runner is `desktop/tests/smoke_native_packaged.py`. Compile
+`desktop/tests/fixture_codex.c` to a scratch `fixture_codex.exe`, build the service
+and Rust test executable, then run:
+
+```powershell
+python -B desktop/tests/smoke_native_packaged.py --rust-tests <rust-test-executable> --sidecar <built-service.exe> --codex-fixture <scratch/fixture_codex.exe>
+```
+
+This explicitly executes the otherwise ignored native packaged test for both real
+helper layouts, covering actual Rust startup, Running controls, safe stop and
+second-launch recovery on an isolated port. Browser UI mocks are a separate check.
+Synthetic evidence does not establish real provider or interactive installer,
+tray and uninstall acceptance. Existing profiles still require explicit update
+preview and Apply; installing the controller alone does not update profiles.
