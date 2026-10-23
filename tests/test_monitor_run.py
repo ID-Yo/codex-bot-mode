@@ -17,6 +17,10 @@ import task_continuity as tc
 NOW = datetime(2026, 10, 23, 19, 0, tzinfo=timezone.utc)
 
 
+def stamp(value):
+    return value.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
 class Fixture:
     def __init__(self, test):
         self.dir = Path(tempfile.mkdtemp())
@@ -24,8 +28,6 @@ class Fixture:
         self.monitor = self.dir / "monitor"
         (self.monitor / "agent").mkdir(parents=True)
         (self.monitor / "agent" / "STATE.md").write_text("Narrative history.\n", encoding="utf-8")
-        self.sessions = self.dir / "sessions"
-        self.sessions.mkdir()
         self.projects = []
 
     def project(self, pid, tasks=False, exists=True):
@@ -50,17 +52,16 @@ class Fixture:
             "report_target_thread_id": "thread-cos", "registry_path": str(registry_path), "interval_minutes": 20}), encoding="utf-8")
 
     def run(self, run_id="run-1", now=NOW):
-        return monitor_run.run(self.monitor, run_id, now=now, sessions_root=self.sessions)
+        return monitor_run.run(self.monitor, run_id, now=now)
 
     def checkpoint(self, name="STATE.md"):
         return monitor_checkpoint.load_checkpoint(self.monitor / "agent" / name)
 
-    def other_session(self, preface=0, finished=False):
-        local = datetime.now()
-        folder = self.sessions / f"{local:%Y}" / f"{local:%m}" / f"{local:%d}"
-        folder.mkdir(parents=True, exist_ok=True)
-        body = "x" * preface + '\n{"text":"Automation: Agent Monitor"}\n' + ('{"type":"task_complete"}\n' if finished else "")
-        (folder / "rollout-2026-10-23T20-00-00-other-thread.jsonl").write_text(body, encoding="utf-8")
+    def lease(self, run_id="other", status="active", age=5, now=NOW, raw=None):
+        runs = self.monitor / "agent" / "runs"
+        runs.mkdir(exist_ok=True)
+        text = raw if raw is not None else json.dumps({"run_id": run_id, "status": status, "updated_at": stamp(now - timedelta(seconds=age))})
+        (runs / f"{run_id}.lease.json").write_text(text, encoding="utf-8")
 
 
 class MonitorRunTests(unittest.TestCase):
@@ -75,11 +76,12 @@ class MonitorRunTests(unittest.TestCase):
         self.assertEqual((result["coverage"], result["projects"], result["projects_covered"], result["tasks"]), ("complete", 2, 2, 1))
         self.assertFalse(result["report_required"])
         self.assertIsNone(result["report_text"])
-        self.assertTrue(Path(result["snapshot_path"]).exists())
         self.assertEqual(json.loads(Path(result["snapshot_path"]).read_text())["tasks"][0]["id"], "alpha/T-1")
         saved = fx.checkpoint()
         self.assertEqual((saved["run_id"], saved["audit_status"], saved["delivery_status"]), ("run-1", "complete", "not_required"))
         self.assertIn("Narrative history.", (fx.monitor / "agent" / "STATE.md").read_text(encoding="utf-8"))
+        lease = json.loads((fx.monitor / "agent" / "runs" / "run-1.lease.json").read_text())
+        self.assertEqual(lease["status"], "finished")
 
     def test_unavailable_project_makes_incomplete_report_with_english_text(self):
         fx = Fixture(self)
@@ -97,31 +99,69 @@ class MonitorRunTests(unittest.TestCase):
         self.assertEqual(fx.checkpoint()["delivery_status"], "not_attempted")
         self.assertEqual(fx.checkpoint()["audit_status"], "incomplete")
 
-    def test_second_fresh_active_audit_uses_private_state_and_leaves_shared_state(self):
+    def test_second_fresh_lease_uses_private_state_and_leaves_shared_state(self):
         fx = Fixture(self)
         fx.project("alpha")
         fx.write()
-        local = datetime.now()
-        folder = fx.sessions / f"{local:%Y}" / f"{local:%m}" / f"{local:%d}"
-        folder.mkdir(parents=True)
-        other = folder / "rollout-2026-10-23T20-00-00-other-thread.jsonl"
-        other.write_text('{"text":"Automation: Agent Monitor"}\n', encoding="utf-8")
+        fx.lease()
         before = (fx.monitor / "agent" / "STATE.md").read_bytes()
-        result = fx.run(now=datetime.now(timezone.utc))
+        result = fx.run()
         self.assertTrue(result["private_state"])
         self.assertIn("concurrent_audit", {f["code"] for f in result["findings"]})
         self.assertTrue(result["report_required"])
         self.assertEqual((fx.monitor / "agent" / "STATE.md").read_bytes(), before)
         self.assertEqual(fx.checkpoint("run-run-1-state.md")["run_id"], "run-1")
 
-    def test_missing_sessions_source_is_unavailable_not_healthy(self):
+    def test_build_failure_with_fresh_second_lease_uses_private_state_and_reports(self):
+        fx = Fixture(self)
+        fx.write()
+        (fx.dir / "registry.json").write_text("not json", encoding="utf-8")
+        fx.lease()
+        before = (fx.monitor / "agent" / "STATE.md").read_bytes()
+        result = fx.run("run-bad")
+        self.assertTrue(result["private_state"])
+        self.assertIn("concurrent_audit", {f["code"] for f in result["findings"]})
+        self.assertTrue(result["report_required"])
+        self.assertEqual(result["report_thread_id"], "thread-cos")
+        self.assertEqual((fx.monitor / "agent" / "STATE.md").read_bytes(), before)
+        self.assertEqual(fx.checkpoint("run-run-bad-state.md")["run_id"], "run-bad")
+
+    def test_stale_and_finished_leases_are_not_concurrency(self):
         fx = Fixture(self)
         fx.project("alpha")
         fx.write()
-        shutil.rmtree(fx.sessions)
+        fx.lease("old", age=600)
+        fx.lease("done", status="finished", age=5)
+        result = fx.run()
+        self.assertFalse(result["private_state"])
+        self.assertTrue(result["audit_complete"], result)
+
+    def test_unreadable_lease_makes_invocation_metadata_unavailable(self):
+        fx = Fixture(self)
+        fx.project("alpha")
+        fx.write()
+        fx.lease("broken", raw="{not json")
         result = fx.run()
         self.assertFalse(result["audit_complete"])
         self.assertIn("invocation-metadata", result["unavailable_scopes"])
+        self.assertTrue(result["report_required"])
+
+    def test_delivery_status_ends_the_lease(self):
+        fx = Fixture(self)
+        fx.project("gone", exists=False)
+        fx.write()
+        result = fx.run()
+        lease_file = fx.monitor / "agent" / "runs" / "run-1.lease.json"
+        self.assertEqual(json.loads(lease_file.read_text())["status"], "active")
+        monitor_checkpoint.set_delivery_status(Path(result["state_file"]), "sent")
+        self.assertEqual(json.loads(lease_file.read_text())["status"], "finished")
+        self.assertEqual(fx.checkpoint()["delivery_status"], "sent")
+
+    def test_other_sessions_are_never_opened(self):
+        source = (ROOT / "scripts" / "monitor_run.py").read_text(encoding="utf-8")
+        self.assertNotIn(".codex", source)
+        self.assertNotIn("sessions", source.replace("sessions, chats", ""))
+        self.assertNotIn("rollout", source)
 
     def test_build_failure_still_records_this_run_as_incomplete_and_reports(self):
         fx = Fixture(self)
@@ -134,39 +174,6 @@ class MonitorRunTests(unittest.TestCase):
         self.assertIn("snapshot_build_failed", {f["code"] for f in result["findings"]})
         saved = fx.checkpoint()
         self.assertEqual((saved["run_id"], saved["audit_status"], saved["delivery_status"]), ("run-bad", "incomplete", "not_attempted"))
-
-    def test_build_failure_with_fresh_second_audit_uses_private_state_and_reports(self):
-        fx = Fixture(self)
-        fx.write()
-        (fx.dir / "registry.json").write_text("not json", encoding="utf-8")
-        fx.other_session()
-        before = (fx.monitor / "agent" / "STATE.md").read_bytes()
-        result = fx.run("run-bad", now=datetime.now(timezone.utc))
-        self.assertTrue(result["private_state"])
-        self.assertIn("concurrent_audit", {f["code"] for f in result["findings"]})
-        self.assertTrue(result["report_required"])
-        self.assertEqual(result["report_thread_id"], "thread-cos")
-        self.assertEqual((fx.monitor / "agent" / "STATE.md").read_bytes(), before)
-        self.assertEqual(fx.checkpoint("run-run-bad-state.md")["run_id"], "run-bad")
-
-    def test_second_audit_marker_far_into_the_file_is_still_detected(self):
-        fx = Fixture(self)
-        fx.project("alpha")
-        fx.write()
-        fx.other_session(preface=600000)
-        before = (fx.monitor / "agent" / "STATE.md").read_bytes()
-        result = fx.run(now=datetime.now(timezone.utc))
-        self.assertTrue(result["private_state"])
-        self.assertFalse(result["audit_complete"])
-        self.assertTrue(result["report_required"])
-        self.assertEqual((fx.monitor / "agent" / "STATE.md").read_bytes(), before)
-
-    def test_finished_other_audit_is_not_concurrency(self):
-        fx = Fixture(self)
-        fx.project("alpha")
-        fx.write()
-        fx.other_session(preface=9000, finished=True)
-        self.assertFalse(fx.run(now=datetime.now(timezone.utc))["private_state"])
 
     def test_corrupt_registry_still_reports_to_recipient_from_monitoring_json(self):
         fx = Fixture(self)
@@ -204,7 +211,7 @@ class MonitorRunTests(unittest.TestCase):
         fx.write()
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
-            code = monitor_run.main(["--run-id", "run-cli", "--monitor-dir", str(fx.monitor), "--sessions-root", str(fx.sessions)])
+            code = monitor_run.main(["--run-id", "run-cli", "--monitor-dir", str(fx.monitor)])
         payload = json.loads(out.getvalue())
         self.assertIn(code, (0, 1))
         self.assertEqual(payload["run_id"], "run-cli")

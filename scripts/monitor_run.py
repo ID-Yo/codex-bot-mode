@@ -6,9 +6,10 @@ Reads agent/monitoring.json, the project registry it names and each project's ta
 records, writes agent/snapshots/run-<id>.json, runs the audit and records the checkpoint
 (run ID, status, coverage, delivery_status). Prints one compact JSON object; the model only
 delivers report_text when report_required is true and then records the delivery result.
-Concurrency is checked first and on every path. Every failure is an incomplete audit with a
-report to the recipient from monitoring.json. All output is English. Private memory, chats
-and transcripts are never read.
+Concurrency is checked first and on every path, from the Monitor's own run leases
+(agent/runs/<run-id>.lease.json). Other sessions, chats and transcripts are never opened.
+Every failure is an incomplete audit with a report to the recipient from monitoring.json.
+All output is English.
 """
 import argparse
 import json
@@ -21,58 +22,58 @@ import monitor_checkpoint
 import task_continuity as tc
 
 MAX_FINDINGS = 12
-MARKERS = (b"Automation: Agent Monitor", b"agent-monitor-20-minutes")
-SCAN_LIMIT = 4 * 1024 * 1024
-CHUNK = 256 * 1024
+# The scheduled prompt is an unescaped JSON string value; the same words quoted inside another
+# chat's tool output or code are escaped and do not match.
+LEASE_FRESH_SECONDS = 120
+LEASE_LIMIT = 4096
 
 
 def utc(value):
     return value.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def has_marker(path):
-    """Marker search over the whole (bounded) file; the position of the marker does not matter."""
-    keep = max(len(marker) for marker in MARKERS) - 1
-    tail, seen = b"", 0
-    with path.open("rb") as stream:
-        while seen < SCAN_LIMIT:
-            chunk = stream.read(CHUNK)
-            if not chunk:
-                return False
-            seen += len(chunk)
-            window = tail + chunk
-            if any(marker in window for marker in MARKERS):
-                return True
-            tail = window[-keep:]
-    return False
+def lease_path(runs_dir, run_id):
+    return Path(runs_dir) / (re.sub(r"[^A-Za-z0-9._-]", "_", run_id)[:100] + ".lease.json")
 
 
-def other_invocations(sessions_root, run_id, now):
-    """Fresh, unfinished Agent Monitor scheduled sessions other than this one (None = source unavailable)."""
-    root = Path(sessions_root)
-    if not root.is_dir():
-        return None
-    rows = []
-    local = datetime.now()
-    for day in {local, local - timedelta(days=1)}:
-        folder = root / f"{day:%Y}" / f"{day:%m}" / f"{day:%d}"
-        if not folder.is_dir():
+def write_lease(runs_dir, run_id, status, now):
+    """Atomic write of this run's own lease file."""
+    import os
+    import tempfile
+    runs_dir = Path(runs_dir)
+    runs_dir.mkdir(parents=True, exist_ok=True)
+    fd, temporary = tempfile.mkstemp(dir=str(runs_dir), prefix="lease-", suffix=".tmp")
+    with os.fdopen(fd, "w", encoding="utf-8") as out:
+        json.dump({"run_id": run_id, "status": status, "updated_at": utc(now)}, out)
+    os.replace(temporary, lease_path(runs_dir, run_id))
+
+
+def other_invocations(runs_dir, run_id, now):
+    """Fresh unfinished leases of other Monitor runs. Returns (rows, readable); stale leases are abandoned."""
+    runs_dir = Path(runs_dir)
+    if not runs_dir.exists():
+        return [], True
+    rows, readable = [], True
+    own = lease_path(runs_dir, run_id).name
+    try:
+        files = list(runs_dir.glob("*.lease.json"))
+    except OSError:
+        return [], False
+    for path in files:
+        if path.name == own:
             continue
-        for path in folder.glob("rollout-*.jsonl"):
-            try:
-                stat = path.stat()
-                stamp = datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc)
-                if run_id in path.name or (now - stamp).total_seconds() > 120 or stamp > now + timedelta(seconds=5):
-                    continue
-                with path.open("rb") as stream:
-                    stream.seek(max(0, stat.st_size - 8000))
-                    tail = stream.read()
-                finished = b'"task_complete"' in tail
-                if not finished and has_marker(path):
-                    rows.append({"run_id": path.stem.split("-", 7)[-1], "status": "active", "updated_at": utc(stamp)})
-            except OSError:
+        try:
+            if path.stat().st_size > LEASE_LIMIT:
+                raise ValueError("lease too large")
+            row = json.loads(path.read_text(encoding="utf-8"))
+            stamp = datetime.fromisoformat(row["updated_at"].replace("Z", "+00:00"))
+            if row["status"] != "active" or not isinstance(row["run_id"], str):
                 continue
-    return rows
+            if 0 <= (now - stamp).total_seconds() <= LEASE_FRESH_SECONDS:
+                rows.append({"run_id": row["run_id"], "status": "active", "updated_at": utc(stamp)})
+        except (OSError, ValueError, KeyError, TypeError, AttributeError):
+            readable = False
+    return rows, readable
 
 
 def project_tasks(pid, root):
@@ -146,18 +147,21 @@ def report_text(run_id, complete, coverage, unavailable, findings, state_file, n
     return "\n".join(lines)
 
 
-def run(monitor_dir, run_id, now=None, sessions_root=None):
+def run(monitor_dir, run_id, now=None):
     now = now or datetime.now(timezone.utc)
     monitor_dir = Path(monitor_dir).resolve()
-    sessions_root = sessions_root or Path.home() / ".codex" / "sessions"
     safe_id = re.sub(r"[^A-Za-z0-9._-]", "_", run_id)[:100]
-    # 1. Concurrency first, independent of everything else.
+    runs_dir = monitor_dir / "agent" / "runs"
+    # 1. Concurrency first, independent of everything else (own leases only).
     try:
-        invocations = other_invocations(sessions_root, run_id, now)
+        invocations, available = other_invocations(runs_dir, run_id, now)
     except Exception:
-        invocations = None
-    available = invocations is not None
+        invocations, available = [], False
     concurrent = bool(invocations)
+    try:
+        write_lease(runs_dir, run_id, "active", now)
+    except OSError:
+        available = False
     # 2. Recipient and configuration, independent of the registry.
     config, extra = {}, []
     try:
@@ -197,6 +201,11 @@ def run(monitor_dir, run_id, now=None, sessions_root=None):
     report = (not complete) or bool(new_alerts)
     state["delivery_status"] = "not_attempted" if report else "not_required"
     monitor_checkpoint.save_checkpoint(state_file, dict(state))
+    if not report:
+        try:
+            write_lease(runs_dir, run_id, "finished", now)
+        except OSError:
+            pass
     text = report_text(run_id, complete, coverage, unavailable, new_alerts if complete else findings,
                        state_file.name, audit.get("next_check_at", "unknown")) if report else None
     return {"ok": complete and not findings, "audit_complete": complete, "run_id": run_id,
@@ -213,9 +222,8 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--run-id", required=True)
     parser.add_argument("--monitor-dir", type=Path, default=Path("."))
-    parser.add_argument("--sessions-root", type=Path)
     args = parser.parse_args(argv)
-    result = run(args.monitor_dir, args.run_id, sessions_root=args.sessions_root)
+    result = run(args.monitor_dir, args.run_id)
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0 if result["ok"] else 1
 

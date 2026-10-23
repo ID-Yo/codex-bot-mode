@@ -78,6 +78,19 @@ def set_delivery_status(path, status):
         raise ValueError("Monitor checkpoint is unavailable")
     data["delivery_status"] = status
     save_checkpoint(path, data)
+    finish_lease(path, data.get("run_id"))
+
+
+def finish_lease(state_path, run_id):
+    """The Monitor's own run lease ends once the delivery result is recorded."""
+    import datetime
+    import re
+    if not isinstance(run_id, str) or not run_id:
+        return
+    lease = Path(state_path).parent / "runs" / (re.sub(r"[^A-Za-z0-9._-]", "_", run_id)[:100] + ".lease.json")
+    if lease.exists():
+        stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        lease.write_text(json.dumps({"run_id": run_id, "status": "finished", "updated_at": stamp}), encoding="utf-8")
 
 
 def read_initial_context(state_path, memory_path=None):
