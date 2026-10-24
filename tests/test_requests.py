@@ -39,6 +39,32 @@ class RequestTests(unittest.TestCase):
             self.assertEqual(rq.main(['--project', project, 'reply', 'REQ-2', '--by', 'developer']), 0)
             self.assertEqual(rq.load(project)['requests'][0]['state'], 'answered')
 
+    def test_open_request_stores_candidate_and_author(self):
+        data = {'schema': 1, 'requests': []}
+        sha = '92625269294c9f0185073dc7c4818c8cb2c9992c'
+        data = rq.open_request(data, 'REQ-CAND', 'manager', 'code-reviewer', 'Review portal',
+                               candidate=sha, author='gw-web-portal')
+        req = data['requests'][0]
+        self.assertEqual(req['candidate'], sha)
+        self.assertEqual(req['author'], 'gw-web-portal')
+
+    def test_open_request_validates_candidate_sha_and_author(self):
+        data = {'schema': 1, 'requests': []}
+        with self.assertRaises(rq.RequestError):
+            rq.open_request(data, 'REQ-BAD-SHA', 'manager', 'code-reviewer', 'Review', candidate='not-a-sha')
+        with self.assertRaises(rq.RequestError):
+            rq.open_request(data, 'REQ-BAD-AUTH', 'manager', 'code-reviewer', 'Review', author='Invalid Author!')
+
+    def test_open_request_cli_supports_candidate_and_author(self):
+        with tempfile.TemporaryDirectory() as project:
+            sha = '92625269294c9f0185073dc7c4818c8cb2c9992c'
+            code = rq.main(['--project', project, 'open', 'REQ-CLI', '--from', 'manager', '--to', 'code-reviewer',
+                            '--summary', 'Review portal', '--candidate', sha, '--author', 'gw-web-portal'])
+            self.assertEqual(code, 0)
+            req = rq.load(project)['requests'][0]
+            self.assertEqual(req['candidate'], sha)
+            self.assertEqual(req['author'], 'gw-web-portal')
+
 
 if __name__ == '__main__':
     unittest.main()
