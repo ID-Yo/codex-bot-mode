@@ -125,6 +125,102 @@ class StatusSourceTests(unittest.TestCase):
         tasks, _ = self.status(self.project(requests=requests))
         self.assertIn(("candidate_missing", "p/pr-8"), self.codes(tasks))
 
+    def test_routeport_portal_review_summary_fallback_clears_candidate_missing(self):
+        # Replay of the real RoutePort case from issue #281
+        sha = "92625269294c9f0185073dc7c4818c8cb2c9992c"
+        summary = f"Code Review for portal changes: commit {sha} by author gw-web-portal"
+        req = {
+            "id": "req-RPT196-PORTAL-REVIEW-9262526-20261024",
+            "from": "manager",
+            "to": "code-reviewer",
+            "summary": summary,
+            "opened": iso(-2),
+            "due": iso(-1),
+            "state": "answered",
+            "answered": iso(-1),
+            "link": "https://github.com/example/routeport/pull/196"
+        }
+        tasks, _ = self.status(self.project(requests=[req]))
+        self.assertEqual(len(tasks), 1)
+        self.assertEqual(tasks[0]["candidate"], {"id": sha, "author": "gw-web-portal"})
+        self.assertNotIn(("candidate_missing", "p/pr-196"), self.codes(tasks))
+
+    def test_structured_candidate_and_author_in_request_clears_candidate_missing(self):
+        sha = "1111222233334444555566667777888899990000"
+        req = {
+            "id": "req-197-review",
+            "from": "manager",
+            "to": "code-reviewer",
+            "summary": "Review PR 197",
+            "opened": iso(-2),
+            "due": iso(-1),
+            "state": "open",
+            "candidate": sha,
+            "author": "developer",
+            "link": "https://github.com/example/routeport/pull/197"
+        }
+        tasks, _ = self.status(self.project(requests=[req]))
+        self.assertEqual(len(tasks), 1)
+        self.assertEqual(tasks[0]["candidate"], {"id": sha, "author": "developer"})
+        self.assertNotIn(("candidate_missing", "p/pr-197"), self.codes(tasks))
+
+    def test_summary_with_candidate_and_base_shas_picks_marked_candidate(self):
+        cand_sha = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        base_sha = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        summary = f"Review PR 270 candidate {cand_sha} based on {base_sha} by author developer"
+        req = {
+            "id": "req-270-review",
+            "from": "manager",
+            "to": "code-reviewer",
+            "summary": summary,
+            "opened": iso(-2),
+            "due": iso(-1),
+            "state": "open",
+            "link": "https://github.com/example/routeport/pull/270"
+        }
+        tasks, _ = self.status(self.project(requests=[req]))
+        self.assertEqual(len(tasks), 1)
+        self.assertEqual(tasks[0]["candidate"], {"id": cand_sha, "author": "developer"})
+        self.assertNotIn(("candidate_missing", "p/pr-270"), self.codes(tasks))
+
+    def test_summary_with_two_shas_without_marker_stays_candidate_missing(self):
+        sha1 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        sha2 = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        summary = f"Review comparing {sha1} and {sha2} by author developer"
+        req = {
+            "id": "req-271-review",
+            "from": "manager",
+            "to": "code-reviewer",
+            "summary": summary,
+            "opened": iso(-2),
+            "due": iso(-1),
+            "state": "open",
+            "link": "https://github.com/example/routeport/pull/271"
+        }
+        tasks, _ = self.status(self.project(requests=[req]))
+        self.assertEqual(len(tasks), 1)
+        self.assertIsNone(tasks[0]["candidate"])
+        self.assertIn(("candidate_missing", "p/pr-271"), self.codes(tasks))
+
+    def test_summary_with_commit_marker_picks_marked_sha(self):
+        sha1 = "1111111111111111111111111111111111111111"
+        sha2 = "2222222222222222222222222222222222222222"
+        summary = f"Audit base {sha1} vs commit: {sha2} by author developer"
+        req = {
+            "id": "req-272-review",
+            "from": "manager",
+            "to": "code-reviewer",
+            "summary": summary,
+            "opened": iso(-2),
+            "due": iso(-1),
+            "state": "open",
+            "link": "https://github.com/example/routeport/pull/272"
+        }
+        tasks, _ = self.status(self.project(requests=[req]))
+        self.assertEqual(len(tasks), 1)
+        self.assertEqual(tasks[0]["candidate"], {"id": sha2, "author": "developer"})
+        self.assertNotIn(("candidate_missing", "p/pr-272"), self.codes(tasks))
+
     def test_checkpoint_holds_the_findings_of_many_projects(self):
         from monitor_checkpoint import STATE_READ_LIMIT
         requests = [self.request(f"impl-{n}", "developer", iso(-30), due=iso(-29), link=f"https://github.com/o/r/issues/{n}")

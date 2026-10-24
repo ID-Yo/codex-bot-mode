@@ -157,4 +157,15 @@ generic; richer sanitized diagnostics are a separate follow-up.
 
 If the service named in `desktop.json` is gone after a forced stop or an upgrade, the controller moves `desktop.json` and `running.json` aside as `desktop.stale-<UTC time>.json` and `running.stale-<UTC time>.json`, shows **Not started** and enables Start. A descriptor counts as stale only when its process no longer exists (or is not an `office-service` program) and nothing accepts connections on its port. A live but unresponsive listener, a live Office service, an unreadable descriptor and a clean-stop record are left untouched and keep the controller **Unverified** where they did before.
 
-The installer runs `installer/stop-previous-office.ps1` before it replaces or removes files. The script sends the same authenticated `/desktop/shutdown` request as the Stop button and waits for the service to exit. It never terminates a process; if Office is busy, still draining or unresponsive, the installer stops with a message asking you to use Quit Office first.
+The installer runs `installer/stop-previous-office.ps1` before it replaces or removes files. The script sends the same authenticated `/desktop/shutdown` request as the Stop button and waits for the service to exit. It never terminates a process; if Office is busy, still draining or unresponsive, the installer stops with a message asking you to use Quit Office first. The script normalizes extended-length paths (the `\\?\` prefix) in the stored settings and fails closed: if an `office-service` process is running from the install directory but the settings or descriptor are missing or unreadable, or the recorded PID does not match, the installer stops (exit code 2) instead of assuming nothing is running. It exits successfully only when no installed service is running.
+
+### Trusting the signing certificate
+
+Release installers and executables are signed with a self-signed certificate (`CN=Codex Office (ID-Yo)`, thumbprint `2C4510778788894A8CAA3C891FE3BCB899A0C0F0`). Windows reports the signature as untrusted until you install the public certificate `desktop/Codex-Office-ID-Yo.cer`:
+
+```powershell
+Import-Certificate -FilePath .\desktop\Codex-Office-ID-Yo.cer -CertStoreLocation Cert:\CurrentUser\Root
+Import-Certificate -FilePath .\desktop\Codex-Office-ID-Yo.cer -CertStoreLocation Cert:\CurrentUser\TrustedPublisher
+```
+
+Compare the thumbprint above with the installer's signature before trusting it. The private key is never distributed.

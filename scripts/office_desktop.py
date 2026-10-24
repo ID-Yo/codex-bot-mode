@@ -250,6 +250,11 @@ class DesktopLifecycle:
             return self._stop_requested
 
     @property
+    def stop_committed(self):
+        with self._condition:
+            return self._stop_committed
+
+    @property
     def stopped(self):
         return self._stopped
 

@@ -492,6 +492,14 @@ def create_server(controller, port=0, *, ipv6=False, token=None, desktop_lifecyc
                     return self.reply(409, {**desktop_lifecycle.health(), 'safety': 'busy',
                         'stop_pending': desktop_lifecycle.stop_requested,
                         'reason': 'Shutdown could not acquire an uncancelled drain boundary.'})
+                if generation is False:
+                    if desktop_lifecycle.draining or desktop_lifecycle.stop_requested or desktop_lifecycle.stop_committed:
+                        return self.reply(202, {**desktop_lifecycle.health(), 'safety': 'busy',
+                            'stop_pending': True,
+                            'reason': 'Office shutdown is already in progress.'})
+                    return self.reply(409, {**desktop_lifecycle.health(), 'safety': 'busy',
+                        'stop_pending': False,
+                        'reason': 'Office is busy with in-flight operations and could not begin draining within timeout.'})
                 if not desktop_lifecycle.request_shutdown(generation, on_request=lambda: set_draining(
                         controller, getattr(controller, 'personal', None),
                         getattr(controller, 'rooms', None), getattr(controller, 'project_managers', None), True)):

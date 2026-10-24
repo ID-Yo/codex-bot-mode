@@ -11,7 +11,7 @@
 !endif
 
 !macro CodexOfficeStopService SCRIPT ID
-  nsExec::ExecToStack '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "${SCRIPT}"'
+  nsExec::ExecToStack '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "${SCRIPT}" -InstallDir "$INSTDIR"'
   Pop $0
   Pop $1
   StrCmp $0 "0" CodexOfficeStopDone_${ID}

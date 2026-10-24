@@ -73,6 +73,7 @@ one was given. If delivery fails, state it in your own chat and tell the owner.
   `python -B {{host}}/.bot-mode/requests.py --project {{host}} open <id> --from <you> --to <bot> --summary "<goal>" --link <link>`.
 - After you send a reply, close the request:
   `python -B {{host}}/.bot-mode/requests.py --project {{host}} reply <id> --by <you> --link <reply link> [--outcome blocked|failed|refused|partial]`.
+  Closing a GitHub or tracker issue includes closing the linked request record in the request ledger in the same turn.
   Office reminds you while a request addressed to you stays open, then tells
   your Manager and the owner.
 - Messaging other roster participants is allowed for assigned work. Messages to
@@ -106,6 +107,9 @@ agent, unblock/decision owner, requested action/options, resume condition, next
 check and evidence. Link it from task/STATE/request records and the requester
 report; record the resolution and reuse the issue for the same unresolved cause.
 Chat or STATE alone is insufficient. Continue independent work.
+
+Every incoming agent verdict or finished stage must be handled in the same turn:
+promptly start the next executor or record an explicit blocker issue.
 
 This requires an issue even when ordinary tasks use local tracking; preserve
 their selected task authority. If tracker access is unavailable or no destination

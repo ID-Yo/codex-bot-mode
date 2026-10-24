@@ -317,6 +317,61 @@ class MonitorRunTests(unittest.TestCase):
         self.assertEqual(payload["run_id"], "run-cli")
         self.assertLess(len(out.getvalue()), 3000)
 
+    def test_stage_finished_finding_is_delivered_to_project_manager(self):
+        fx = Fixture(self)
+        root = fx.project("alpha", tasks=True)
+        # Set up project manager in roster
+        roster = {
+            "schema": 1,
+            "project": {"name": "alpha"},
+            "teams": [{"name": "Core"}],
+            "participants": [{
+                "bot": "manager", "name": "Manager", "role": "Manager", "team": "Core",
+                "status": "active", "thread_id": "11111111-2222-3333-4444-555555555555"
+            }]
+        }
+        (root / ".bot-mode" / "roster.json").write_text(json.dumps(roster), encoding="utf-8")
+        now_str = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        req_data = {
+            "schema": 1,
+            "requests": [{
+                "id": "req-stage-1",
+                "from": "manager",
+                "to": "developer",
+                "summary": "Implement T-STAGE",
+                "link": "work/tasks/T-STAGE.md",
+                "opened": now_str,
+                "acknowledged_at": now_str,
+                "started_at": now_str,
+                "state": "answered",
+                "answered": now_str,
+                "reply": {"by": "developer", "link": "ref:commit-1", "outcome": "done"},
+                "escalations": []
+            }]
+        }
+        (root / ".bot-mode" / "local").mkdir(parents=True, exist_ok=True)
+        (root / ".bot-mode" / "local" / "requests.json").write_text(json.dumps(req_data), encoding="utf-8")
+        # Task where last handoff has finished_at set (stage_finished)
+        task_data = (
+            "Task ID: T-STAGE\n"
+            "State: in-progress\n"
+            "Start approved: true\n"
+            "Assigned executor: developer\n"
+            f"Updated at: {now_str}\n"
+            "Local request id: req-stage-1\n"
+        )
+        (root / "work" / "tasks" / "T-STAGE.md").write_text(task_data, encoding="utf-8")
+        fx.write()
+        result = fx.run(run_id="run-sf", now=datetime.now(timezone.utc))
+        self.assertTrue(result["report_required"])
+        self.assertEqual(result["report_thread_id"], "thread-cos")
+        mgr_delivs = result.get("manager_deliveries", [])
+        self.assertEqual(len(mgr_delivs), 1)
+        self.assertEqual(mgr_delivs[0]["project_id"], "alpha")
+        self.assertEqual(mgr_delivs[0]["thread_id"], "11111111-2222-3333-4444-555555555555")
+        self.assertEqual(mgr_delivs[0]["manager_bot"], "manager")
+        self.assertIn("stage finished without active successor", mgr_delivs[0]["prompt"])
+
 
 class InvalidSnapshotCheckpointTests(unittest.TestCase):
     def test_monitor_audit_cli_records_run_id_when_snapshot_is_invalid(self):

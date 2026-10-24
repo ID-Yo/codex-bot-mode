@@ -1,5 +1,6 @@
-"""Upgrade-time graceful stop (#244): stop-previous-office.ps1 against a fake controller endpoint."""
+"""Upgrade-time graceful stop (#244, #219): stop-previous-office.ps1 against a fake controller endpoint."""
 import json
+import shutil
 import socket
 import subprocess
 import sys
@@ -82,8 +83,9 @@ class UpgradeStopTests(unittest.TestCase):
             helper.wait()
         self.tmp.cleanup()
 
-    def helper(self):
-        helper = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(300)'])
+    def helper(self, executable=None):
+        exe = executable or sys.executable
+        helper = subprocess.Popen([str(exe), '-c', 'import time; time.sleep(300)'])
         self.helpers.append(helper)
         return helper
 
@@ -92,20 +94,24 @@ class UpgradeStopTests(unittest.TestCase):
         self.services.append(service)
         return service
 
-    def write(self, pid, port, state='running', raw=None):
-        runtime = self.root / 'project' / '.bot-mode' / 'team-room-v1' / 'desktop-controller'
+    def write(self, pid, port, state='running', raw=None, project_path=None):
+        project = self.root / 'project'
+        runtime = project / '.bot-mode' / 'team-room-v1' / 'desktop-controller'
         runtime.mkdir(parents=True, exist_ok=True)
-        (runtime / 'desktop.json').write_text(raw if raw is not None else json.dumps({
-            'protocol': 1, 'service': 'codex-office', 'version': '0.1.0', 'pid': pid, 'port': port,
-            'instance_id': 'i', 'token': TOKEN, 'state': state}), encoding='utf-8')
+        if raw != '__OMIT__':
+            (runtime / 'desktop.json').write_text(raw if raw is not None else json.dumps({
+                'protocol': 1, 'service': 'codex-office', 'version': '0.1.0', 'pid': pid, 'port': port,
+                'instance_id': 'i', 'token': TOKEN, 'state': state}), encoding='utf-8')
         settings = self.root / 'controller.json'
-        settings.write_text(json.dumps({'projectPath': str(self.root / 'project')}), encoding='utf-8')
+        settings.write_text(json.dumps({'projectPath': project_path if project_path is not None else str(project)}), encoding='utf-8')
         return settings
 
-    def run_script(self, settings):
-        return subprocess.run(['powershell.exe', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', str(SCRIPT),
-                               '-SettingsPath', str(settings), '-ShutdownTimeoutSec', '4', '-ExitWaitSec', '4'],
-                              capture_output=True, text=True, timeout=90)
+    def run_script(self, settings, install_dir=None):
+        target_dir = install_dir if install_dir is not None else (self.root / 'isolated-install')
+        target_dir.mkdir(parents=True, exist_ok=True)
+        cmd = ['powershell.exe', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', str(SCRIPT),
+               '-SettingsPath', str(settings), '-InstallDir', str(target_dir), '-ShutdownTimeoutSec', '4', '-ExitWaitSec', '4']
+        return subprocess.run(cmd, capture_output=True, text=True, timeout=90)
 
     def test_running_service_is_stopped_through_the_authenticated_shutdown(self):
         helper = self.helper()
@@ -115,6 +121,72 @@ class UpgradeStopTests(unittest.TestCase):
         self.assertIn('stopped safely', result.stdout)
         self.assertEqual(service.requests, [('/desktop/shutdown', TOKEN, 'http://tauri.localhost')])
         self.assertIsNotNone(helper.poll())
+
+    def test_extended_length_path_is_normalized_and_stopped(self):
+        helper = self.helper()
+        service = self.service('stop', helper)
+        extended_project = f'\\\\?\\{self.root / "project"}'
+        result = self.run_script(self.write(helper.pid, service.port, project_path=extended_project))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('stopped safely', result.stdout)
+        self.assertEqual(service.requests, [('/desktop/shutdown', TOKEN, 'http://tauri.localhost')])
+        self.assertIsNotNone(helper.poll())
+
+    def test_extended_unc_path_is_normalized(self):
+        helper = self.helper()
+        service = self.service('stop', helper)
+        # Construct \\?\UNC\localhost\c$\... path pointing to self.root / project
+        drive = self.root.drive.replace(':', '$')
+        rel = str(self.root / 'project')[len(self.root.drive) + 1:]
+        extended_unc = f'\\\\?\\UNC\\127.0.0.1\\{drive}\\{rel}'
+        result = self.run_script(self.write(helper.pid, service.port, project_path=extended_unc))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('stopped safely', result.stdout)
+        self.assertIsNotNone(helper.poll())
+
+    def test_corrupt_descriptor_with_running_installed_service_fails_closed(self):
+        install_dir = self.root / 'installed'
+        install_dir.mkdir(parents=True, exist_ok=True)
+        svc_exe = install_dir / 'office-service.exe'
+        shutil.copy(sys.executable, svc_exe)
+        helper = self.helper(executable=svc_exe)
+        settings = self.write(helper.pid, 12345, raw='{ malformed')
+        result = self.run_script(settings, install_dir=install_dir)
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn('service descriptor could not be read', result.stdout)
+        self.assertIsNone(helper.poll(), 'installed process must not be terminated')
+
+    def test_missing_descriptor_with_running_installed_service_fails_closed(self):
+        install_dir = self.root / 'installed'
+        install_dir.mkdir(parents=True, exist_ok=True)
+        svc_exe = install_dir / 'office-service.exe'
+        shutil.copy(sys.executable, svc_exe)
+        helper = self.helper(executable=svc_exe)
+        settings = self.write(helper.pid, 12345, raw='__OMIT__')
+        result = self.run_script(settings, install_dir=install_dir)
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn('service descriptor could not be read', result.stdout)
+        self.assertIsNone(helper.poll())
+
+    def test_missing_settings_with_running_installed_service_fails_closed(self):
+        install_dir = self.root / 'installed'
+        install_dir.mkdir(parents=True, exist_ok=True)
+        svc_exe = install_dir / 'office-service.exe'
+        shutil.copy(sys.executable, svc_exe)
+        helper = self.helper(executable=svc_exe)
+        missing_settings = self.root / 'none.json'
+        result = self.run_script(missing_settings, install_dir=install_dir)
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn('controller settings could not be found', result.stdout)
+        self.assertIsNone(helper.poll())
+
+    def test_corrupt_descriptor_without_running_service_exits_zero(self):
+        install_dir = self.root / 'installed'
+        install_dir.mkdir(parents=True, exist_ok=True)
+        settings = self.write(1, 1, raw='{ malformed')
+        result = self.run_script(settings, install_dir=install_dir)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('nothing to stop', result.stdout)
 
     def test_busy_service_is_reported_and_never_killed(self):
         helper = self.helper()
@@ -163,13 +235,16 @@ class UpgradeStopTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIsNone(helper.poll(), 'a foreign process is never touched')
 
-    def test_missing_clean_or_unreadable_state_needs_no_stop(self):
+    def test_missing_clean_or_unreadable_state_needs_no_stop_when_idle(self):
+        install_dir = self.root / 'installed'
+        install_dir.mkdir(parents=True, exist_ok=True)
         missing = self.root / 'none.json'
-        self.assertEqual(self.run_script(missing).returncode, 0)
-        self.assertEqual(self.run_script(self.write(1, 1, state='stopped')).returncode, 0)
-        self.assertEqual(self.run_script(self.write(1, 1, raw='{ malformed')).returncode, 0)
-        self.assertEqual(self.run_script(self.write(1, 70000)).returncode, 0, 'an out-of-range port is an unreadable descriptor, not an error')
+        self.assertEqual(self.run_script(missing, install_dir=install_dir).returncode, 0)
+        self.assertEqual(self.run_script(self.write(1, 1, state='stopped'), install_dir=install_dir).returncode, 0)
+        self.assertEqual(self.run_script(self.write(1, 1, raw='{ malformed'), install_dir=install_dir).returncode, 0)
+        self.assertEqual(self.run_script(self.write(1, 70000), install_dir=install_dir).returncode, 0, 'an out-of-range port is an unreadable descriptor, not an error')
 
 
 if __name__ == '__main__':
     unittest.main()
+

@@ -264,6 +264,7 @@ class DesktopLifecycleTests(unittest.TestCase):
         self.assertFalse(lifecycle.cancel_drain())
         self.assertTrue(lifecycle.draining)
         self.assertTrue(lifecycle.stop_requested)
+        self.assertTrue(lifecycle.stop_committed)
 
     def test_legacy_shutdown_flag_cli_is_removed(self):
         from scripts.team_room import __main__ as entry
@@ -285,6 +286,22 @@ class DesktopLifecycleTests(unittest.TestCase):
         self.assertNotIn('desktop-secret-token', combined)
         self.assertNotIn('abc123', combined)
         self.assertNotIn('liveSecret', combined)
+
+    def test_begin_drain_returns_false_when_already_draining_or_stopped(self):
+        lifecycle = self.lifecycle()
+        self.assertTrue(lifecycle.begin_drain())
+        # Second call while draining returns False
+        self.assertIs(lifecycle.begin_drain(), False)
+        lifecycle.cancel_drain()
+        self.assertFalse(lifecycle.draining)
+
+    def test_begin_drain_returns_false_when_inflight_times_out(self):
+        lifecycle = self.lifecycle()
+        self.assertTrue(lifecycle.admit_operation())
+        # Drain with 0.05s timeout while operation is in-flight returns False
+        self.assertIs(lifecycle.begin_drain(timeout=0.05), False)
+        self.assertFalse(lifecycle.draining)
+        lifecycle.end_operation()
 
 
 if __name__ == '__main__':

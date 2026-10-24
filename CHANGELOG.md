@@ -26,7 +26,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/). Versions follow [SemVer
 
 ## [Office 0.1.5] - unreleased
 
-Windows x64 preview of the Codex Office desktop controller (unsigned installer; compare the published SHA-256).
+Windows x64 preview of the Codex Office desktop controller (signed with self-signed certificate `CN=Codex Office (ID-Yo)`, thumbprint `2C4510778788894A8CAA3C891FE3BCB899A0C0F0`; compare the published SHA-256).
 
 ### Added
 - Cross-project rooms, a named room queue with explicit release, room discussion with replies returned to the journal, and an outcomes panel with confirmed approvals.
@@ -38,9 +38,10 @@ Windows x64 preview of the Codex Office desktop controller (unsigned installer; 
 ### Fixed
 - Upgrade stops the previous Office gracefully, archives a stale service descriptor and aborts on any unsuccessful stop instead of forcing it.
 - Quit closes the controller while setup is still needed.
+- Draining and stop handling in `/desktop/shutdown` return 202 if already in progress or 409 busy on timeout, avoiding spurious cancellation errors.
 
 ### Notes
-- The installer is unsigned; the signed component manifest covers only the reference handbook component.
+- Executables are signed with self-signed certificate `desktop/Codex-Office-ID-Yo.cer` (`2C4510778788894A8CAA3C891FE3BCB899A0C0F0`). Import the certificate into Trusted Root / Trusted Publisher to trust it.
 - Owner install, packaged upgrade and tray/uninstall acceptance are not verified yet.
 
 ## [0.1.0] - 2026-10-13

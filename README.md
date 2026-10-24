@@ -11,8 +11,10 @@ Unofficial community project; not affiliated with or endorsed by OpenAI. "Codex"
 A Windows x64 installer is available in the Office desktop release. It provides
 Start, Stop, Restart, service status and recent activity, with the work UI in
 external Chrome. Codex Desktop is required; a separate Python/Node/Rust install
-is not required to run the packaged app. The Windows executable is currently
-unsigned; compare its published SHA-256 before installation.
+is not required to run the packaged app. Executables are signed with a self-signed
+certificate (`CN=Codex Office (ID-Yo)`, thumbprint `2C4510778788894A8CAA3C891FE3BCB899A0C0F0`);
+install the public certificate `desktop/Codex-Office-ID-Yo.cer` to trust it.
+Compare its published SHA-256 before installation.
 Release 0.1.5 notes are in [CHANGELOG.md](CHANGELOG.md).
 
 On first run select the root folder of your existing CBM project (the folder

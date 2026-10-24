@@ -16,6 +16,9 @@ PATTERNS = {
     'cyrillic text': re.compile(r'[\u0400-\u04FF]{3,}'),
 }
 ALLOWED = {('LICENSE', 'owner account'),
+           ('README.md', 'owner account'),
+           ('CHANGELOG.md', 'owner account'),
+           ('desktop/README.md', 'owner account'),
            # Bulgarian microphone labels are matched on purpose.
            ('scripts/team_room/static/media.js', 'cyrillic text'),
            # Owner-approved EN/BG interface catalog and native language selector.
