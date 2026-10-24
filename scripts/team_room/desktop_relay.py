@@ -22,20 +22,75 @@ from .web import RoomHTTPServer
 TOOLS = {'list_threads', 'read_thread', 'wait_threads', 'send_message_to_thread', 'navigate_to_codex_page'}
 
 
+REGISTRY_TARGETS_TTL = 60.0
+_REGISTRY_TARGETS = {'key': None, 'at': 0.0, 'chats': frozenset()}
+_REGISTRY_TARGETS_LOCK = threading.Lock()
+
+
+def invalidate_targets():
+    """Drop the cached registry scan; the next targets() call rescans."""
+    with _REGISTRY_TARGETS_LOCK:
+        _REGISTRY_TARGETS['key'] = None
+
+
+def _stat(file):
+    try:
+        info = os.stat(file)
+        return (info.st_mtime_ns, info.st_size)
+    except OSError:
+        return None
+
+
+def _registry_key(reg_file, projects):
+    """Cheap fingerprint: the registry file plus the roster and bindings file of every project."""
+    from . import roster
+    files = [reg_file]
+    for p in projects:
+        root = p.get('root')
+        if isinstance(root, str) and root:
+            files.extend((Path(root) / '.bot-mode' / 'roster.json', Path(root) / '.bot-mode' / 'local' / 'bindings.json'))
+    return (str(project.PROJECT), tuple((str(f), _stat(f)) for f in files))
+
+
+def _registry_targets():
+    """Appointed Manager chats from the project registry.
+
+    The scan builds the registry overview once (about a second of CPU for a dozen projects), so the result is kept
+    while the registry, rosters and bindings are unchanged (stat fingerprint), for at most REGISTRY_TARGETS_TTL
+    seconds as a safety net. The controller status poll and every relay call share it.
+    """
+    from . import registry
+    reg_file = registry.registry_path(project.PROJECT)
+    if not reg_file:
+        return frozenset()
+    with _REGISTRY_TARGETS_LOCK:
+        cached = _REGISTRY_TARGETS
+        projects = []
+        try:
+            raw = json.loads(Path(reg_file).read_text(encoding='utf-8'))
+            projects = [p for p in raw.get('projects', []) if isinstance(p, dict)]
+        except (OSError, ValueError, AttributeError):
+            pass
+        key = _registry_key(reg_file, projects)
+        if cached['key'] == key and time.monotonic() - cached['at'] < REGISTRY_TARGETS_TTL:
+            return cached['chats']
+        chats = set()
+        reg = registry.load_registry(reg_file)
+        overview = registry.build_overview(reg_file, current_project_root=project.PROJECT)
+        for p in reg.get('projects', []):
+            res = registry.manager_from_overview(overview, p.get('id'))
+            if res and res.get('status') == 'ok' and res.get('thread_id'):
+                chats.add(res['thread_id'])
+        _REGISTRY_TARGETS.update(key=key, at=time.monotonic(), chats=frozenset(chats))
+        return _REGISTRY_TARGETS['chats']
+
+
 def targets():
-    """Appointed chats, read from the roster and explicit registry on every call so replaced chats apply at once."""
+    """Appointed chats: roster and explicit threads on every call, registry Managers from a short-lived scan."""
     chats = {t for t in (work.MANAGER, *work.WORKERS.values(), *project.threads().values()) if t}
     # Under owner CBM-104 authorization, include appointed Managers resolved via registry
     try:
-        from . import registry
-        reg_file = registry.registry_path(project.PROJECT)
-        if reg_file:
-            reg = registry.load_registry(reg_file)
-            for p in reg.get('projects', []):
-                pid = p.get('id')
-                res = registry.resolve_project_manager(reg_file, pid, current_project_root=project.PROJECT)
-                if res and res.get('status') == 'ok' and res.get('thread_id'):
-                    chats.add(res['thread_id'])
+        chats |= _registry_targets()
     except Exception:
         pass
     return chats

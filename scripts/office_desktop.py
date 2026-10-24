@@ -61,8 +61,16 @@ def verify_runtime_slot(install_root, slot, release_id, slot_sha256, component_i
         raise ValueError(str(error)) from error
 
 
-def inspect_shutdown(controller, personal=None, rooms=None, managers=None):
-    """Inspect durable and native state. Any unverified owner makes stop unsafe."""
+_NATIVE_CACHE = {}
+_NATIVE_CACHE_LOCK = threading.Lock()
+
+
+def inspect_shutdown(controller, personal=None, rooms=None, managers=None, native_cache_ttl=0):
+    """Inspect durable and native state. Any unverified owner makes stop unsafe.
+
+    native_cache_ttl > 0 lets status polls reuse a successful per-binding Desktop check for that many seconds.
+    Shutdown decisions keep the default 0 and always read the live state.
+    """
     owned = [controller]
     for holder in (personal, rooms, managers):
         if holder is not None:
@@ -152,6 +160,14 @@ def inspect_shutdown(controller, personal=None, rooms=None, managers=None):
             for bot, thread_id in bindings.items():
                 if (bot, thread_id) in opened:
                     continue
+                key = (bot, thread_id)
+                with _NATIVE_CACHE_LOCK:
+                    hit = _NATIVE_CACHE.get(key)
+                if native_cache_ttl and hit and time.monotonic() - hit[0] < native_cache_ttl:
+                    busy += hit[1]
+                    pending += hit[2]
+                    continue
+                busy_before, pending_before = busy, pending
                 if bridge is None:
                     raise ValueError('Native Desktop connection is unavailable')
                 result = bridge.call('read_thread', {'threadId': thread_id, 'hostId': 'local',
@@ -181,6 +197,8 @@ def inspect_shutdown(controller, personal=None, rooms=None, managers=None):
                             pending += 1
                         else:
                             raise ValueError('Native delivery state is unknown')
+                with _NATIVE_CACHE_LOCK:
+                    _NATIVE_CACHE[key] = (time.monotonic(), busy - busy_before, pending - pending_before)
     except Exception:
         return {'safety': 'unknown', 'busy_count': busy, 'pending_count': pending,
                 'reason': 'A service or native Desktop operation could not be verified.'}

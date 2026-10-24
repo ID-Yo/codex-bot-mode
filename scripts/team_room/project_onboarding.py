@@ -226,6 +226,11 @@ def confirm(host_root, payload, expected_version, *, confirmed=False):
                         temporary = Path(stream.name)
                         stream.write(body)
                     os.replace(temporary, file)
+                    try:  # the relay allow-list must see the new project at once
+                        from .desktop_relay import invalidate_targets
+                        invalidate_targets()
+                    except Exception:
+                        pass
                 finally:
                     if temporary and temporary.exists():
                         temporary.unlink()

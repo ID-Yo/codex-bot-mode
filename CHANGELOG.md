@@ -24,7 +24,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/). Versions follow [SemVer
 - Chief of Staff updates now identify the project, including multi-project, cross-project and personal operations.
 - Installation examples now pass the selected tracking mode or the reviewed answers file.
 
-## [Office 0.1.5] - unreleased
+## [Office 0.1.6] - unreleased
 
 Windows x64 preview of the Codex Office desktop controller (signed with self-signed certificate `CN=Codex Office (ID-Yo)`, thumbprint `2C4510778788894A8CAA3C891FE3BCB899A0C0F0`; compare the published SHA-256).
 
@@ -41,10 +41,10 @@ Windows x64 preview of the Codex Office desktop controller (signed with self-sig
 - Draining and stop handling in `/desktop/shutdown` return 202 if already in progress or 409 busy on timeout, avoiding spurious cancellation errors.
 - A draining Office closes its event streams so the service exits during a graceful stop.
 - The installer shows a Retry/Cancel dialog (English and Bulgarian) when it cannot stop the previous Office; silent installs exit with code 2 without prompting.
+- The service no longer spins the CPU while the controller polls its status: the project registry scan behind the Desktop relay allow-list is built once, kept while the registry and rosters are unchanged, and native thread checks are reused between status polls.
 
 ### Notes
 - Executables are signed with self-signed certificate `desktop/Codex-Office-ID-Yo.cer` (`2C4510778788894A8CAA3C891FE3BCB899A0C0F0`). Import the certificate into Trusted Root / Trusted Publisher to trust it.
-- Installer `Codex Office_0.1.5_x64-setup.exe`: 17,576,632 bytes, SHA-256 `1B58B66FF3AD0F614C9046467DBFF04627245EE90699B8735E1FF270CC9FFEE2`.
 
 ## [0.1.0] - 2026-10-13
 

@@ -181,6 +181,13 @@ def build_overview(config_file, current_project_id=None, current_project_root=No
     all_teams = []
     all_projects = []
     seen_roots = set()
+    names = {}  # each agent.yaml is resolved and parsed once per overview
+
+    def name_of(proot, workspace, default_role):
+        key = (proot, workspace, default_role)
+        if key not in names:
+            names[key] = _get_display_name(proot, workspace, default_role)
+        return names[key]
 
     for p in reg['projects']:
         pid = p.get('id')
@@ -270,7 +277,7 @@ def build_overview(config_file, current_project_id=None, current_project_root=No
                 continue
             bot_id = part.get('bot')
             role = part.get('role') or bot_id.title()
-            display_name = _get_display_name(proot, part.get('workspace') or '', role)
+            display_name = name_of(proot, part.get('workspace') or '', role)
             team_name = part.get('team')
             tid = part.get('thread_id')
             all_bots.append({
@@ -303,7 +310,7 @@ def build_overview(config_file, current_project_id=None, current_project_root=No
                         'bot_key': f'{pid}:{part.get("bot")}',
                         'bot_id': part.get('bot'),
                         'role': part.get('role'),
-                        'display_name': _get_display_name(proot, part.get('workspace') or '', part.get('role') or part.get('bot').title()),
+                        'display_name': name_of(proot, part.get('workspace') or '', part.get('role') or part.get('bot').title()),
                         'thread_id': part.get('thread_id'),
                         'link': roster.link(part.get('thread_id'))
                     }
@@ -394,6 +401,11 @@ def resolve_project_manager(config_file, project_id, current_project_root=None):
     if not project_id or not isinstance(project_id, str):
         return {'status': 'invalid_id', 'error': 'Valid project_id required'}
     overview = build_overview(config_file, current_project_root=current_project_root)
+    return manager_from_overview(overview, project_id)
+
+
+def manager_from_overview(overview, project_id):
+    """Same result as resolve_project_manager for an overview that was already built."""
     if overview.get('status') != 'ok':
         return {'status': overview.get('status') or 'error', 'error': overview.get('error') or 'Registry error'}
 

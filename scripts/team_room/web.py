@@ -48,6 +48,10 @@ class IPv6RoomHTTPServer(RoomHTTPServer):
         super().server_bind()
 
 
+# The controller polls /desktop/status every few seconds; native thread checks are reused for this long.
+STATUS_NATIVE_CACHE_SECONDS = 10
+
+
 def create_server(controller, port=0, *, ipv6=False, token=None, desktop_lifecycle=None):
     token = token or secrets.token_urlsafe(32)
     from .settings import BotSettings, OfficeSettings
@@ -143,7 +147,8 @@ def create_server(controller, port=0, *, ipv6=False, token=None, desktop_lifecyc
                     return self.reply(200, desktop_lifecycle.health())
                 if url.path == '/desktop/status':
                     state = inspect_shutdown(controller, getattr(controller, 'personal', None),
-                        getattr(controller, 'rooms', None), getattr(controller, 'project_managers', None))
+                        getattr(controller, 'rooms', None), getattr(controller, 'project_managers', None),
+                        native_cache_ttl=STATUS_NATIVE_CACHE_SECONDS)
                     return self.reply(200, {**desktop_lifecycle.health(), **state,
                         'stop_pending': desktop_lifecycle.stop_requested})
                 if url.path == '/desktop/logs':
