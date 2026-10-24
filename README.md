@@ -62,6 +62,8 @@ Each role is also available on its own. See [catalog/](catalog/README.md).
 
 ## Quick start
 
+**New computer, or moving an existing setup?** Follow [Set up on a new computer](docs/new-machine.md) first: one ordered guide (Chief of Staff, project teams, Office, relay, Monitor), for a fresh setup and for a move.
+
 Requirements: Codex Desktop (Windows tested; other platforms untested), Python 3.10+ (standard library only), Git. Optional: GitHub CLI, Chrome or Edge for Office voice features.
 
 1. Clone this repository.
@@ -80,6 +82,7 @@ Step-by-step with expected results: [Getting started](docs/getting-started.md). 
 
 | Read | For |
 |---|---|
+| [Set up on a new computer](docs/new-machine.md) | Ordered setup of a new machine, fresh or moved: Chief of Staff, teams, Office, relay, Monitor |
 | [Getting started](docs/getting-started.md) | First install and first team |
 | [Working with teams](docs/working-with-teams.md) | Who to talk to, adding teams and agents, two computers |
 | [Teams reference](docs/operations/teams.md) | Commands, approvals, structure |

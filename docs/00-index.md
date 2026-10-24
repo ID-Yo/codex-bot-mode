@@ -4,6 +4,7 @@ Entry point to canonical documentation for Codex Bot Mode, adopting the Open-Dre
 
 ## Main entry points
 
+- [Set up on a new computer](new-machine.md) (fresh or moved: Chief of Staff, teams, Office, relay, Monitor)
 - [Documentation Structure & Rules](STRUCTURE.md)
 - [Project Overview](../README.md)
 - [Agent Governance & Global Instructions](../AGENTS.md)
@@ -17,6 +18,7 @@ Entry point to canonical documentation for Codex Bot Mode, adopting the Open-Dre
 | Overview (core) | [README](../README.md) | [Project Overview](../README.md) |
 | Governance (core) | [AGENTS.md](../AGENTS.md) | [AGENTS.md](../AGENTS.md) |
 | Architecture & Design | [design/](design/project-roster.md) | [project-roster.md](design/project-roster.md), [team-work-tracking.md](design/team-work-tracking.md) |
+| New machine (setup) | [new-machine.md](new-machine.md) | [new-machine.md](new-machine.md) |
 | Operations | [operations/](operations/teams.md) | [teams.md](operations/teams.md), [agent-monitor.md](operations/agent-monitor.md), [repository-hygiene.md](operations/repository-hygiene.md), [task-ownership-and-follow-through.md](operations/task-ownership-and-follow-through.md) |
 | Marketing (5 topics) | [marketing/](marketing/README.md) | [ideal-customer-profile.md](marketing/ideal-customer-profile.md), [competitors.md](marketing/competitors.md), [positioning.md](marketing/positioning.md), [value-proposition.md](marketing/value-proposition.md), [messaging.md](marketing/messaging.md) |
 | Status (optional) | [status/](status/README.md) | [current-state.md](status/current-state.md) |
