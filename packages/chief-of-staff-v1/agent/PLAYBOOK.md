@@ -43,6 +43,16 @@ deleting, purchasing and publishing still need the owner's confirmation.
 6. Record the open request in `agent/STATE.md`. When the reply arrives, check it,
    answer the owner with links, and remove it from STATE.md.
 
+## Messages to agents
+
+Sending many messages in a burst overloads the Codex Desktop app-server queue; sending
+stalls and the owner has to restart Codex. So:
+
+- Never send more than 3 messages to agents one after another.
+- Space mass changes at least 20 seconds apart.
+- Prefer one change at configuration level (a shared profile, the roster, the request
+  ledger, or one coordination message to the lead) over many separate messages.
+
 ## Follow-up
 
 - Check open requests at the start of each conversation.
