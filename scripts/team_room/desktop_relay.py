@@ -17,6 +17,7 @@ from urllib.request import Request, build_opener, ProxyHandler
 from . import project, work
 from .work import DesktopBridge, Uncertain
 from .transport import safe_error
+from .relay_url import relay_base_url
 from .web import RoomHTTPServer
 
 TOOLS = {'list_threads', 'read_thread', 'wait_threads', 'send_message_to_thread', 'navigate_to_codex_page'}
@@ -406,7 +407,7 @@ def create_relay(bridge, root, port=24243):
     server = RoomHTTPServer(('127.0.0.1', port), Handler)
     server.daemon_threads = True
     server.bridge_token = token
-    descriptor = {'url':f'http://localhost:{server.server_port}', 'token':token,
+    descriptor = {'url':f'http://127.0.0.1:{server.server_port}', 'token':token,
                   'origin':work.MANAGER, 'pid':os.getpid(), 'bridge_pid':getattr(bridge, 'pid', None)}
     path = root / 'relay.json'
     temporary = root / 'relay.tmp'
@@ -425,15 +426,15 @@ class RelayBridge(DesktopBridge):
         self._descriptor()
     def _descriptor(self):
         data = json.loads((self.root / 'relay.json').read_text(encoding='utf-8'))
-        url = urlparse(data['url'])
-        if data.get('origin') != work.MANAGER or url.scheme != 'http' or url.hostname != 'localhost' or not url.port or url.path or url.query or url.fragment or url.username or url.password:
+        relay_base_url(data['url'])
+        if data.get('origin') != work.MANAGER:
             raise ValueError('Invalid Desktop relay registration')
         if not isinstance(data.get('token'), str) or len(data['token']) < 32:
             raise ValueError('Invalid Desktop relay registration')
         return data
     def _post(self, path, data):
         descriptor = self._descriptor()
-        request = Request(descriptor['url'] + path, data=json.dumps(data).encode('utf-8'),
+        request = Request(relay_base_url(descriptor['url']) + path, data=json.dumps(data).encode('utf-8'),
             headers={'Content-Type':'application/json', 'X-Office-Relay':descriptor['token']})
         try:
             with build_opener(ProxyHandler({})).open(request, timeout=40) as response: return json.load(response)
@@ -469,7 +470,7 @@ def main():
     try:
         bridge.call('list_threads', {'limit':1})
         server = create_relay(bridge, root)
-        print('Desktop relay ready on localhost:24243.', flush=True)
+        print('Desktop relay ready on 127.0.0.1:24243.', flush=True)
         worker = threading.Thread(target=server.serve_forever, daemon=True)
         worker.start()
         stop = root / 'shutdown.flag'; stop.unlink(missing_ok=True)

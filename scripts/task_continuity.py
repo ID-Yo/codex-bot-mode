@@ -484,6 +484,15 @@ class RouteLock:
         self.release()
 
 
+def _relay_base_url(url):
+    """Shared validation and normalization from team_room/relay_url.py (same rules as RelayBridge)."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("cbm_relay_url", str(Path(__file__).resolve().parent / "team_room" / "relay_url.py"))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod.relay_base_url(url)
+
+
 def get_req_ledger(project_path):
     project_path = Path(project_path).resolve()
     req_file = project_path / ".bot-mode" / "requests.py"
@@ -564,6 +573,10 @@ def default_desktop_relay_adapter(project_path, bot_id, req_id, summary):
     token = desc.get("token")
     if not url or not token:
         raise PreconnectConfigurationError("Malformed Desktop Relay descriptor")
+    try:
+        url = _relay_base_url(url)
+    except ValueError as e:
+        raise PreconnectConfigurationError(f"Untrusted Desktop Relay address: {e}") from e
 
     payload = {
         "name": "send_message_to_thread",

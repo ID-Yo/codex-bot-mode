@@ -42,6 +42,7 @@ Windows x64 preview of the Codex Office desktop controller (signed with self-sig
 - A draining Office closes its event streams so the service exits during a graceful stop.
 - The installer shows a Retry/Cancel dialog (English and Bulgarian) when it cannot stop the previous Office; silent installs exit with code 2 without prompting.
 - The service no longer spins the CPU while the controller polls its status: the project registry scan behind the Desktop relay allow-list is built once, kept while the registry and rosters are unchanged, and native thread checks are reused between status polls.
+- The Desktop relay is addressed on 127.0.0.1 instead of localhost, which avoided a slow refused IPv6 attempt on every call; relay addresses from older descriptors are still accepted and are validated the same way everywhere.
 
 ### Notes
 - Executables are signed with self-signed certificate `desktop/Codex-Office-ID-Yo.cer` (`2C4510778788894A8CAA3C891FE3BCB899A0C0F0`). Import the certificate into Trusted Root / Trusted Publisher to trust it.
