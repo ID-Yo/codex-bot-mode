@@ -705,8 +705,13 @@ def produce_snapshot(project_dir, now=None, explicit_only=False):
                         s_text = r.get("summary") or ""
                         if not sha:
                             shas_40 = re.findall(r"(?<![0-9A-Za-z])[0-9a-f]{40}(?![0-9A-Za-z])", s_text)
-                            if shas_40:
-                                sha = shas_40[-1]
+                            unique_shas = list(dict.fromkeys(s.lower() for s in shas_40))
+                            if len(unique_shas) == 1:
+                                sha = unique_shas[0]
+                            elif len(unique_shas) > 1:
+                                marker_match = re.search(r"\b(?:candidate|commit)[:\s]+([0-9a-f]{40})\b", s_text, re.IGNORECASE)
+                                if marker_match:
+                                    sha = marker_match.group(1).lower()
                         if not auth:
                             m_auth = re.search(r"\bauthor[:\s]+([a-z][a-z0-9-]{0,47})\b", s_text, re.IGNORECASE)
                             if m_auth:

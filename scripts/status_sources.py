@@ -156,8 +156,13 @@ def make_task(key, requests, github, ledger_path, now, interval, project_request
         summary_text = latest.get("summary") or ""
         if not sha:
             shas_40 = re.findall(r"(?<![0-9A-Za-z])[0-9a-f]{40}(?![0-9A-Za-z])", summary_text)
-            if shas_40:
-                sha = shas_40[-1]
+            unique_shas = list(dict.fromkeys(s.lower() for s in shas_40))
+            if len(unique_shas) == 1:
+                sha = unique_shas[0]
+            elif len(unique_shas) > 1:
+                marker_match = re.search(r"\b(?:candidate|commit)[:\s]+([0-9a-f]{40})\b", summary_text, re.IGNORECASE)
+                if marker_match:
+                    sha = marker_match.group(1).lower()
         if not author:
             author_match = re.search(r"\bauthor[:\s]+([a-z][a-z0-9-]{0,47})\b", summary_text, re.IGNORECASE)
             if author_match:
