@@ -5,7 +5,7 @@ from pathlib import Path
 import os
 import tempfile
 
-STATE_READ_LIMIT = 16 * 1024
+STATE_READ_LIMIT = 64 * 1024  # real findings across 13 projects exceeded 16 KiB (#259)
 DELIVERY_STATUSES = {"sent", "acknowledged", "unconfirmed", "delivery_unknown", "not_attempted", "not_required"}
 FIELDS = ("version", "run_id", "audit_status", "coverage", "observed_at",
           "next_check_at", "active_alert_count", "delivery_status", "alert_ledger",

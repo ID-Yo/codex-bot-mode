@@ -19,6 +19,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import monitor_checkpoint
+import status_sources
 import task_continuity as tc
 
 MAX_FINDINGS = 12
@@ -76,20 +77,9 @@ def other_invocations(runs_dir, run_id, now):
     return rows, readable
 
 
-def project_tasks(pid, root):
-    """Tasks of one project, ids prefixed with the project id. No task folder means no tasks."""
-    root = Path(root)
-    if not root.is_dir():
-        raise FileNotFoundError("project root unavailable")
-    if not (root / "work" / "tasks").is_dir():
-        return []
-    snapshot = tc.produce_snapshot(root)
-    tasks = snapshot["tasks"]
-    for task in tasks:
-        task["id"] = f"{pid}/{task['id']}"
-        for handoff in task.get("handoffs", []):
-            handoff["id"] = f"{pid}/{handoff['id']}"
-    return tasks
+def project_tasks(project, now, interval=20):
+    """(tasks, summary) of one project from GitHub labels, the request ledger and explicit task records."""
+    return status_sources.project_status(project, now, interval)
 
 
 def load_config(monitor_dir):
@@ -102,7 +92,7 @@ def load_config(monitor_dir):
 def build(config, run_id, now, invocations, invocations_available):
     registry = json.loads(Path(config["registry_path"]).read_text(encoding="utf-8-sig"))
     interval = int(config.get("interval_minutes", 20))
-    tasks, unavailable, covered_projects = [], [], 0
+    tasks, unavailable, covered_projects, project_status = [], [], 0, {}
     rows = registry.get("projects", [])
     if not isinstance(rows, list):
         raise ValueError("registry projects must be a list")
@@ -113,10 +103,19 @@ def build(config, run_id, now, invocations, invocations_available):
             unavailable.append(f"registry-entry:{pid if isinstance(pid, str) and pid else index} (missing id or root)")
             continue
         try:
-            tasks.extend(project_tasks(pid, root))
-            covered_projects += 1
+            found, summary = project_tasks(project, now, interval)
         except Exception as error:
             unavailable.append(f"project:{pid} ({type(error).__name__})")
+            project_status[pid] = {"state": "unavailable", "total": 0, "by_status": {}, "sources": [], "problems": [type(error).__name__]}
+            continue
+        tasks.extend(found)
+        project_status[pid] = summary
+        if summary["problems"]:
+            unavailable.append(f"project:{pid} ({'; '.join(summary['problems'])})")
+        elif summary["state"] == "unknown":
+            unavailable.append(f"project:{pid} (UNKNOWN: no status-bearing tasks from GitHub labels, ledger or task records)")
+        else:
+            covered_projects += 1
     if not invocations_available:
         unavailable.append("invocation-metadata")
     later = utc(now + timedelta(minutes=interval + 10))
@@ -130,6 +129,7 @@ def build(config, run_id, now, invocations, invocations_available):
             "coverage": "complete" if not unavailable else "partial",
             "observed_at": utc(now), "next_check_at": later,
             "covered_tasks": [task["id"] for task in tasks], "unavailable_scopes": unavailable,
+            "project_status": project_status,
             "evidence": [f"ref:monitor-run:{run_id}", f"ref:registry-projects:{covered_projects}/{len(rows)}"],
             "invocations": [*invocations, {"run_id": run_id, "status": "active", "updated_at": utc(now)}]}}
     return snapshot, {"projects": len(rows), "projects_covered": covered_projects}
@@ -140,6 +140,15 @@ def report_text(run_id, complete, coverage, unavailable, findings, state_file, n
              f"Audit: {'complete' if complete else 'INCOMPLETE'}; coverage: {coverage}."]
     if unavailable:
         lines.append("Unavailable scopes: " + "; ".join(unavailable[:10]) + ".")
+    if len(findings) > MAX_FINDINGS:
+        by_project = {}
+        for f in findings:
+            project = f["scope"].split("/", 1)[0] if "/" in f["scope"] else "(monitor)"
+            by_project.setdefault(project, {}).setdefault(f["code"], 0)
+            by_project[project][f["code"]] += 1
+        lines.append("Findings by project: " + "; ".join(
+            f"{p} {sum(c.values())} (" + ", ".join(f"{k} {v}" for k, v in sorted(c.items())) + ")"
+            for p, c in sorted(by_project.items())) + ".")
     if findings:
         lines.append("Findings:")
         lines += [f"- {f['code']} ({f['scope']}): {f['detail']}" for f in findings[:MAX_FINDINGS]]
