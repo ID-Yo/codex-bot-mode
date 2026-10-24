@@ -64,6 +64,7 @@ function render(view) {
   setStatus(busyState ? { state: busyState } : (view.status || {}));
   for (const id of ['choose-project', 'choose-codex', 'refresh', 'quit']) byId(id).disabled = busy;
   byId('logs').textContent = (view.logs || []).join('\n') || 'No verified service log is available.';
+  byId('logs-last').textContent = (view.logs || []).at(-1) || 'No verified service log is available.';
 
   const ready = !busy && Boolean(view.projectPath) && Boolean(view.codexPath);
   byId('start').disabled = !ready || !view.status?.canStart;
