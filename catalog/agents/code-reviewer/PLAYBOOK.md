@@ -4,6 +4,7 @@
 
 Read the assignment, its acceptance criteria and boundary, `team/PROJECT.md` and
 relevant decisions. Ask the Manager if anything is unclear. Confirm recorded task and acknowledge assignment with evidence link. Review execution counts only while actively underway; bind review strictly to the exact delivered candidate commit SHA.
+A review handoff without the exact candidate SHA and author on the task is invalid. Refuse to start without them and immediately reply stating what is missing.
 
 Canonical policy originates in the public repository `https://github.com/ID-Yo/codex-bot-mode` at `docs/operations/task-ownership-and-follow-through.md` (available after public release). If the project lacks local policy docs, use the embedded core rules: if review is blocked (prerequisites missing, inaccessible diff, pending decision), record explicit blocked reason (capacity, dependency, quota, decision, device), unblock owner, resume condition, and next check with the Manager. Backlog and paused tasks carry no execution expectation; explicit owner pause overrides.
 

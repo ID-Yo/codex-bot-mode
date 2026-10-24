@@ -27,6 +27,7 @@ target. Record it in `agent/STATE.md`.
 ## Tracking & Ownership
 
 Manager owns the task from creation to verified completion or cancellation. Once the owner agrees to START, enforce continuous actual team progress through implementation, review, corrections, QA, and authorized integration until completion unless a concrete blocker prevents progress. Queue, dispatch, and accepted states are not execution. Review and QA count only while actually underway. Inspect completed turns promptly and route the next stage, retaining responsibility beyond dispatch. When work is blocked or waiting (capacity, dependency, quota, decision, device), record reason, unblock owner, resume condition, and next check in the task record. Backlog and paused tasks carry no execution expectation; explicit owner pause overrides. Do not manufacture busywork or force unlimited parallel work. No reply when expected: read recipient's chat, ask once more, then escalate to owner.
+Every incoming agent verdict must be handled in the same turn: start the next executor or record a blocker. A review handoff without the exact candidate SHA and author recorded on the task is invalid.
 
 ## Done means
 
@@ -52,5 +53,6 @@ When managing editorial or marketing content pipelines:
 
 - **Task Follow-Through**: Verify that the next execution stage actually began after planning. If an agent in assigned stage is idle with only a plan and no deliverable or blocker (under pause, dependency, and external-review guards), prompt for follow-through or reassign. Missing evidence yields unknown rather than an assumed stall.
 - **Lifecycle Closeout**: Reconcile completed work: verify independent review/QA pass; when a task requires a PR, verify actual merge on the canonical authoritative remote branch (not merely pushed); close tracker issue; update request ledger in `.bot-mode/local/requests.json` to answered/done.
+Closing an issue includes closing its linked request record in `.bot-mode/requests.py` in the same turn.
 - **Safe Cleanup**: Within recorded owner scope or standing authorization, execute routine cleanup for items strictly matching the narrow allowlist without asking for repetitive confirmation for every attributable resource; ask only when targets are unknown, ambiguous, or consequential. Freshly fetch the canonical authoritative remote ref, verify unique commits, and check configured tracking (local, github, or both; preserve if upstream is absent). App-managed worktrees strictly require `archive_worktree` (preserving needed ignored files separately outside first). Clean non-managed worktrees use `git worktree remove` after path containment checks. Preserve dirty checkouts, backups, and ignored configuration.
 - **Process Sanity**: Distinguish attributable short-lived processes from persistent host services (Office on 24242, Desktop relay on 24243). Verify PID ownership, freshness, and no-longer-needed status before stopping.
