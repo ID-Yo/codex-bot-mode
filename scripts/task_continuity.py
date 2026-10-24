@@ -284,6 +284,8 @@ def update_monitor_state(state_file_path, findings, snapshot=None, now=None, *, 
         scope = f.get("scope", "snapshot")
         code = f.get("code", "unknown")
         fp = f"{code}:{scope}"
+        if fp in current_fps:
+            continue  # one signal per fingerprint in a run
         current_fps.add(fp)
 
         task_deadline = task_deadlines.get(scope)
@@ -300,7 +302,14 @@ def update_monitor_state(state_file_path, findings, snapshot=None, now=None, *, 
                 "detail": f.get("detail"),
                 "status": "escalated" if is_overdue else "new",
                 "escalated": is_overdue,
+                "reported": False,
             }
+            new_alerts.append(f)
+        elif run_id and existing_ledger[fp].get("reported") is not True:
+            # Monitor runs only: seen before but never confirmed as delivered (a repeated invocation, a failed or
+            # unknown delivery, or a ledger from before this flag): still a new signal for the recipient.
+            entry = existing_ledger[fp]
+            entry.update(last_seen=now_str, detail=f.get("detail"), status="new", reported=False)
             new_alerts.append(f)
         else:
             entry = existing_ledger[fp]
@@ -321,7 +330,7 @@ def update_monitor_state(state_file_path, findings, snapshot=None, now=None, *, 
     if state_path.suffix.lower() == ".md":
         from monitor_checkpoint import save_checkpoint
         # The bounded block keeps fingerprints and timing only; details live in the report and snapshot.
-        slim = {fp: {k: v for k, v in entry.items() if k in ("first_seen", "status", "escalated")}
+        slim = {fp: {k: v for k, v in entry.items() if k in ("first_seen", "status", "escalated", "reported")}
                 for fp, entry in state["alert_ledger"].items()}
         save_checkpoint(state_path, {**state, "alert_ledger": slim})
         return state, new_alerts
