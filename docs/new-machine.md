@@ -13,7 +13,7 @@ Placeholders: `<cbm>` is your clone of this repository, `<cos>` the private Chie
 
 1. Commit and push the Chief of Staff repository and every project repository: `git status` must be clean, `git log origin/<branch>..` must be empty.
 2. Finish or cancel open requests. The request ledger (`.bot-mode/local/requests.json`) is local and does not travel. List what is open: `python -B .bot-mode/requests.py --project <project> list`.
-3. Note anything stored outside Git: connectors and sign-ins in Codex, the Monitor automation, the signing certificate you trusted for Office, and any `.env` files. None of it moves by itself.
+3. Note anything stored outside Git: connectors and sign-ins in Codex, the Monitor automation, the signing certificate you trusted for Office, any `.env` files, and `~/.codex/secrets/` (login files that some agents use). None of it moves by itself. Move the secrets folder by hand and securely (for example on an encrypted drive that you carry yourself); never through Git, a chat or an issue.
 4. Keep the old computer usable until Step 7. Two Monitors or two Offices on the same project at once produce double reports and two writers per thread (see Step 8).
 
 ## 1. Prerequisites
@@ -85,7 +85,16 @@ The chat moves itself into a sidebar section named "Chief of Staff". On a move t
 python -B <cos>\scripts\bot_mode.py --project <cos> --bot chief-of-staff memory
 ```
 
-Expected: `[]` on a fresh install; the stored lessons (each with source and evidence) on a move. An error or an empty list on a move means the clone is incomplete: check `git status` and `agent/memory/`.
+Expected on a fresh install: `[]`. On a move the same command can also return `[]` for a complete clone: it lists only active learned lessons, and a COS may keep what it learned in `agent/PLAYBOOK.md` and `knowledge/` instead. So check the clone itself:
+
+```text
+git -C <cos> ls-files agent/memory
+git -C <cos> status
+git -C <cos> fetch origin
+git -C <cos> rev-parse HEAD origin/main
+```
+
+Expected: the first command lists files, so the repository carries its memory folder; `git status` is clean, with no changes under `knowledge/` or `agent/STATE.md`; and the two hashes are equal (use your repository's main branch name). An error from the memory command itself, or a mismatch, means the clone is wrong.
 
 **Link projects to the COS.** So that team launches add new projects to its knowledge automatically, create the user-level config (outside every project, per computer):
 
@@ -120,7 +129,7 @@ By hand, for one agent:
 1. Create a chat in the project with this first message: "You are appointed as <display name> (<role>) in project <name>. Your workspace is <absolute workspace>. Load <absolute workspace>/.agents/skills/codex-<bot>/SKILL.md, then your profile and memory with --project <absolute workspace>, and place yourself in the sidebar section '<section>'."
 2. Copy its thread ID from the chat link (`codex://threads/<thread-id>`) and record it: `python -B <project>\.bot-mode\roster.py --project <project> set-thread <bot> <thread-id> --reason "this computer"`
 
-Check: `roster.py --project <project> links` lists every active participant with a `codex://threads/...` link, and each agent's memory loads: `python -B <workspace>\scripts\bot_mode.py --project <workspace> --bot <bot> memory`.
+Check: `roster.py --project <project> links` lists every active participant with a `codex://threads/...` link, and each agent's memory command runs without an error (an empty list is normal): `python -B <workspace>\scripts\bot_mode.py --project <workspace> --bot <bot> memory`.
 
 Notes for a move: `project.tooling` in `roster.json` names the old computer's tooling folder; the launch skills find the plugin or the clone by themselves, so leave it unless a skill reports it missing. A Project Director and Managers read colleagues' chats from the roster, so replace all agents of a project before assigning work. Open requests were finished or cancelled before the move; new ones are recorded in the new local ledger.
 
@@ -192,16 +201,11 @@ The relay depends on the running Desktop instance. After a Codex Desktop restart
 
 The Monitor is a read-only agent in the Chief of Staff project that audits all registered projects every 20 minutes and reports to the COS. It has three parts: its workspace (`<cos>\team\Monitoring\agent-monitor`), its local settings (`agent\monitoring.json`) and a scheduled Codex automation. See `docs/operations/agent-monitor.md` for what it reports.
 
-**Move.** The workspace, its scripts and `monitoring.json` came with the COS clone. Then:
+**Move.** The Monitor workspace lives inside the COS repository, so it, its scripts and `monitoring.json` came with the clone. Do not reinstall it. Only:
 
 1. Edit `agent\monitoring.json`: `registry_path` (and `desktop_relay_root` if you set it) to this computer's paths, `report_target_thread_id` to **this computer's COS chat id** (the chat from Step 3). Keep the rest.
-2. Bring the scripts to the current version with the maintainers' installer (it is in the development repository under `work/rollout/cbm227/`; a public clone installs the scripts by copying, see the note after the Fresh commands). Backups go outside any repository:
-
-```text
-python -B <cbm>\work\rollout\cbm227\apply_rollout.py update --monitor <cos>\team\Monitoring\agent-monitor --repo <cbm> --backup-root <backup folder outside every repository>
-```
-
-3. **Pause the Monitor automation on the old computer** before enabling the new one, otherwise both report.
+2. **Stop the Monitor automation on the old computer** first, otherwise both computers report.
+3. Create the new automation here (see "Schedule it" below).
 
 **Fresh.**
 
@@ -244,8 +248,8 @@ Tick every line:
 
 - [ ] `python --version`, `git --version`, `gh auth status` are fine; Codex Desktop is signed in.
 - [ ] The plugin shows the expected version after a Codex restart.
-- [ ] The COS chat is appointed and `bot_mode.py ... memory` returns the expected memory; `config.json` names `<cos>`.
-- [ ] For each project: `roster.py links` has a link for every active agent; each agent's memory loads.
+- [ ] The COS chat is appointed; on a fresh install `bot_mode.py ... memory` returns `[]`, on a move the clone checks of Step 3 pass; `config.json` names `<cos>`.
+- [ ] For each project: `roster.py links` has a link for every active agent; each agent's memory command runs without an error.
 - [ ] `office-project-roots.json` loads (`ok`) and lists every project with this computer's paths.
 - [ ] Office answers on http://localhost:24242 (`/api/state`).
 - [ ] Relay probe exits 0 (if used).
