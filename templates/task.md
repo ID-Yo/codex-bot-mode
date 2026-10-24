@@ -31,6 +31,8 @@
 - **Actor**: <Bot ID or role responsible for next step>
 
 ## Blockers and Explicit Waits (Required if state is blocked or waiting)
+- **Blocker / Decision Issue**: <Confirmed issue URL, or local pending-sync path and sync condition if tracker access is unavailable>
+- **Requested Action / Decision**: <Specific input needed, options and recommendation when relevant>
 - **Blocked Reason**: <Concrete cause: capacity, dependency, quota, decision, device>
 - **Unblock Owner**: <Authorized entity: Repository Owner, Chief of Staff, etc.>
 - **Resume Condition**: <Measurable condition required before execution resumes>

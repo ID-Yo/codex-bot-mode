@@ -387,7 +387,8 @@ def resolve_project_manager(config_file, project_id, current_project_root=None):
     """Resolve exactly one appointed Manager bot details and thread_id for a given project_id.
 
     Reuses build_overview safety, containment, and manifest display name checks.
-    Fails closed if there is none, multiple managers, symlink escape, or missing project.
+    Fails closed if there is none, several project Managers (team Managers named *-manager do not count),
+    symlink escape, or missing project.
     Never returns private filesystem roots to caller.
     """
     if not project_id or not isinstance(project_id, str):
@@ -411,6 +412,9 @@ def resolve_project_manager(config_file, project_id, current_project_root=None):
     mgrs = [b for b in overview.get('bots', []) if b.get('project_id') == project_id and b.get('role') == 'Manager']
     if not mgrs:
         return {'status': 'no_manager', 'error': f'No active Manager appointed for {pname}'}
+    # A team Manager (bot id ending in -manager, e.g. marketing-manager) leads a team, not the project.
+    # It is the project Manager only when no other Manager exists.
+    mgrs = [b for b in mgrs if not str(b.get('bot_id') or '').endswith('-manager')] or mgrs
     if len(mgrs) > 1:
         return {'status': 'multiple_managers', 'error': f'Multiple Managers found for {pname}; manual review required'}
 

@@ -1,0 +1,30 @@
+/* Full-page New project (task #217). */
+.new-project-view{padding:0 22px 22px;background:var(--bg);color:var(--ink)}
+.new-project-view[hidden]{display:none}
+.np-page{max-width:760px}
+.np-lead{margin:0 0 14px;font-size:12px;color:var(--muted)}
+.np-form{display:grid;gap:12px}
+.np-field{display:grid;gap:4px}
+.np-label{font-size:11px;font-weight:600}
+.np-hint{font-size:10px;color:var(--muted)}
+.np-field input,.np-field select{max-width:100%;font-size:12px}
+.np-check{display:flex;gap:8px;align-items:center;font-size:12px}
+.np-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:6px}
+.np-error{margin:0;padding:8px 10px;border-left:3px solid var(--hot);background:var(--hotbg);color:var(--hot);font-size:11px;overflow-wrap:anywhere}
+.np-error[hidden]{display:none}
+.np-banner{margin:0 0 12px;padding:10px 12px;border:1px solid var(--line);border-left:3px solid var(--accent);border-radius:6px;background:var(--paper)}
+.np-banner.setup{border-left-color:var(--hot)}
+.np-banner p{margin:4px 0 0;font-size:11px;color:var(--muted)}
+.np-page h2{margin:16px 0 8px;font-size:13px}
+.np-summary{display:grid;gap:6px;margin:0}
+.np-summary>div{display:grid;grid-template-columns:minmax(120px,170px) minmax(0,1fr);gap:10px;font-size:12px}
+.np-summary dt{color:var(--muted)}.np-summary dd{margin:0;overflow-wrap:anywhere}
+.np-progress,.np-steps{margin:0;padding:0;font-size:12px}
+.np-progress{list-style:none;display:grid;gap:6px}
+.np-steps{padding-left:18px;display:grid;gap:4px}
+.np-step{display:flex;gap:8px;align-items:baseline}
+.np-step.done .np-mark{color:var(--accent)}
+.np-step.pending .np-mark{color:var(--muted)}
+.np-prompt{width:100%;margin:6px 0;font:11px/1.6 ui-monospace,Consolas,monospace;resize:vertical}
+.pc-header .new-project-open{margin-left:auto;align-self:center}
+@media(max-width:600px){.new-project-view{padding:0 12px 16px}.np-summary>div{grid-template-columns:minmax(0,1fr);gap:0}}

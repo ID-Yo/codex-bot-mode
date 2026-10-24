@@ -13,10 +13,13 @@
   const el=(tag,cls,text)=>{const n=document.createElement(tag);if(cls)n.className=cls;if(text!=null)n.textContent=text;return n;};
   const safe=url=>typeof url==='string'&&/^(codex:\/\/threads\/[0-9a-f-]{36}|https:\/\/(github\.com|tasks\.google\.com)\/)/.test(url)?url:null;
   const link=(url,label)=>{const u=safe(url);if(!u)return el('span','pc-muted',label);const a=el('a','pc-link',label);a.href=u;if(u.startsWith('https:')){a.target='_blank';a.rel='noopener noreferrer';}return a;};
-  const when=t=>{const d=new Date(t);return Number.isNaN(d.valueOf())?'unknown time':d.toLocaleString(undefined,{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'});};
-  const stale=p=>!p.source.as_of||Date.now()-new Date(p.source.as_of)>(p.stale_after_hours||48)*3600e3;
+  const when=t=>{const d=new Date(t);return Number.isNaN(d.valueOf())?officeI18n.t('unknown time'):d.toLocaleString(officeI18n.language,{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'});};
+  const stale=p=>{const age=Date.now()-Date.parse(p.source?.as_of);return !Number.isFinite(age)||age<0||age>(p.stale_after_hours||48)*3600e3;};
   const pending=p=>(p.decisions||[]).filter(d=>d.state==='pending');
   let registryData=null;
+  let registryFailed=true,agentData=null,agentFailed=true;
+  let inboxData=null,inboxFailed=false,inboxLoading=false,inboxSelected=null;
+  const inboxFilters={project:'',kind:'',freshness:'',urgent:false,query:''};
   const VISIBILITY_KEY='office_visible_projects';
   let projSearchQuery='';
 
@@ -61,43 +64,186 @@
     for(const p of fromSnap){
       if(!p.id||seen.has(p.id))continue;
       seen.add(p.id);
-      list.push({id:p.id,name:p.name||p.id,root:'',status:'unknown',reason:'Not in project registry',is_current:false,applicable:false});
+      list.push({id:p.id,name:p.name||p.id,root:'',status:'unknown',reason:officeI18n.t('Not in project registry'),is_current:false,applicable:false});
     }
     return list;
   }
-  const allProjects=()=>data?.snapshot?.projects||[];
-  const projects=()=>allProjects().filter(p=>isProjectVisible(p.id));
+  const allProjects=()=>{
+    const snapshot=data?.snapshot?.projects||[],seen=new Set(snapshot.map(p=>p.id));
+    const missing=(['dashboard','inbox'].includes(view)?[]:registryData?.projects||[]).filter(p=>!seen.has(p.id)).map(p=>({
+      id:p.id,name:p.name||p.id,status:'unknown',summary:officeI18n.t('Project summary unavailable.'),
+      source:{available:false,label:officeI18n.t('Project registry'),as_of:null,error:p.reason||null}
+    }));
+    return [...snapshot,...missing];
+  };
+  const projects=()=>view==='dashboard'?allProjects().filter(p=>isProjectVisible(p.id)):allProjects();
+
+  const INBOX_KINDS={decision:'Decision',request:'Request',blocker:'Blocker',setup:'Setup'};
+  const INBOX_ACTIONS={appoint_team:'Appoint the team',record_issue:'Record an issue'};
+  const kindLabel=kind=>officeI18n.t(INBOX_KINDS[kind]||'Other');
+  const issueDrafts=new Map(),issueErrors=new Map(),issueBusy=new Set(),handoffCopied=new Set();
+  const inboxIssue=url=>typeof url==='string'&&/^https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/issues\/[1-9][0-9]*$/.test(url)?url:null;
+  const inboxFresh=item=>!inboxFailed&&item.freshness==='fresh'&&Number.isFinite(Date.parse(item.source_at))&&Date.now()>=Date.parse(item.source_at)&&Date.now()-Date.parse(item.source_at)<=48*3600e3;
+  function inboxComplete(){const age=Date.now()-Date.parse(inboxData?.observed_at);return Boolean(inboxData&&!inboxFailed&&inboxData.complete&&inboxData.warnings.length===0&&Number.isFinite(age)&&age>=0&&age<=48*3600e3);}
+  async function loadInbox(){
+    if(inboxLoading)return;inboxLoading=true;
+    try{
+      const next=await api('/api/owner-inbox');
+      if(next.schema!==1||!Array.isArray(next.items)||typeof next.complete!=='boolean'||!Array.isArray(next.warnings)||next.warnings.some(warning=>typeof warning!=='string')||typeof next.coverage!=='string'||!Number.isFinite(Date.parse(next.observed_at))||Date.parse(next.observed_at)>Date.now()||next.items.some(item=>!item||typeof item.id!=='string'||!item.id||typeof item.title!=='string'||typeof item.kind!=='string'||!item.kind||!Array.isArray(item.sources)||item.sources.some(source=>!source||typeof source.project_id!=='string'||typeof source.kind!=='string'))||new Set(next.items.map(item=>item.id)).size!==next.items.length)throw Error(officeI18n.t('Invalid owner inbox response.'));
+      inboxData=next;inboxFailed=false;
+    }catch(error){inboxFailed=true;}finally{inboxLoading=false;}
+    if(document.getElementById('projects-view').hidden)return;
+    if(view==='dashboard'){const aside=document.getElementById('owner-dashboard-attention');if(aside)paintInboxPreview(aside);}
+    else if(view==='inbox'){
+      const active=document.activeElement,id=active?.id,position=active?.selectionStart;render();
+      if(id?.startsWith('owner-filter-')||id==='owner-issue-input'){const input=document.getElementById(id);input?.focus();if(typeof position==='number'&&input?.type==='search')input.setSelectionRange(position,position);}
+    }
+  }
+  function inboxCoverage(parent){
+    const notice=el('p','owner-inbox-coverage');notice.setAttribute('role','status');
+    notice.textContent=officeI18n.t(inboxFailed?'Owner inbox unavailable. Retained items are historical.':!inboxData?'Loading owner inbox…':!inboxComplete()?'Owner inbox coverage is incomplete. Unknown is not zero.':'Only recorded open requests and pending decisions are included.');parent.append(notice);
+    if(inboxData?.warnings.length){const warnings=el('ul','owner-inbox-warnings');for(const warning of inboxData.warnings)warnings.append(el('li',null,officeI18n.t(warning)));parent.append(warnings);}
+    if(inboxData)notice.textContent+=' · '+officeI18n.t('Observed at')+' '+when(inboxData.observed_at);
+  }
+  function inboxRow(item){
+    const row=el('li','owner-inbox-row');row.dataset.ownerItemId=item.id;
+    const openItem=el('button','owner-inbox-title',item.title);openItem.type='button';openItem.onclick=()=>open('inbox',item.id);row.append(openItem);
+    const meta=el('div','owner-inbox-meta');meta.append(el('span',null,item.project_name||item.project_id||officeI18n.t('Unknown')),el('span',null,item.agent||officeI18n.t('Unknown')),el('span','pc-tag',kindLabel(item.kind)));
+    if(INBOX_ACTIONS[item.action])meta.append(el('span','pc-tag',officeI18n.t(INBOX_ACTIONS[item.action])));
+    if(item.urgent)meta.append(el('span','pc-tag',officeI18n.t('Urgent')));
+    meta.append(el('span','pc-tag',officeI18n.t(inboxFresh(item)?'Fresh':inboxFailed?'Historical / unavailable':item.freshness==='stale'?'Stale / unknown':'Unknown')));
+    if(item.mixed_freshness)meta.append(el('span','pc-tag',officeI18n.t('Mixed source freshness')));
+    if(item.tracking_required)meta.append(el('span','pc-tag',officeI18n.t('Issue tracking required')));
+    if(item.due)meta.append(el('span',null,officeI18n.t('Due')+' '+when(item.due)));
+    row.append(meta);
+    if(item.kind==='blocker'&&item.blocked_work)row.append(el('p','owner-inbox-reason',item.blocked_work));
+    return row;
+  }
+  function inboxIssueForm(item){
+    const wrap=el('div','owner-issue'),input=el('input');input.id='owner-issue-input';input.type='url';input.placeholder='https://github.com/owner/repo/issues/1';input.setAttribute('aria-label',officeI18n.t('GitHub issue URL'));input.value=issueDrafts.get(item.id)||'';input.oninput=()=>issueDrafts.set(item.id,input.value);
+    const go=el('button',null,officeI18n.t(issueBusy.has(item.id)?'Linking…':'Link issue'));go.type='button';go.id='owner-issue-link';go.disabled=issueBusy.has(item.id);go.onclick=()=>linkInboxIssue(item,input.value.trim());
+    const error=el('p','np-error',issueErrors.get(item.id)?officeI18n.t(issueErrors.get(item.id)):'');error.id='owner-issue-error';error.setAttribute('role','alert');error.hidden=!issueErrors.get(item.id);
+    wrap.append(input,go,error);return wrap;
+  }
+  async function linkInboxIssue(item,url){
+    if(issueBusy.has(item.id))return;
+    if(!inboxIssue(url)){issueErrors.set(item.id,'Enter a GitHub issue URL such as https://github.com/owner/repo/issues/1.');render();return;}
+    issueBusy.add(item.id);issueErrors.delete(item.id);render();
+    try{
+      const json={method:'POST',headers:{'Content-Type':'application/json'}};
+      if(item.kind==='setup')await api('/api/projects/pending-team/issue',{...json,body:JSON.stringify({project_id:item.project_id,issue_url:url})});
+      else{
+        const source=item.sources.find(s=>s.kind==='room_outcome'&&typeof s.room_id==='string'),room='/api/rooms/'+encodeURIComponent(source.room_id)+'/outcomes';
+        const outcome=((await api(room)).items||[]).find(o=>o.id===source.id),stopped=outcome?.assignments?.find(a=>['blocked','failed'].includes(a.state)&&!a.issue_url);
+        if(!stopped)throw Error('This blocker is no longer listed in its room. Refresh the inbox.');
+        await api(room+'/'+encodeURIComponent(outcome.id)+'/assignments/'+encodeURIComponent(stopped.id)+'/issue',{...json,body:JSON.stringify({version:outcome.version,issue_url:url})});
+      }
+      issueDrafts.delete(item.id);
+    }catch(error){issueErrors.set(item.id,error.message);}
+    issueBusy.delete(item.id);await loadInbox();
+    // The server derives an item's id from its issue link, so a linked item reappears under a new id; keep the owner on it.
+    if(inboxSelected===item.id&&!inboxData?.items.some(row=>row.id===item.id)){
+      const same=inboxData?.items.find(row=>row.kind===item.kind&&row.project_id===item.project_id&&row.sources.some(s=>item.sources.some(o=>o.kind===s.kind&&o.id===s.id)));
+      if(same)inboxSelected=same.id;
+    }
+    if(view==='inbox')render();
+  }
+  function handoffBox(item){
+    const box=el('div','owner-handoff'),area=el('textarea','np-prompt');area.id='owner-handoff';area.readOnly=true;area.rows=5;area.value=item.blocked_work;
+    const copy=el('button','secondary',officeI18n.t(handoffCopied.has(item.id)?'Copied':'Copy instruction'));copy.type='button';copy.id='owner-handoff-copy';
+    copy.onclick=async()=>{try{await navigator.clipboard.writeText(area.value);}catch{area.select();}handoffCopied.add(item.id);copy.textContent=officeI18n.t('Copied');};
+    box.append(el('strong',null,officeI18n.t('Instruction for Codex')),area,copy);return box;
+  }
+  function paintInboxPreview(parent){
+    parent.replaceChildren(el('h2',null,officeI18n.t('Waiting for me')));inboxCoverage(parent);
+    const items=inboxData?.items||[],urgent=items.filter(item=>item.urgent),shown=(urgent.length?urgent:items).slice(0,5);
+    const list=el('ul','owner-inbox-list');shown.forEach(item=>list.append(inboxRow(item)));parent.append(list);
+    if(!items.length)parent.append(empty(officeI18n.t(inboxComplete()?'No recorded owner items.':inboxFailed?'Status unavailable':!inboxData?'Loading…':'Owner wait count is unknown.')));
+    const all=el('button','secondary',officeI18n.t('View all owner items'));all.type='button';all.onclick=()=>open('inbox');parent.append(all);
+  }
+  function renderInbox(body){
+    inboxCoverage(body);
+    const refresh=el('button','secondary',officeI18n.t('Refresh'));refresh.type='button';refresh.disabled=inboxLoading;refresh.onclick=loadInbox;
+    if(inboxSelected){
+      body.append(refresh);
+      const item=inboxData?.items.find(row=>row.id===inboxSelected);
+      if(!item){body.append(empty(officeI18n.t('This item is no longer listed. Check its source; no resolution is inferred.')));return;}
+      const detail=el('section','owner-inbox-detail');detail.dataset.ownerItemId=item.id;
+      const back=el('button','secondary',officeI18n.t('Back to owner inbox'));back.type='button';back.onclick=()=>open('inbox');detail.append(back);
+      detail.append(el('h2',null,item.title),el('p',null,(item.project_name||item.project_id)+' · '+(item.agent||officeI18n.t('Unknown'))));
+      detail.append(el('p','owner-detail-state',kindLabel(item.kind)+' · '+officeI18n.t(inboxFresh(item)?'Fresh':inboxFailed?'Historical / unavailable':'Stale / unknown')+(item.urgent?' · '+officeI18n.t('Urgent'):'')+(item.mixed_freshness?' · '+officeI18n.t('Mixed source freshness'):'')+(item.tracking_required?' · '+officeI18n.t('Issue tracking required'):'')+(item.due?' · '+officeI18n.t('Due')+' '+when(item.due):'')));
+      if(item.blocked_work&&item.kind==='setup')detail.append(handoffBox(item));
+      else if(item.blocked_work)detail.append(el('p','owner-blocked-work',(item.kind==='blocker'?officeI18n.t('Reason')+': ':'')+item.blocked_work));
+      const sources=el('ul','owner-item-sources');
+      for(const source of item.sources){
+        const sourceRow=el('li');sourceRow.append(el('strong',null,(source.project_id||'')+' · '+(source.kind||'')+' · '+(source.id||'')),el('p','pc-muted',officeI18n.t('Source at')+' '+(source.source_at?when(source.source_at):officeI18n.t('Unknown'))+' · '+officeI18n.t(source.freshness==='fresh'&&!inboxFailed?'Fresh':source.freshness==='stale'?'Stale / unknown':'Unknown')));
+        const url=inboxIssue(source.url);if(url)sourceRow.append(link(url,officeI18n.t('Open source issue')));sources.append(sourceRow);
+      }
+      detail.append(sources);
+      const url=!item.tracking_required?inboxIssue(item.issue_url):null;
+      if(url)detail.append(link(url,officeI18n.t(item.kind==='setup'||item.kind==='blocker'?'Open tracking issue':'Open source issue')));
+      const roomSource=item.kind==='blocker'&&item.sources.some(s=>s.kind==='room_outcome'&&typeof s.room_id==='string');
+      if(item.tracking_required&&(item.kind==='setup'||roomSource))detail.append(inboxIssueForm(item));
+      detail.append(el('p','owner-inbox-action-note',officeI18n.t(item.action==='appoint_team'?'Open the new project in Codex and give Codex the instruction above. Office cannot appoint the team. This item disappears when a Manager is appointed.':url?'Resolve or answer in the source issue. Office cannot resolve or synchronize this item.':'Create or link a tracking issue in the authoritative project. Include the reason, blocked work, unblock owner, requested action, resume condition, next check and evidence. Office cannot create or resolve it here.')));
+      detail.append(el('p','pc-muted',officeI18n.t('Refreshing reads the source again. A click does not complete the work.')));body.append(detail);return;
+    }
+    const toolbar=el('div','owner-inbox-filters');toolbar.append(refresh);
+    const select=(key,label,choices)=>{const wrapper=el('label',null,officeI18n.t(label)),input=el('select');input.id='owner-filter-'+key;for(const [value,text] of choices){const option=el('option',null,text);option.value=value;input.append(option);}if(!choices.some(([value])=>value===inboxFilters[key]))inboxFilters[key]='';input.value=inboxFilters[key];input.onchange=()=>{inboxFilters[key]=input.value;paintRows();};wrapper.append(input);toolbar.append(wrapper);};
+    const projectOptions=new Map((inboxData?.items||[]).flatMap(item=>[...item.sources.map(source=>[source.project_id,source.project_id]),[item.project_id,item.project_name||item.project_id]]).filter(([id])=>id));
+    select('project','Project',[['',officeI18n.t('All projects')],...projectOptions.entries()]);
+    select('kind','Kind',[['',officeI18n.t('All')],...Object.keys(INBOX_KINDS).map(kind=>[kind,kindLabel(kind)]),...((inboxData?.items||[]).some(item=>!INBOX_KINDS[item.kind])?[['other',officeI18n.t('Other')]]:[])]);
+    select('freshness','Source',[['',officeI18n.t('All')],['fresh',officeI18n.t('Fresh')],['unknown',officeI18n.t('Stale / unknown')]]);
+    const query=el('input');query.type='search';query.id='owner-filter-query';query.placeholder=officeI18n.t('Search owner items');query.setAttribute('aria-label',officeI18n.t('Search owner items'));query.value=inboxFilters.query;query.oninput=()=>{inboxFilters.query=query.value;paintRows();};toolbar.append(query);
+    const urgent=el('label'),checkbox=el('input');checkbox.type='checkbox';checkbox.id='owner-filter-urgent';checkbox.checked=inboxFilters.urgent;checkbox.onchange=()=>{inboxFilters.urgent=checkbox.checked;paintRows();};urgent.append(checkbox,document.createTextNode(officeI18n.t('Urgent only')));toolbar.append(urgent);body.append(toolbar);
+    const count=el('p','owner-inbox-count'),list=el('ul','owner-inbox-list');body.append(count,list);
+    function paintRows(){
+      const items=(inboxData?.items||[]).filter(item=>(!inboxFilters.project||item.project_id===inboxFilters.project||item.sources.some(source=>source.project_id===inboxFilters.project))&&(!inboxFilters.kind||(inboxFilters.kind==='other'?!INBOX_KINDS[item.kind]:item.kind===inboxFilters.kind))&&(!inboxFilters.urgent||item.urgent)&&(!inboxFilters.freshness||(inboxFilters.freshness==='fresh'?inboxFresh(item):!inboxFresh(item)))&&(!inboxFilters.query||[item.title,item.project_name,item.agent,item.blocked_work].join(' ').toLocaleLowerCase().includes(inboxFilters.query.toLocaleLowerCase())));
+      count.textContent=!inboxComplete()&&!items.length?officeI18n.t('Owner wait count is unknown.'):officeI18n.t(inboxComplete()?'{count} recorded owner items':'{count} recorded items · total unknown',{count:items.length});list.replaceChildren(...items.map(inboxRow));
+      if(!items.length)list.append(empty(officeI18n.t(inboxComplete()?(inboxData.items.length?'No matching owner items.':'No recorded owner items.'):'Owner wait count is unknown.')));
+    }
+    paintRows();if(inboxData)body.append(el('p','pc-muted',officeI18n.t(inboxData.coverage)));
+  }
 
   async function load(){
     if(loading)return;loading=true;
+    registryFailed=true;agentFailed=true;
     try{
-      const [rProjects,rOverview]=await Promise.allSettled([
+      const [rProjects,rOverview,rAgents]=await Promise.allSettled([
         fetch('/api/projects',{headers:{'X-Room-Token':token}}),
-        fetch('/api/registry/overview',{headers:{'X-Room-Token':token}})
+        fetch('/api/registry/overview',{headers:{'X-Room-Token':token}}),
+        fetch('/api/registry/agents',{headers:{'X-Room-Token':token}})
       ]);
       if(rProjects.status==='fulfilled'){
         const j=await rProjects.value.json();
-        if(!rProjects.value.ok)throw Error(j.error||'Projects unavailable');
+        if(!rProjects.value.ok)throw Error(j.error||officeI18n.t('Projects unavailable'));
         if(j.available){data=j;problem=null;}
         else if(data?.available)problem=j.error||'Project status is unavailable';
         else{data=j;problem=null;}
+      }else{
+        const error=officeI18n.t('Projects unavailable');
+        if(data?.available)problem=error;else{data={available:false,error};problem=null;}
       }
+      registryFailed=true;agentFailed=true;
       if(rOverview.status==='fulfilled'&&rOverview.value.ok){
         registryData=await rOverview.value.json();
+        registryFailed=!Array.isArray(registryData.teams)||!Array.isArray(registryData.bots);
+      }
+      if(rAgents.status==='fulfilled'&&rAgents.value.ok){
+        agentData=await rAgents.value.json();agentFailed=!Array.isArray(agentData.agents);
       }
     }catch(e){
       if(data?.available)problem=e.message;
       else{data={available:false,error:e.message};problem=null;}
     }finally{loading=false;}
     renderList();
-    if(!document.getElementById('projects-view').hidden){
-      if(view!=='overview'&&view!=='inbox'&&document.getElementById('pm-chat-container')){
+    if(!document.getElementById('projects-view').hidden&&view!=='inbox'){
+      if(view!=='overview'&&view!=='inbox'&&view!=='dashboard'&&document.getElementById('pm-chat-container')){
         updateProjectLeftCol(view);
       }else{
         render();
       }
     }
-    if(view!=='overview'&&view!=='inbox'){
+    if(view!=='overview'&&view!=='inbox'&&view!=='dashboard'){
       loadProjectChat(view);
       loadProjectActivity(view);
     }
@@ -157,7 +303,7 @@
     const act=projectActivities.get(p.id);
     if(!act)return;
     if(act.status==='active'&&!act.stale){
-      let label='Active'+(act.active_bots?.length?' ('+act.active_bots.join(', ')+')':'');
+      let label=officeI18n.t('Active')+(act.active_bots?.length?' ('+act.active_bots.join(', ')+')':'');
       if(act.partial_failure) label+=' (partial)';
       const pill=el('span','pc-activity pc-act-active',label);
       let titleText='Checked '+when(act.fetched_at)+' via '+(act.source||'relay');
@@ -165,10 +311,10 @@
       pill.title=titleText;
       container.append(pill);
       if(act.partial_failure){
-        container.append(el('span','pc-flag pc-warn','Partial coverage'));
+        container.append(el('span','pc-flag pc-warn',officeI18n.t('Partial coverage')));
       }
       if(p.status==='paused'){
-        container.append(el('span','pc-flag pc-warn','Contradiction: active bot'));
+        container.append(el('span','pc-flag pc-warn',officeI18n.t('Contradiction: active bot')));
       }
     }else if(act.status==='inactive'&&!act.stale){
       const pill=el('span','pc-activity pc-act-inactive','Inactive');
@@ -198,11 +344,11 @@
     const sub=document.getElementById('pm-header-subtitle');
     if(!sub)return;
     sub.replaceChildren();
-    sub.append(el('span',null,STATUS[p.status]+(p.manager?' · '+p.manager:'')));
+    sub.append(el('span',null,officeI18n.t(STATUS[p.status])+(p.manager?' · '+p.manager:'')));
     const act=projectActivities.get(pid);
     if(act){
       if(act.status==='active'&&!act.stale){
-        let label='Active'+(act.active_bots?.length?' ('+act.active_bots.join(', ')+')':'');
+        let label=officeI18n.t('Active')+(act.active_bots?.length?' ('+act.active_bots.join(', ')+')':'');
         if(act.partial_failure) label+=' (partial)';
         const pill=el('span','pc-activity pc-act-active',label);
         let titleText='Checked '+when(act.fetched_at)+' via '+(act.source||'relay');
@@ -210,7 +356,7 @@
         pill.title=titleText;
         sub.append(pill);
         if(act.partial_failure){
-          sub.append(el('span','pc-flag pc-warn','Partial coverage'));
+          sub.append(el('span','pc-flag pc-warn',officeI18n.t('Partial coverage')));
           sub.append(el('span','pc-provenance','checked '+when(act.fetched_at)+' via '+(act.source||'relay')+' (partial: some bots unknown)'));
         }
         if(p.status==='paused'){
@@ -218,7 +364,7 @@
           sub.append(contra);
         }
       }else if(act.status==='inactive'&&!act.stale){
-        const pill=el('span','pc-activity pc-act-inactive','Inactive (all bots idle)');
+        const pill=el('span','pc-activity pc-act-inactive',officeI18n.t('Inactive (all bots idle)'));
         if(act.fetched_at) pill.title='Checked '+when(act.fetched_at)+' via '+(act.source||'relay');
         sub.append(pill);
       }else{
@@ -236,26 +382,26 @@
     }
   }
 
-  function freshness(p){const box=el('div','pc-source');const s=p.source;box.append(link(s.url,s.label));box.append(el('span','pc-muted',' · '+(s.as_of?'as of '+when(s.as_of):'no timestamp')));if(!s.available)box.append(el('span','pc-flag pc-warn','Source unavailable'+(s.error?': '+s.error:'')));else if(s.error)box.append(el('span','pc-flag pc-warn',s.error));else if(stale(p))box.append(el('span','pc-flag pc-warn','Stale'));return box;}
+  function freshness(p){const box=el('div','pc-source');const s=p.source;box.append(link(s.url,s.label));box.append(el('span','pc-muted',' · '+(s.as_of?officeI18n.t('as of')+' '+when(s.as_of):officeI18n.t('no timestamp'))));if(!s.available||problem)box.append(el('span','pc-flag pc-warn',officeI18n.t('Source unavailable')+((problem||s.error)?': '+(problem||s.error):'')));else if(s.error)box.append(el('span','pc-flag pc-warn',s.error));else if(stale(p))box.append(el('span','pc-flag pc-warn',officeI18n.t('Stale / unknown')));return box;}
   function badge(p){
-    return el('span','pc-status pc-'+p.status,STATUS[p.status]||p.status);
+    return el('span','pc-status pc-'+p.status,officeI18n.t(STATUS[p.status]||p.status));
   }
   function decisionItem(d,p){
     const li=el('li','pc-decision'+(d.urgency==='urgent'?' pc-urgent':''));
     li.append(el('strong',null,d.question));
     if(p)li.append(el('span','pc-tag',p.name));
     if(d.context)li.append(el('p',null,d.context));
-    const meta=el('div','pc-muted',(d.urgency==='urgent'?'Urgent · ':'')+'Asked by '+d.requested_by+' · '+when(d.requested_at)+(d.due?' · due '+when(d.due):'')+' · ');
-    meta.append(link(d.source_url,'source'));
+    const meta=el('div','pc-muted',(d.urgency==='urgent'?officeI18n.t('Urgent')+' · ':'')+officeI18n.t('Asked by')+' '+d.requested_by+' · '+when(d.requested_at)+(d.due?' · due '+when(d.due):'')+' · ');
+    meta.append(link(d.source_url,officeI18n.t('source')));
     li.append(meta);
 
     if(d.suggestion){
       const sug=el('div','pc-suggestion');
       const sugHead=el('div','pc-suggestion-head');
-      sugHead.append(el('strong',null,'Proposed recommendation'));
+      sugHead.append(el('strong',null,officeI18n.t('Proposed recommendation')));
       if(d.suggestion.by)sugHead.append(el('span','pc-muted',' · by '+d.suggestion.by));
       if(d.suggestion.at)sugHead.append(el('span','pc-muted',' · '+when(d.suggestion.at)));
-      if(d.suggestion.source_url)sugHead.append(el('span','pc-muted',' · '),link(d.suggestion.source_url,'source'));
+      if(d.suggestion.source_url)sugHead.append(el('span','pc-muted',' · '),link(d.suggestion.source_url,officeI18n.t('source')));
       sug.append(sugHead);
       if(d.suggestion.context){
         sug.append(el('p','pc-suggestion-context',d.suggestion.context));
@@ -266,7 +412,7 @@
           const isRec=Boolean(d.suggestion.recommended&&opt===d.suggestion.recommended);
           const optLi=el('li','pc-suggestion-option'+(isRec?' pc-recommended':''));
           optLi.append(el('span','pc-option-text',opt));
-          if(isRec)optLi.append(el('span','pc-tag','Recommended'));
+          if(isRec)optLi.append(el('span','pc-tag',officeI18n.t('Recommended')));
           ul.append(optLi);
         });
         sug.append(ul);
@@ -290,7 +436,7 @@
     const ds=pending(p);
     if(ds.length){
       const pBox=el('div','pc-pending-summary');
-      const pLabel=el('span','pc-label','Waiting for you \u00b7 '+ds.length);
+      const pLabel=el('span','pc-label',officeI18n.t('Waiting for you')+' \u00b7 '+ds.length);
       pBox.append(pLabel);
       const ul=el('ul','pc-pending-list');
       ds.slice(0, 2).forEach(d=>{
@@ -300,7 +446,7 @@
         ul.append(li);
       });
       if(ds.length > 2){
-        ul.append(el('li','pc-pending-more','+ '+(ds.length-2)+' more'));
+        ul.append(el('li','pc-pending-more',officeI18n.t('{count} more',{count:ds.length-2})));
       }
       pBox.append(ul);
       c.append(pBox);
@@ -311,12 +457,13 @@
       sumP.setAttribute('aria-label',p.summary);
     }
     c.append(sumP);
-    const facts=el('div','pc-muted',(p.manager?p.manager+' \u00b7 ':'')+(p.open_tasks==null?'tasks unknown':p.open_tasks+' open tasks'));
+    const facts=el('div','pc-muted',p.manager||'');
     c.append(facts);
+    c.append(projectMetrics(p));
     const rs=[...(p.reports||[])].sort((a,b)=>new Date(b.at)-new Date(a.at));
     const r=rs[0];
     if(r){
-      const latestText='Latest: '+r.text+(r.at?' \u00b7 '+when(r.at):'');
+      const latestText=officeI18n.t('Latest')+': '+r.text+(r.at?' \u00b7 '+when(r.at):'');
       const latestP=el('p','pc-latest',latestText);
       latestP.title=latestText;
       latestP.setAttribute('aria-label',latestText);
@@ -325,14 +472,70 @@
     c.append(freshness(p));
     return c;
   }
+
+  function rosterTeams(pid){return registryFailed?null:(registryData.teams||[]).filter(team=>team.project_id===pid);}
+  function observation(bot){
+    if(agentFailed)return null;
+    const matches=(agentData.agents||[]).filter(a=>a.bot_key===bot.bot_key&&a.bot_id===bot.bot_id&&a.project_id===bot.project_id&&a.thread_id===bot.thread_id);
+    return matches.length===1?matches[0]:null;
+  }
+  function isWorking(bot){
+    const a=observation(bot),at=Date.parse(a?.runtime?.source_at);
+    return Boolean(bot.thread_id&&a?.execution?.state==='working'&&a.runtime?.status==='active'&&a.runtime?.freshness==='fresh'&&Number.isFinite(at)&&Date.now()>=at&&Date.now()-at<=60000);
+  }
+  function projectMetrics(p){
+    const metrics=el('dl','project-metrics');
+    const sourceKnown=p.source?.available===true&&!stale(p)&&!problem;
+    const teams=rosterTeams(p.id),teamKnown=teams&&teams.length&&teams.every(t=>['ok','no_teams'].includes(t.status));
+    const bots=registryFailed?[]:(registryData.bots||[]).filter(b=>b.project_id===p.id);
+    const runtimeKnown=teamKnown&&!agentFailed&&bots.every(bot=>{
+      const a=observation(bot),at=Date.parse(a?.runtime?.source_at);
+      return bot.thread_id&&a?.runtime?.freshness==='fresh'&&['active','idle'].includes(a.runtime.status)&&Number.isFinite(at)&&Date.now()>=at&&Date.now()-at<=60000;
+    });
+    const fields=[['Open tasks',sourceKnown&&Number.isInteger(p.open_tasks)?p.open_tasks:null],
+      ['Recorded completed',sourceKnown&&Array.isArray(p.tasks)?p.tasks.filter(task=>task.state==='done').length:null],
+      ['Teams',teamKnown?teams.filter(t=>t.status==='ok').length:null],
+      ['Owner waits',sourceKnown&&Array.isArray(p.decisions)?pending(p).length:null],
+      ['Verified active agents',runtimeKnown?bots.filter(isWorking).length:null]];
+    for(const [label,value] of fields){const row=el('div');row.append(el('dt',null,officeI18n.t(label)),el('dd',null,value===null?officeI18n.t('Unknown'):String(value)));metrics.append(row);}
+    return metrics;
+  }
+  function projectTeams(p){
+    const section=el('section','project-teams');section.append(el('h2','pc-h2',officeI18n.t('Teams')));
+    const teams=rosterTeams(p.id);
+    if(!teams||!teams.length||teams.some(t=>!['ok','no_teams'].includes(t.status))){section.append(empty(officeI18n.t('Team source is unavailable.')));return section;}
+    const named=teams.filter(t=>t.status==='ok');
+    if(!named.length){section.append(empty(officeI18n.t('No teams')));return section;}
+    for(const team of named){
+      const group=el('section','project-team');group.append(el('h3',null,team.team));
+      const grid=el('div','project-team-grid');
+      for(const member of team.members||[]){
+        const bot={...member,project_id:p.id};
+        const card=el('article','project-agent-card'),button=el('button','project-agent-open');button.type='button';button.dataset.botKey=bot.bot_key;
+        const avatar=el('span','avatar',(bot.display_name||bot.bot_id).split(/\s+/).map(x=>x[0]).slice(0,2).join(''));avatar.setAttribute('aria-hidden','true');
+        button.append(avatar,el('strong',null,bot.display_name||bot.bot_id),el('span','pc-muted',officeI18n.t(bot.role||'Unknown')),
+          el('span','pc-status',officeI18n.t(isWorking(bot)?'Working':'Unknown')));
+        button.onclick=()=>window.officeAgents.show(bot.bot_key);card.append(button);
+        const a=observation(bot),task=a?.task;
+        if(task&&task.updated_at&&Date.now()>=Date.parse(task.updated_at)&&Date.now()-Date.parse(task.updated_at)<=48*3600e3){
+          card.append(link(task.url,task.title||task.id||officeI18n.t('Open task')));
+        }
+        grid.append(card);
+      }
+      if(!grid.children.length)group.append(empty(officeI18n.t('No active roster members.')));else group.append(grid);
+      section.append(group);
+    }
+    return section;
+  }
   function warning(){if(!problem||!data?.available)return null;const w=el('p','pc-banner','Update failed: '+problem+'. Showing the last valid data from '+when(data.snapshot.generated_at)+'; it may be out of date.');w.setAttribute('role','alert');return w;}
-  function header(title,sub){
+  function header(title,sub,newProject){
     const h=el('header','pc-header');
     const t=el('div');
     const subSpan=el('span','room-description',sub);
     subSpan.id='pm-header-subtitle';
     t.append(el('h1',null,title),subSpan);
     h.append(t);
+    if(newProject){const add=el('button','secondary new-project-open',officeI18n.t('New project'));add.type='button';add.onclick=()=>window.officeNewProject.open(true);h.append(add);}
     return h;
   }
   function empty(text){return el('p','empty',text);}
@@ -386,11 +589,11 @@
       checkDraftMismatch(pid);
     };
     ta.onkeydown=(e)=>{
-      if(e.key==='Enter'){
-        if(e.shiftKey)return;
-        if(e.isComposing||e.keyCode===229)return;
+      const intent=composerIntent(e);
+      if(intent){
         e.preventDefault();
-        submitForm();
+        if(intent==='send')submitForm();
+        else if(intent==='queue'){notice.textContent=officeI18n.t('Waiting is available in rooms only. Press Enter to send.');notice.className='pm-inline-notice';}
       }
     };
     ta.onpaste=async(e)=>{
@@ -460,7 +663,7 @@
       }
     };
     inputWrap.append(ta);
-    const sendBtn=el('button',null,'Send');
+    const sendBtn=el('button',null,officeI18n.t('Send'));
     sendBtn.id='pm-send-btn';
     sendBtn.type='submit';
     sendBtn.disabled=true;
@@ -553,7 +756,7 @@
     }
     if(sendBtn){
       sendBtn.disabled=true;
-      sendBtn.textContent='Image Unsupported';
+      sendBtn.textContent=officeI18n.t('Send');
     }
     for(let i=0;i<imgs.length;i++){
       const pic=imgs[i];
@@ -612,7 +815,7 @@
       if(retryBtn) retryBtn.style.display='none';
       return;
     }
-    const eligible=Boolean(st && st.available && !st.hold && (st.status !== 'working in Codex') && att.mgrId && mgrId && att.mgrId === mgrId && !att.inflight);
+    const eligible=Boolean(st && st.available && !st.hold && (st.status !== officeI18n.t('working in Codex')) && att.mgrId && mgrId && att.mgrId === mgrId && !att.inflight);
     const curImgs=projectDraftImages.get(pid)||[];
     const imgIds=curImgs.map(x=>x.id);
     const textMatch=ta&&ta.value.trim()===att.text;
@@ -648,7 +851,7 @@
     att.inflight=true;
     if(sendBtn) sendBtn.disabled=true;
     if(retryBtn) retryBtn.disabled=true;
-    if(notice) { notice.textContent='Sending...'; notice.className='pm-inline-notice'; }
+    if(notice) { notice.textContent=officeI18n.t('Sending...'); notice.className='pm-inline-notice'; }
     try{
       const res=await api('/api/projects/'+encodeURIComponent(pid)+'/messages',{
         method:'POST',
@@ -710,13 +913,14 @@
     if(!p)return;
     left.replaceChildren();
     left.append(el('p','pc-summary',p.summary),freshness(p));
+    left.append(projectMetrics(p),projectTeams(p));
     if(p.tracking){
       const t=el('p','pc-muted','Task authority: '+p.tracking.authority+' ');
       if(p.tracking.url)t.append(link(p.tracking.url,'open tracker'));
       left.append(t);
     }
     const ds=p.decisions||[];
-    left.append(el('h2','pc-h2','Decisions'));
+    left.append(el('h2','pc-h2',officeI18n.t('Decisions')));
     if(ds.length){
       const ul=el('ul','pc-decisions');
       ds.forEach(d=>{
@@ -733,8 +937,8 @@
         ul.append(li);
       });
       left.append(ul);
-    }else left.append(empty('No owner decisions recorded.'));
-    left.append(el('h2','pc-h2','Tasks'));
+    }else left.append(empty(officeI18n.t('No owner decisions recorded.')));
+    left.append(el('h2','pc-h2',officeI18n.t('Tasks')));
     const ts=p.tasks||[];
     if(ts.length){
       const ul=el('ul','pc-list');
@@ -744,14 +948,14 @@
         ul.append(li);
       });
       left.append(ul);
-    }else left.append(empty('No tasks listed in the snapshot.'));
-    left.append(el('h2','pc-h2','Reports'));
+    }else left.append(empty(officeI18n.t('No tasks listed in the snapshot.')));
+    left.append(el('h2','pc-h2',officeI18n.t('Reports')));
     const rs=[...(p.reports||[])].sort((a,b)=>new Date(b.at)-new Date(a.at));
     if(rs.length){
       const ul=el('ul','pc-list pc-reports');
       rs.forEach(r=>{
         const li=el('li');
-        li.append(el('strong',null,r.from+' · '+when(r.at)),el('p',null,r.text),link(r.source_url,'source'));
+        li.append(el('strong',null,r.from+' · '+when(r.at)),el('p',null,r.text),link(r.source_url,officeI18n.t('source')));
         ul.append(li);
       });
       left.append(ul);
@@ -774,28 +978,28 @@
       heading.append(el('h2','pc-h2','Manager Chat · '+mgrName));
       if(st){
         const bar=el('div','pm-chat-status-bar');
-        const statusTxt = st.hold ? 'Held' : (st.status || (st.available ? 'Idle' : 'Unavailable'));
+        const statusTxt = st.hold ? officeI18n.t('Held') : (st.status || (st.available ? officeI18n.t('Idle') : officeI18n.t('Unavailable')));
         bar.append(el('span','pc-tag',statusTxt));
         if(st.hold){
-          const rBtn=el('button','pm-resume-btn','Resume');
+          const rBtn=el('button','pm-resume-btn',officeI18n.t('Resume'));
           rBtn.type='button';
           rBtn.onclick=async()=>{
             rBtn.disabled=true;
             try{
               await api('/api/projects/'+encodeURIComponent(pid)+'/resume',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
               await loadProjectChat(pid);
-            }catch(err){ alert('Resume failed: '+err.message); }finally{ rBtn.disabled=false; }
+            }catch(err){ document.getElementById('pm-chat-notice').textContent=officeI18n.t('Resume failed: {error}',{error:err.message}); }finally{ rBtn.disabled=false; }
           };
           bar.append(rBtn);
         }else if(st.available && !st.hold && (st.status==='working in Codex'||(st.deliveries||[]).some(d=>['sending','accepted','ambiguous'].includes(d.state)))){
-          const sBtn=el('button','pm-stop-btn','Stop');
+          const sBtn=el('button','pm-stop-btn',officeI18n.t('Stop'));
           sBtn.type='button';
           sBtn.onclick=async()=>{
             sBtn.disabled=true;
             try{
               await api('/api/projects/'+encodeURIComponent(pid)+'/stop',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
               await loadProjectChat(pid);
-            }catch(err){ alert('Stop failed: '+err.message); }finally{ sBtn.disabled=false; }
+            }catch(err){ document.getElementById('pm-chat-notice').textContent=officeI18n.t('Stop failed: {error}',{error:err.message}); }finally{ sBtn.disabled=false; }
           };
           bar.append(sBtn);
         }
@@ -807,14 +1011,14 @@
     const retryBtn=document.getElementById('pm-retry-orig-btn');
     const notice=document.getElementById('pm-chat-notice');
     const serverErr=document.getElementById('pm-server-error');
-    if(ta) ta.placeholder='Message '+mgrName+' directly…';
+    if(ta) ta.placeholder=officeI18n.t('Message {name} directly…',{name:mgrName});
 
     if(!st){
-      if(conv) conv.replaceChildren(empty('Loading Manager conversation…'));
+      if(conv) conv.replaceChildren(empty(officeI18n.t('Loading Manager conversation…')));
       if(ta) ta.disabled=true;
       if(sendBtn){
         sendBtn.disabled=true;
-        sendBtn.textContent='Loading…';
+        sendBtn.textContent=officeI18n.t('Send');
       }
       if(retryBtn){
         retryBtn.disabled=true;
@@ -826,14 +1030,14 @@
     if(!st.available){
       if(conv){
         const box=el('div','pm-chat-disabled');
-        box.append(el('strong',null,'Chat Unavailable (Read-only)'));
-        box.append(el('p','pc-muted',st.error||'Manager chat is not accessible on Desktop.'));
+        box.append(el('strong',null,officeI18n.t('Chat Unavailable (Read-only)')));
+        box.append(el('p','pc-muted',st.error||officeI18n.t('Manager chat is not accessible on Desktop.')));
         conv.replaceChildren(box);
       }
       if(ta) ta.disabled=true;
       if(sendBtn){
         sendBtn.disabled=true;
-        sendBtn.textContent='Unavailable';
+        sendBtn.textContent=officeI18n.t('Send');
       }
       if(retryBtn){
         retryBtn.disabled=true;
@@ -854,7 +1058,7 @@
         for(const m of journal){
           const art=el('article','message '+(m.sender==='owner'?'owner':'bot'));
           const head=el('div','message-head');
-          const author=el('span','author',m.sender==='owner'?'You':mgrName);
+          const author=el('span','author',m.sender==='owner'?officeI18n.t('You'):mgrName);
           head.append(author);
           if(m.created){
             const t=el('time','timestamp',new Date(m.created*1000).toLocaleTimeString(undefined,{hour:'2-digit',minute:'2-digit'}));
@@ -867,7 +1071,7 @@
             for(const img of m.images){
               const thumb=el('img','message-thumbnail');
               thumb.src='/api/projects/'+encodeURIComponent(pid)+'/images/'+encodeURIComponent(img.id);
-              thumb.alt='Attached image';
+              thumb.alt=officeI18n.t('Attached image');
               imgWrap.append(thumb);
             }
             art.append(imgWrap);
@@ -918,26 +1122,26 @@
       const att=pendingAttempts.get(pid);
       if(att&&att.inflight){
         sendBtn.disabled=true;
-        sendBtn.textContent='Sending...';
+        sendBtn.textContent=officeI18n.t('Send');
       }else if(st.status==='working in Codex'){
         sendBtn.disabled=true;
-        sendBtn.textContent='Busy';
+        sendBtn.textContent=officeI18n.t('Send');
       }else if(st.hold){
         sendBtn.disabled=true;
-        sendBtn.textContent='Held';
+        sendBtn.textContent=officeI18n.t('Send');
         if(notice&&!notice.textContent){ notice.textContent='Chat is held. Resume before sending new messages.'; notice.className='pm-inline-notice held'; }
       }else if(hasUnresolved){
         sendBtn.disabled=true;
-        sendBtn.textContent='Busy';
+        sendBtn.textContent=officeI18n.t('Send');
         if(notice&&!notice.textContent){ notice.textContent='Pending delivery in progress.'; notice.className='pm-inline-notice held'; }
       }else{
         const curImgs=projectDraftImages.get(pid)||[];
         if(curImgs.length>0){
           sendBtn.disabled=true;
-          sendBtn.textContent='Image Unsupported';
+          sendBtn.textContent=officeI18n.t('Send');
         }else{
           sendBtn.disabled=false;
-          sendBtn.textContent='Send';
+          sendBtn.textContent=officeI18n.t('Send');
         }
       }
     }
@@ -1062,7 +1266,7 @@
     const searchInput=el('input','pc-search-input');
     searchInput.type='search';
     searchInput.id='pc-proj-search';
-    searchInput.placeholder='Search known projects…';
+    searchInput.placeholder=officeI18n.t('Search known projects…');
     searchInput.setAttribute('aria-label','Search known projects');
     searchInput.value=projSearchQuery;
     searchInput.oninput=(e)=>{
@@ -1078,9 +1282,9 @@
 
     const countMeta=el('span','pc-muted');
     countMeta.id='pc-vis-count';
-    countMeta.textContent=isFiltered?`Showing ${visibleCount} of ${allCount} (${allCount-visibleCount} hidden)`:`All ${allCount} projects visible`;
+    countMeta.textContent=isFiltered?officeI18n.t('Showing {count} of {total} ({hidden} hidden)',{count:visibleCount,total:allCount,hidden:allCount-visibleCount}):officeI18n.t('All {count} projects visible',{count:allCount});
 
-    const selectApplicableBtn=el('button','pc-vis-btn','Select all applicable');
+    const selectApplicableBtn=el('button','pc-vis-btn',officeI18n.t('Select all applicable'));
     selectApplicableBtn.type='button';
     selectApplicableBtn.id='pc-select-applicable-btn';
     selectApplicableBtn.onclick=()=>{
@@ -1088,7 +1292,7 @@
       setVisibleProjectIds(applicableIds);
     };
 
-    const restoreAllBtn=el('button','pc-vis-btn','Restore all');
+    const restoreAllBtn=el('button','pc-vis-btn',officeI18n.t('Restore all'));
     restoreAllBtn.type='button';
     restoreAllBtn.id='pc-restore-all-btn';
     restoreAllBtn.disabled=!isFiltered;
@@ -1138,18 +1342,18 @@
         head.append(el('small','pc-muted',`(${p.id})`));
       }
       if(p.is_current){
-        head.append(el('span','pc-status pc-current','Current'));
+        head.append(el('span','pc-status pc-current',officeI18n.t('Current')));
       }
       if(p.status==='ok'){
-        head.append(el('span','pc-status pc-working','Roster valid'));
+        head.append(el('span','pc-status pc-working',officeI18n.t('Roster valid')));
       }else if(p.status==='no_teams'){
-        head.append(el('span','pc-status','No teams'));
+        head.append(el('span','pc-status',officeI18n.t('No teams')));
       }else if(p.status==='source_unavailable'){
-        head.append(el('span','pc-status pc-blocked','Source unavailable'));
+        head.append(el('span','pc-status pc-blocked',officeI18n.t('Source unavailable')));
       }else if(p.status==='roster_error'){
-        head.append(el('span','pc-status pc-blocked','Roster error'));
+        head.append(el('span','pc-status pc-blocked',officeI18n.t('Roster error')));
       }else if(p.status==='unknown'){
-        head.append(el('span','pc-status','Unknown'));
+        head.append(el('span','pc-status',officeI18n.t('Unknown')));
       }
       info.append(head);
       if(p.reason){
@@ -1165,25 +1369,40 @@
   }
 
   function render(){const v=document.getElementById('projects-view');v.replaceChildren();const body=el('div','pc-body');const warn=warning();if(warn)body.append(warn);
+    if(view==='dashboard'){
+      v.append(header(officeI18n.t('Dashboard'),'',true));
+      const layout=el('div','foundation-dashboard'),main=el('section'),attention=el('aside','foundation-attention');
+      main.append(el('h2',null,officeI18n.t('Projects in your dashboard')));
+      const controls=renderVisibilityControls();if(controls){const picker=el('details','dashboard-project-picker');picker.append(el('summary',null,officeI18n.t('Choose projects')),controls);main.append(picker);}
+      const grid=el('div','pc-grid');projects().forEach(p=>grid.append(card(p)));
+      if(grid.children.length)main.append(grid);else main.append(empty(officeI18n.t(!data?officeI18n.t('Loading projects…'):!data.available?officeI18n.t('Status unavailable'):officeI18n.t('No projects in the snapshot.'))));
+      attention.id='owner-dashboard-attention';paintInboxPreview(attention);
+      const handle=el('div','pane-handle right-pane-handle');handle.tabIndex=0;handle.setAttribute('role','separator');handle.setAttribute('aria-orientation','vertical');handle.setAttribute('aria-label',officeI18n.t('Right pane width'));
+      layout.append(main,handle,attention);window.officeShell?.divider(handle,'right');body.append(layout);v.append(body);return;
+    }
+    if(view==='inbox'){v.append(header(officeI18n.t('Waiting for me'),''),body);renderInbox(body);return;}
     if(view==='overview'){
       const known=allKnownProjects();
-      const controls=renderVisibilityControls();
-      if(controls)body.append(controls);
-      if(!data){v.append(header('Projects',''),body);body.append(empty('Loading projects…'));return;}
-      if(!data.available){v.append(header('Projects',known.length?known.length+' known projects · status unavailable':'No project data'),body);body.append(empty(data.error||'Project status is unavailable.'));return;}
+
+      if(!data){v.append(header(officeI18n.t('Projects'),'',true),body);body.append(empty(officeI18n.t('Loading projects…')));return;}
+      if(!data.available){
+        v.append(header(officeI18n.t('Projects'),known.length?officeI18n.t('{count} known projects · status unavailable',{count:known.length}):officeI18n.t('No project data'),true),body);
+        body.append(empty(data.error||officeI18n.t('Project status is unavailable.')));
+        const grid=el('div','pc-grid');allProjects().forEach(p=>grid.append(card(p)));if(grid.children.length)body.append(grid);
+        return;
+      }
       const ps=projects();
-      v.append(header('Projects',ps.length+' projects · updated '+when(data.snapshot.generated_at)));
+      v.append(header(officeI18n.t('Projects'),ps.length+' projects · updated '+when(data.snapshot.generated_at),true));
       const grid=el('div','pc-grid');
       [...ps].sort((a,b)=>pending(b).length-pending(a).length).forEach(p=>grid.append(card(p)));
-      if(ps.length){body.append(grid);}else{const emptyMsg=el('p','empty');emptyMsg.textContent=allProjects().length?'All projects are hidden by filter. Click "Restore all" above to show all projects.':'No projects in the snapshot.';body.append(emptyMsg);}
+      if(ps.length){body.append(grid);}else{const emptyMsg=el('p','empty');emptyMsg.textContent=allProjects().length?officeI18n.t('All projects are hidden by filter. Click "Restore all" above to show all projects.'):officeI18n.t('No projects in the snapshot.');body.append(emptyMsg);}
       v.append(body);
       return;
     }
-    if(!data){body.append(empty('Loading projects…'));v.append(header('Projects',''),body);return;}
-    if(!data.available){v.append(header('Projects','No project data'),body);body.append(empty(data.error||'Project status is unavailable.'));return;}
+    if(!data){body.append(empty(officeI18n.t('Loading projects…')));v.append(header(officeI18n.t('Projects'),''),body);return;}
+    if(!data.available&&!allProjects().some(p=>p.id===view)){v.append(header(officeI18n.t('Projects'),officeI18n.t('No project data')),body);body.append(empty(data.error||officeI18n.t('Project status is unavailable.')));return;}
     const ps=projects();
-    if(view==='inbox'){const rank=d=>[d.urgency==='urgent'?0:1,d.due||'9999',d.requested_at].join('|');const all=ps.flatMap(p=>pending(p).map(d=>[d,p])).sort(([a],[b])=>rank(a)<rank(b)?-1:rank(a)>rank(b)?1:0);v.append(header('Waiting for you',all.length+' explicit owner decisions'));const ul=el('ul','pc-decisions pc-inbox');all.forEach(([d,p])=>ul.append(decisionItem(d,p)));body.append(all.length?ul:empty('Nothing is waiting for you.'));}
-    else{const p=ps.find(x=>x.id===view);if(!p){v.append(header('Project','Not in snapshot'));body.append(empty('This project is no longer in the snapshot.'));}else{v.append(header(p.name,STATUS[p.status]+(p.manager?' · '+p.manager:'')));
+    {const p=ps.find(x=>x.id===view);if(!p){v.append(header(officeI18n.t('Project'),officeI18n.t('Not in snapshot')));body.append(empty(officeI18n.t('This project is no longer in the snapshot.')));}else{v.append(header(p.name,officeI18n.t(STATUS[p.status])+(p.manager?' · '+p.manager:'')));
       const split=el('div','pm-split-layout');
       split.id='pm-split-layout';
       const left=el('div','pm-left-col');
@@ -1192,7 +1411,7 @@
       divider.id='pm-split-divider';
       divider.setAttribute('role','separator');
       divider.setAttribute('tabindex','0');
-      divider.setAttribute('aria-label','Resize layout');
+      divider.setAttribute('aria-label',officeI18n.t('Resize layout'));
       divider.setAttribute('aria-orientation','vertical');
       const right=buildChatPane(p.id);
       split.append(left,divider,right);
@@ -1210,14 +1429,15 @@
   }
 
   function renderList(){const list=document.getElementById('project-list');if(!list)return;list.replaceChildren();const n=document.getElementById('projects-notice');
-    if(!data?.available){n.textContent=data?data.error:'Loading…';return;}n.textContent=problem?'Update failed; showing last valid data':'';const total=projects().reduce((s,p)=>s+pending(p).length,0);
+    if(!data?.available){n.textContent=data?data.error:officeI18n.t('Loading…');return;}n.textContent=problem?'Update failed; showing last valid data':'';
     const row=(label,meta,key,cls)=>{const b=el('button','personal-row'+(cls?' '+cls:''));b.type='button';b.setAttribute('aria-pressed',String(!document.getElementById('projects-view').hidden&&view===key));const copy=el('span','session-copy');copy.append(el('strong',null,label),el('small',null,meta));b.append(copy);b.onclick=()=>open(key);list.append(b);};
-    const visiblePs=projects();const countLabel=getVisibleProjectIds()!==null?`${visiblePs.length}/${allProjects().length} projects`:`${visiblePs.length} projects`;row('Overview',countLabel,'overview');row('Waiting for you',total+' decisions','inbox',total?'pc-attention':'');visiblePs.forEach(p=>row(p.name,(STATUS[p.status]||p.status)+(pending(p).length?' · '+pending(p).length+' waiting':''),p.id));}
-  function open(key){view=key;officeMedia.stop();officeSpeech.stop();officeView='projects';selectMenu('projects');for(const id of ['room-view','personal-view','session-detail'])document.getElementById(id).hidden=true;document.getElementById('projects-view').hidden=false;
-    const title=key==='overview'?'Projects':key==='inbox'?'Waiting for you':(projects().find(p=>p.id===key)?.name||'Project');addConversation('project',key,title);render();renderList();load();if(key!=='overview'&&key!=='inbox'){loadProjectChat(key);loadProjectActivity(key);}}
-  window.officeProjects={open,load,hide(){document.getElementById('projects-view').hidden=true;renderList();},isProjectVisible,getVisibleProjectIds,setVisibleProjectIds,allKnownProjects};
+    const visiblePs=projects();const countLabel=getVisibleProjectIds()!==null?`${visiblePs.length}/${allProjects().length} projects`:`${visiblePs.length} projects`;row(officeI18n.t('Overview'),countLabel,'overview');visiblePs.forEach(p=>row(p.name,(officeI18n.t(STATUS[p.status]||p.status))+(pending(p).length?' · '+pending(p).length+' waiting':''),p.id));}
+  function open(key,itemId=null){if(window.officeShell&&!window.officeShell.canNavigate())return;inboxSelected=key==='inbox'?itemId:null;window.officeShell?.activate(key==='dashboard'?'dashboard':key==='inbox'?(itemId?'owner-decision':'waiting'):key==='overview'?'projects':'project',itemId?inboxData?.items.find(item=>item.id===itemId)?.title:!['dashboard','inbox','overview'].includes(key)?allProjects().find(p=>p.id===key)?.name:undefined,()=>open(key,itemId));view=key;officeMedia.stop();officeSpeech.stop();officeView='projects';selectMenu('projects');for(const id of ['room-view','personal-view','session-detail'])document.getElementById(id).hidden=true;document.getElementById('projects-view').hidden=false;
+    const title=key==='overview'?officeI18n.t('Projects'):key==='inbox'?officeI18n.t('Waiting for you'):(projects().find(p=>p.id===key)?.name||officeI18n.t('Project'));if(!['dashboard','overview','inbox'].includes(key))addConversation('project',key,title);render();renderList();load();if(key==='dashboard'||key==='inbox')loadInbox();if(key!=='overview'&&key!=='inbox'&&key!=='dashboard'){loadProjectChat(key);loadProjectActivity(key);}}
+  window.officeProjects={open,load,loadInbox,refresh:render,hide(){document.getElementById('projects-view').hidden=true;renderList();},isProjectVisible,getVisibleProjectIds,setVisibleProjectIds,allKnownProjects};
+  window.addEventListener('office-language-changed',()=>{renderList();if(!document.getElementById('projects-view').hidden){if(view!=='overview'&&view!=='inbox'&&view!=='dashboard'){updateProjectLeftCol(view);updateChatPane(view);}else render();}});
   setInterval(()=>{
     if(document.getElementById('projects-view').hidden) return;
-    load();
+    load();if(view==='dashboard'||view==='inbox')loadInbox();
   }, 10000);
 })();

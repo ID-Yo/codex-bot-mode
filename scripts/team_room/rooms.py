@@ -1,6 +1,7 @@
 """Named rooms with durable membership and lazy, independent discussion sessions."""
 import hashlib
 import json
+import re
 import threading
 import uuid
 
@@ -15,6 +16,8 @@ class Rooms:
         self.file = self.root / 'rooms.json'
         self.rows = json.loads(self.file.read_text(encoding='utf-8')) if self.file.exists() else []
         self.controllers = {}
+        self.outcome_stores = {}
+        self.discussion_stores = {}
         self.lock = threading.RLock()
         self.closed = False
         self.draining = False
@@ -47,7 +50,92 @@ class Rooms:
     def metadata(self):
         with self.lock:
             return [{'id':'development','name':self.default['name'],'bots':list(self.base.bots)},
-                    *[{k:r[k] for k in ('id','name','bots')} for r in self.rows]]
+                    *[self._public(r) for r in self.rows]]
+
+    @staticmethod
+    def _public(row):
+        data = {k:row[k] for k in ('id','name','bots')}
+        if row.get('kind') == 'cross_project':
+            data.update(kind='cross_project', version=row['version'], participants=[dict(p) for p in row['participants']],
+                        lead=dict(next(p for p in row['participants'] if p['bot_key'] == row['lead']['bot_key']),
+                                  basis=row['lead']['basis']))
+        return data
+
+    def _save(self, rows):
+        self.root.mkdir(parents=True, exist_ok=True)
+        temporary = self.file.with_suffix('.tmp')
+        temporary.write_text(json.dumps(rows, ensure_ascii=False, indent=2), encoding='utf-8')
+        temporary.replace(self.file)
+
+    def create_cross(self, name, keys, lead, lead_override, client_id, index_fn):
+        """Create a cross-project room: membership, hierarchy lead and eligibility only (no session runtime)."""
+        from .cross_rooms import CrossRoomError, resolve_lead, resolve_participants
+        if not isinstance(name,str) or not 1 <= len(name.strip()) <= 80:
+            raise ValueError('Room name must be 1–80 characters')
+        if not isinstance(client_id,str) or not 1 <= len(client_id) <= 128:
+            raise ValueError('Valid client_message_id required')
+        name = name.strip()
+        signature = [name, sorted(keys) if isinstance(keys,list) and all(isinstance(k,str) for k in keys) else keys,
+                     lead, lead_override is True]
+        with self.lock:
+            if self.closed or self.draining: raise RuntimeError('Rooms are closing')
+            previous = next((r for r in self.rows if r['client_id'] == client_id), None)
+            if previous:
+                if previous.get('request') != signature:
+                    raise CrossRoomError(409, 'idempotency_conflict', 'Creation ID already belongs to a different room')
+                return self._public(previous)
+            people = resolve_participants(keys, index_fn())
+            chosen = resolve_lead(people, lead, lead_override)
+            if any(r['name'].casefold() == name.casefold() for r in self.metadata()):
+                raise ValueError('A room with this name already exists')
+            row = {'id':uuid.uuid4().hex,'name':name,'bots':[],'client_id':client_id,'kind':'cross_project',
+                   'version':1,'participants':people,'lead':chosen,'request':signature}
+            self._save([*self.rows,row])
+            self.rows.append(row)
+            return self._public(row)
+
+    def cross_outcomes(self, key):
+        """Public room data and the outcome store of an existing cross-project room."""
+        from .cross_rooms import CrossRoomError
+        from .room_outcomes import Outcomes
+        with self.lock:
+            if self.closed or self.draining: raise RuntimeError('Rooms are closing')
+            row = next((r for r in self.rows if r['id'] == key and r.get('kind') == 'cross_project'), None)
+            if row is None: raise CrossRoomError(404, 'unknown_room', 'Unknown cross-project room')
+            store = self.outcome_stores.get(key)
+            if store is None:
+                store = self.outcome_stores[key] = Outcomes(self.root / key)  # one lock per room for the whole process
+            return self._public(row), store
+
+    def cross_discussion(self, key):
+        """Public room data and the discussion journal of an existing cross-project room."""
+        from .cross_rooms import CrossRoomError
+        from .room_discussion import Discussion
+        with self.lock:
+            if self.closed or self.draining: raise RuntimeError('Rooms are closing')
+            row = next((r for r in self.rows if r['id'] == key and r.get('kind') == 'cross_project'), None)
+            if row is None: raise CrossRoomError(404, 'unknown_room', 'Unknown cross-project room')
+            store = self.discussion_stores.get(key)
+            if store is None:
+                store = self.discussion_stores[key] = Discussion(self.root / key)
+            return self._public(row), store
+
+    def set_participants(self, key, version, keys, lead, lead_override, index_fn):
+        from .cross_rooms import CrossRoomError, resolve_lead, resolve_participants
+        with self.lock:
+            if self.closed or self.draining: raise RuntimeError('Rooms are closing')
+            row = next((r for r in self.rows if r['id'] == key and r.get('kind') == 'cross_project'), None)
+            if row is None: raise CrossRoomError(404, 'unknown_room', 'Unknown cross-project room')
+            if not isinstance(version,int) or isinstance(version,bool):
+                raise CrossRoomError(400, 'invalid_version', 'Room version required')
+            if version != row['version']:
+                raise CrossRoomError(409, 'version_conflict', 'Room changed; reload before editing', version=row['version'])
+            people = resolve_participants(keys, index_fn())
+            chosen = resolve_lead(people, lead, lead_override)
+            updated = {**row, 'participants':people, 'lead':chosen, 'version':row['version'] + 1}
+            self._save([updated if r is row else r for r in self.rows])
+            self.rows[self.rows.index(row)] = updated
+            return self._public(updated)
 
     def create(self, name, bots, client_id):
         if not isinstance(name,str) or not 1 <= len(name.strip()) <= 80:
@@ -83,11 +171,43 @@ class Rooms:
             if key == 'development': return self.base
             row = next((r for r in self.rows if r['id'] == key),None)
             if row is None: raise ValueError('Unknown room')
+            if row.get('kind') == 'cross_project': raise ValueError('Cross-project rooms have no local session')
             if key not in self.controllers:
                 self.controllers[key] = self.factory(self.root / key,self.codex_path,self.base.model,
                     bots=tuple(row['bots']),profile_project=self.base.profile_project)
                 self.controllers[key].room_instructions = row.get('instructions', '')
             return self.controllers[key]
+
+    def queue_state(self, key):
+        """Read an existing room queue without opening or initializing a room runtime."""
+        with self.lock:
+            if self.closed or self.draining:
+                raise RuntimeError('Rooms are closing')
+            if key == 'development':
+                from .room_queue import RoomQueue
+                return RoomQueue(self.base, initialize=False).state()
+            if not isinstance(key, str) or not re.fullmatch(r'[0-9a-f]{32}', key):
+                raise ValueError('Unknown room')
+            if not any(row['id'] == key for row in self.rows):
+                raise ValueError('Unknown room')
+            root = self.root.resolve()
+            room_root = (self.root / key).resolve()
+            if not room_root.is_relative_to(root):
+                raise ValueError('Room path escapes storage')
+            controller = self.controllers.get(key)
+            if controller is not None:
+                if controller.store.root.resolve() != room_root:
+                    raise ValueError('Room path escapes storage')
+                from .room_queue import RoomQueue
+                return RoomQueue(controller, initialize=False).state()
+            database = room_root / 'room.sqlite'
+            if not database.exists():
+                return []
+            database = database.resolve(strict=True)
+            if not database.is_relative_to(room_root) or not database.is_file():
+                raise ValueError('Room database escapes storage')
+            from .room_queue import RoomQueue
+            return RoomQueue.read_existing(database)
 
     def settings(self, key):
         from .settings import version

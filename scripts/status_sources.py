@@ -20,7 +20,10 @@ from collections import Counter
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-import task_continuity as tc
+try:
+    import task_continuity as tc
+except ImportError:  # imported as scripts.status_sources
+    from scripts import task_continuity as tc
 
 LEDGER = ".bot-mode/local/requests.json"
 LABEL_STATUS = {"state:needs-owner": "blocked", "state:review": "review", "state:active": "in-progress",
