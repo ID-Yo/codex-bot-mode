@@ -30,7 +30,7 @@ class Fixture:
         (self.monitor / "agent" / "STATE.md").write_text("Narrative history.\n", encoding="utf-8")
         self.projects = []
 
-    def project(self, pid, tasks=False, exists=True):
+    def project(self, pid, tasks=False, exists=True, tracked_work=None):
         root = self.dir / pid
         if exists:
             root.mkdir()
@@ -42,7 +42,7 @@ class Fixture:
             ledger = ROOT / ".bot-mode" / "requests.py"
             shutil.copy(ledger if ledger.exists() else ROOT / "scripts" / "team_room" / "requests.py",
                         root / ".bot-mode" / "requests.py")
-        self.projects.append({"id": pid, "name": pid, "root": str(root)})
+        self.projects.append({"id": pid, "name": pid, "root": str(root), **({"tracked_work": tracked_work} if tracked_work else {})})
         return root
 
     def write(self, registry=None):
@@ -68,7 +68,7 @@ class MonitorRunTests(unittest.TestCase):
     def test_complete_quiet_cycle_builds_snapshot_and_records_checkpoint(self):
         fx = Fixture(self)
         fx.project("alpha", tasks=True)
-        fx.project("beta")
+        fx.project("beta", tracked_work="none")
         fx.write()
         result = fx.run(now=datetime.now(timezone.utc))
         self.assertTrue(result["audit_complete"], result)
@@ -85,7 +85,7 @@ class MonitorRunTests(unittest.TestCase):
 
     def test_unavailable_project_makes_incomplete_report_with_english_text(self):
         fx = Fixture(self)
-        fx.project("alpha")
+        fx.project("alpha", tracked_work="none")
         fx.project("gone", exists=False)
         fx.write()
         result = fx.run()
@@ -101,7 +101,7 @@ class MonitorRunTests(unittest.TestCase):
 
     def test_second_fresh_lease_uses_private_state_and_leaves_shared_state(self):
         fx = Fixture(self)
-        fx.project("alpha")
+        fx.project("alpha", tracked_work="none")
         fx.write()
         fx.lease()
         before = (fx.monitor / "agent" / "STATE.md").read_bytes()
@@ -128,7 +128,7 @@ class MonitorRunTests(unittest.TestCase):
 
     def test_stale_and_finished_leases_are_not_concurrency(self):
         fx = Fixture(self)
-        fx.project("alpha")
+        fx.project("alpha", tracked_work="none")
         fx.write()
         fx.lease("old", age=600)
         fx.lease("done", status="finished", age=5)
@@ -138,7 +138,7 @@ class MonitorRunTests(unittest.TestCase):
 
     def test_unreadable_lease_makes_invocation_metadata_unavailable(self):
         fx = Fixture(self)
-        fx.project("alpha")
+        fx.project("alpha", tracked_work="none")
         fx.write()
         fx.lease("broken", raw="{not json")
         result = fx.run()
@@ -169,7 +169,7 @@ class MonitorRunTests(unittest.TestCase):
 
     def test_failed_own_lease_registration_writes_only_private_state(self):
         fx = Fixture(self)
-        fx.project("alpha")
+        fx.project("alpha", tracked_work="none")
         fx.write()
         (fx.monitor / "agent" / "runs").write_text("a file where the runs folder should be", encoding="utf-8")
         before = (fx.monitor / "agent" / "STATE.md").read_bytes()
@@ -230,7 +230,7 @@ class MonitorRunTests(unittest.TestCase):
 
     def test_registry_entry_without_root_is_an_unavailable_scope(self):
         fx = Fixture(self)
-        fx.project("alpha")
+        fx.project("alpha", tracked_work="none")
         fx.write({"schema": 1, "projects": [*fx.projects, {"id": "norot", "name": "No root"}, {"name": "No id", "root": "x"}], "standalone": []})
         result = fx.run(now=datetime.now(timezone.utc))
         self.assertFalse(result["audit_complete"])
@@ -241,7 +241,7 @@ class MonitorRunTests(unittest.TestCase):
 
     def test_cli_prints_compact_json_only(self):
         fx = Fixture(self)
-        fx.project("alpha")
+        fx.project("alpha", tracked_work="none")
         fx.write()
         out = io.StringIO()
         with contextlib.redirect_stdout(out):

@@ -320,7 +320,10 @@ def update_monitor_state(state_file_path, findings, snapshot=None, now=None, *, 
 
     if state_path.suffix.lower() == ".md":
         from monitor_checkpoint import save_checkpoint
-        save_checkpoint(state_path, state)
+        # The bounded block keeps fingerprints and timing only; details live in the report and snapshot.
+        slim = {fp: {k: v for k, v in entry.items() if k in ("first_seen", "status", "escalated")}
+                for fp, entry in state["alert_ledger"].items()}
+        save_checkpoint(state_path, {**state, "alert_ledger": slim})
         return state, new_alerts
 
     import os, tempfile
@@ -585,7 +588,7 @@ def default_desktop_relay_adapter(project_path, bot_id, req_id, summary):
         raise RuntimeError("Relay call returned no delivery confirmation")
 
 
-def produce_snapshot(project_dir, now=None):
+def produce_snapshot(project_dir, now=None, explicit_only=False):
     now = now or datetime.now(timezone.utc)
     now_str = now.strftime("%Y-%m-%dT%H:%M:%SZ")
     future_str = (now + timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -615,6 +618,8 @@ def produce_snapshot(project_dir, now=None):
         for task_file in sorted(tasks_dir.glob("*.md")):
             txt = task_file.read_text(encoding="utf-8")
             meta = parse_markdown_metadata(txt)
+            if explicit_only and not (meta.get("state") or meta.get("status")):
+                continue
 
             task_id = meta.get("task id") or task_file.stem
             task_mgr = meta.get("responsible manager") or meta.get("owner") or manager
