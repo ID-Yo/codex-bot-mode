@@ -13,6 +13,7 @@ Start, Stop, Restart, service status and recent activity, with the work UI in
 external Chrome. Codex Desktop is required; a separate Python/Node/Rust install
 is not required to run the packaged app. The Windows executable is currently
 unsigned; compare its published SHA-256 before installation.
+Release 0.1.5 notes are in [CHANGELOG.md](CHANGELOG.md).
 
 On first run select the root folder of your existing CBM project (the folder
 containing `.bot-mode/roster.json` and your teams), then Start and Open Office

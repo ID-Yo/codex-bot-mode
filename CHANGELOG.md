@@ -24,6 +24,25 @@ Format: [Keep a Changelog](https://keepachangelog.com/). Versions follow [SemVer
 - Chief of Staff updates now identify the project, including multi-project, cross-project and personal operations.
 - Installation examples now pass the selected tracking mode or the reviewed answers file.
 
+## [Office 0.1.5] - unreleased
+
+Windows x64 preview of the Codex Office desktop controller (unsigned installer; compare the published SHA-256).
+
+### Added
+- Cross-project rooms, a named room queue with explicit release, room discussion with replies returned to the journal, and an outcomes panel with confirmed approvals.
+- Owner inbox with typed items, including blockers that have no linked issue yet.
+- Guided New project setup, project visibility controls, dashboard counters and fresher read models.
+- Speech status, label and contrast fixes, and a shared language layer in the Office UI.
+- Compact single-column controller layout.
+
+### Fixed
+- Upgrade stops the previous Office gracefully, archives a stale service descriptor and aborts on any unsuccessful stop instead of forcing it.
+- Quit closes the controller while setup is still needed.
+
+### Notes
+- The installer is unsigned; the signed component manifest covers only the reference handbook component.
+- Owner install, packaged upgrade and tray/uninstall acceptance are not verified yet.
+
 ## [0.1.0] - 2026-10-13
 
 ### Added
