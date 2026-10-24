@@ -716,6 +716,8 @@ def produce_snapshot(project_dir, now=None, explicit_only=False):
                             m_auth = re.search(r"\bauthor[:\s]+([a-z][a-z0-9-]{0,47})\b", s_text, re.IGNORECASE)
                             if m_auth:
                                 auth = m_auth.group(1).lower()
+                        if not auth and r.get("from") and r.get("from") not in ("manager", "owner"):
+                            auth = r.get("from")
                         if sha and auth:
                             candidate = {"id": sha, "author": auth}
                             break
