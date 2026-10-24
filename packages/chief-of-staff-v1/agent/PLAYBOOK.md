@@ -27,6 +27,48 @@ needs to do. Keep the list in `agent/STATE.md` until everything is set up or the
 owner declines a tool. Reading and drafting are fine; sending, accepting,
 deleting, purchasing and publishing still need the owner's confirmation.
 
+## Owner knowledge onboarding
+
+Use this to fill `knowledge/` with the owner and to keep it current.
+
+1. Ask in small steps: one topic at a time, at most three short questions per turn, in the owner's language
+   (`owner_language` in `agent/agent.yaml`). Start with `owner.md`, then `preferences.md` and `projects.md`.
+   Ask about `people.md`, `routines.md`, `accounts.md` and `personal.md` only when the owner wants to.
+2. Record only what the owner states or confirms. Read the entry back ("I will record: ... Is that right?") and save it
+   after a yes. Each entry carries the fact, today's date, its source (the owner in chat, or a named import) and its
+   confidence (confirmed or unknown). Leave unknown things marked unknown; never guess.
+3. Import only from a source the owner names and approves, for example the Codex native memory summary or the
+   Personal Assistant's notes. Read only that source, list the candidate facts as proposals, and record each one the
+   owner confirms with the source named. Never copy a source wholesale and never import credentials or one-time codes.
+4. Correction: when the owner says an entry is wrong, show the entry, confirm the corrected version, replace the old
+   text in `knowledge/` (date and source "owner correction") and save the lesson again under the same key so the
+   active recall is replaced. Do not keep the old claim as current.
+5. Finish with a short summary of what is filled and ask the owner to confirm `owner.md`, `preferences.md` and
+   `projects.md`. Note the confirmation date in `agent/STATE.md` and keep unfinished topics there.
+6. Keep it current: when the owner mentions a change, or you notice a fact that contradicts an entry, ask whether to
+   update it before relying on it.
+
+In a new chat, answer owner questions from `knowledge/`: read the relevant file, answer from the entry and give its
+date. If the fact is not recorded, say it is unknown and offer to record it.
+
+### Synthetic exercise
+
+Input: an empty `knowledge/owner.md`; the owner says (synthetic) "I work Monday to Thursday and prefer short answers."
+
+Expected output: read back both facts, save them with today's date, source "owner in chat" and confidence confirmed, then
+answer "What are my working days?" from the entry with its date.
+
+Acceptance: the saved entry matches what the owner confirmed, the later answer quotes the entry, nothing else is added.
+
+### Boundary exercise
+
+The owner says "import everything from my notes" without naming a source.
+
+Expected output: ask which source, show candidate facts as proposals and record only confirmed ones; refuse to import any
+password, token or one-time code and say so.
+
+Acceptance: no entry is written before confirmation and no secret is stored.
+
 ## Incoming request
 
 1. Restate the intended result in one line if it is ambiguous; otherwise act.

@@ -18,6 +18,9 @@ PATTERNS = {
 ALLOWED = {('LICENSE', 'owner account'),
            # Bulgarian microphone labels are matched on purpose.
            ('scripts/team_room/static/media.js', 'cyrillic text'),
+           # Owner-approved EN/BG interface catalog and native language selector.
+           ('scripts/team_room/static/i18n.js', 'cyrillic text'),
+           ('scripts/team_room/static/index.html', 'cyrillic text'),
            ('README.bg.md', 'cyrillic text'),
            ('README.md', 'cyrillic text'),  # language switch link
            # Credential detector pattern, not a credential.
@@ -34,7 +37,7 @@ CANONICAL_COS_PACKAGE_HASHES ={
     '.gitignore': 'de807abdbf05bc3368639533929cc4309641e39896fcae936e3f5174e0b1df21',
     'AGENTS.md': '4449e1cfbae9951aab2a741b76b44c17c1ac1b1605fef655b00be285eaeaf5fc',
     'README.md': '6edef3e6164b5465b29df03bdc42b2d4207114d68dc1be67799007f0d32401f3',
-    'agent/PLAYBOOK.md': '5946494a8696a0dc6242faf5da19fec2101d9b2b1389a7cd5df29cd6766ef295',
+    'agent/PLAYBOOK.md': '8e56f5e808caeeb1c93ae5b0035d1eb8a66184083f59a74b56824160a27c2d52',
     'agent/PROFILE.md': '585ab2f44efec8e3dce6caa3b63a66c960112ffcc55672213ea6ea209629bf39',
     'agent/SOUL.md': '75e038ee7ad7b3d71221e8a4314bb60e0ff3ab83a5ff9e9b19b457de3400b528',
     'agent/STATE.md': '7d70d25b58aec83548706966d019d4705766cfe63006f257f1b11e75f7516df6',
