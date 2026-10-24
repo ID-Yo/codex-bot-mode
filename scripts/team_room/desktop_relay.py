@@ -15,7 +15,7 @@ from urllib.parse import urlparse
 from urllib.request import Request, build_opener, ProxyHandler
 
 from . import project, work
-from .work import DesktopBridge, Uncertain
+from .work import DesktopBridge, TooLarge, Uncertain
 from .transport import safe_error
 from .relay_url import relay_base_url
 from .web import RoomHTTPServer
@@ -24,7 +24,7 @@ TOOLS = {'list_threads', 'read_thread', 'wait_threads', 'send_message_to_thread'
 
 
 REGISTRY_TARGETS_TTL = 60.0
-_REGISTRY_TARGETS = {'key': None, 'at': 0.0, 'chats': frozenset()}
+_REGISTRY_TARGETS = {'key': None, 'at': 0.0, 'chats': frozenset(), 'readable': frozenset()}
 _REGISTRY_TARGETS_LOCK = threading.Lock()
 
 
@@ -53,8 +53,8 @@ def _registry_key(reg_file, projects):
     return (str(project.PROJECT), tuple((str(f), _stat(f)) for f in files))
 
 
-def _registry_targets():
-    """Appointed Manager chats from the project registry.
+def _registry_scan():
+    """(Manager chats, every bound chat) of the registry projects.
 
     The scan builds the registry overview once (about a second of CPU for a dozen projects), so the result is kept
     while the registry, rosters and bindings are unchanged (stat fingerprint), for at most REGISTRY_TARGETS_TTL
@@ -63,18 +63,19 @@ def _registry_targets():
     from . import registry
     reg_file = registry.registry_path(project.PROJECT)
     if not reg_file:
-        return frozenset()
+        return frozenset(), frozenset()
     with _REGISTRY_TARGETS_LOCK:
         cached = _REGISTRY_TARGETS
         projects = []
         try:
             raw = json.loads(Path(reg_file).read_text(encoding='utf-8'))
-            projects = [p for p in raw.get('projects', []) if isinstance(p, dict)]
-        except (OSError, ValueError, AttributeError):
+            listed = raw.get('projects') if isinstance(raw, dict) else None
+            projects = [p for p in listed if isinstance(p, dict)] if isinstance(listed, list) else []
+        except (OSError, ValueError):
             pass
         key = _registry_key(reg_file, projects)
         if cached['key'] == key and time.monotonic() - cached['at'] < REGISTRY_TARGETS_TTL:
-            return cached['chats']
+            return cached['chats'], cached['readable']
         chats = set()
         reg = registry.load_registry(reg_file)
         overview = registry.build_overview(reg_file, current_project_root=project.PROJECT)
@@ -82,8 +83,15 @@ def _registry_targets():
             res = registry.manager_from_overview(overview, p.get('id'))
             if res and res.get('status') == 'ok' and res.get('thread_id'):
                 chats.add(res['thread_id'])
-        _REGISTRY_TARGETS.update(key=key, at=time.monotonic(), chats=frozenset(chats))
-        return _REGISTRY_TARGETS['chats']
+        # Every chat bound in a registry project's roster, from the same overview (containment checks included).
+        readable = {b['thread_id'] for b in overview.get('bots', []) if isinstance(b.get('thread_id'), str) and b['thread_id']}
+        _REGISTRY_TARGETS.update(key=key, at=time.monotonic(), chats=frozenset(chats), readable=frozenset(readable | chats))
+        return _REGISTRY_TARGETS['chats'], _REGISTRY_TARGETS['readable']
+
+
+def _registry_targets():
+    """Appointed Manager chats from the project registry."""
+    return _registry_scan()[0]
 
 
 def targets():
@@ -97,13 +105,29 @@ def targets():
     return chats
 
 
+READ_ONLY_TURN_LIMIT = 10
+
+
+def read_only_targets():
+    """Chats that read_thread may read in addition to targets(): every chat bound in a registry project's roster.
+
+    Reading is metadata only (see prepare); sending, waiting and every other tool keep using targets() exactly."""
+    try:
+        return _registry_scan()[1]
+    except Exception:
+        return frozenset()
+
+
 def validate(name, arguments):
     if name not in TOOLS or not isinstance(arguments, dict):
         raise ValueError('Unsupported Desktop relay tool')
     if arguments.get('hostId', 'local') != 'local':
         raise ValueError('Only the local Desktop host is linked')
     allowed = targets()
-    if name in ('send_message_to_thread', 'read_thread') and arguments.get('threadId') not in allowed:
+    thread = arguments.get('threadId')
+    if name == 'read_thread' and thread not in allowed and thread not in read_only_targets():
+        raise ValueError('Unappointed Desktop recipient refused')
+    if name == 'send_message_to_thread' and thread not in allowed:
         raise ValueError('Unappointed Desktop recipient refused')
     if name == 'wait_threads' and any(t.get('threadId') not in allowed or t.get('hostId', 'local') != 'local' for t in arguments.get('targets', [])):
         raise ValueError('Unappointed Desktop recipient refused')
@@ -118,6 +142,20 @@ _ACTIVITY_CACHE_LOCK = threading.Lock()
 
 def now_utc():
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace('+00:00', 'Z')
+
+
+def prepare(name, arguments):
+    """Arguments actually forwarded to Desktop for a validated call.
+
+    A read_thread of a chat that is only read-only reachable (not in targets()) is reduced to thread status and turn
+    metadata: includeOutputs is forced to false, one character per item at most, and only threadId, hostId and a
+    bounded turnLimit are kept, so no message text leaves through this path whatever the caller asked for."""
+    if name == 'read_thread' and arguments.get('threadId') not in targets():
+        limit = arguments.get('turnLimit')
+        limit = limit if isinstance(limit, int) and not isinstance(limit, bool) and 1 <= limit <= READ_ONLY_TURN_LIMIT else 3
+        return {'threadId': arguments['threadId'], 'hostId': 'local', 'turnLimit': limit,
+                'includeOutputs': False, 'maxOutputCharsPerItem': 1}
+    return arguments
 
 
 def get_project_activity(bridge, project_id, current_project_root=None):
@@ -398,7 +436,7 @@ def create_relay(bridge, root, port=24243):
                 if self.path != '/call': raise ValueError('Unknown relay endpoint')
                 name, arguments = data.get('name'), data.get('arguments')
                 validate(name, arguments)
-                self.respond(200, {'result':bridge.call(name, arguments)})
+                self.respond(200, {'result':bridge.call(name, prepare(name, arguments))})
             except (ValueError, TypeError, KeyError):
                 self.respond(400, {'error':'Invalid Desktop relay request'})
             except Exception as error:
@@ -438,7 +476,11 @@ class RelayBridge(DesktopBridge):
             headers={'Content-Type':'application/json', 'X-Office-Relay':descriptor['token']})
         try:
             with build_opener(ProxyHandler({})).open(request, timeout=40) as response: return json.load(response)
-        except (HTTPError, URLError, OSError, ValueError):
+        except HTTPError as error:
+            if b'size limit' in error.read(2000):
+                raise TooLarge('Desktop answer exceeds the size limit') from None
+            raise Uncertain('Desktop relay unavailable or request outcome unconfirmed; do not resend') from None
+        except (URLError, OSError, ValueError):
             raise Uncertain('Desktop relay unavailable or request outcome unconfirmed; do not resend') from None
     def health(self): return self._post('/health', {})
     def activity(self, project_id):

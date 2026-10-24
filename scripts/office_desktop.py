@@ -5,11 +5,13 @@ import os
 from pathlib import Path
 import re
 import secrets
+from contextlib import closing
 import sqlite3
 import threading
 import time
 import uuid
 
+from scripts.team_room.sqlite_uri import readonly_uri
 from scripts.team_room.transport import safe_error
 
 
@@ -61,6 +63,97 @@ def verify_runtime_slot(install_root, slot, release_id, slot_sha256, component_i
         raise ValueError(str(error)) from error
 
 
+NATIVE_STATUSES = ('idle', 'notLoaded', 'active')
+
+
+def _who(item):
+    bot = getattr(item, 'bot', None)
+    return f'Chat {bot}' if bot else type(item).__name__
+
+
+def _problem(who, error):
+    """One actionable sentence for a check that could not be completed."""
+    text = str(error).strip().rstrip('.')[:140] or type(error).__name__
+    if 'unresolved' in text.lower():
+        hint = 'Open that chat in Office and use Resume to settle the delivery, then retry Quit.'
+    elif 'unknown' in text.lower():
+        hint = 'Office does not recognise this state; keep the chat open and report it, then retry Quit.'
+    else:
+        hint = "Office could not read it from Codex Desktop; retry Quit once Desktop answers, or close that chat's tab in Office."
+    return f'{who}: {text}. {hint}'
+
+
+def _in_progress(who, what):
+    return f'{who}: {what} is still in progress; wait for it to finish, then retry Quit.'
+
+
+def _outbox_counts(database):
+    """(busy, pending, busy ids) of the durable outbox on disk; raises when it is ambiguous, unknown or unreadable."""
+    busy = pending = 0
+    busy_ids = []
+    uri = readonly_uri(database)
+    with closing(sqlite3.connect(uri, uri=True, timeout=1)) as db:
+        rows = db.execute("SELECT state, id FROM outbox WHERE state NOT IN "
+            "('completed','failed','interrupted','cancelled')").fetchall()
+    for status, ident in rows:
+        if status in ('sending', 'accepted'):
+            busy += 1
+            busy_ids.append(ident)
+        elif status == 'ambiguous':
+            raise ValueError('Native delivery outcome is unresolved')
+        elif status == 'pending':
+            pending += 1
+        else:
+            raise ValueError('Native delivery state is unknown')
+    return busy, pending, busy_ids
+
+
+def _send_records():
+    """(busy, notes) from the durable record of Office sends (launch requests, reminders, escalations).
+
+    notes name every unresolved send and what closes it. The record is a file shared by both import paths of the
+    package (scripts.team_room as the service loads it, team_room after project status put scripts on sys.path).
+    """
+    import importlib
+    import os
+    from pathlib import Path
+    modules = []
+    for prefix in ('scripts.team_room', 'team_room'):
+        try:
+            modules.append(tuple(importlib.import_module(f'{prefix}.{name}') for name in ('inflight', 'project', 'requests')))
+        except ImportError:
+            continue
+    if not modules:
+        raise ImportError('Office send record is unavailable')
+    inflight, _, rq = modules[0]
+    roots = {Path(p) for p in os.environ.get(inflight.ROOTS_ENV, "").split(os.pathsep) if p}
+    roots.update(Path(project.PROJECT) for _, project, _ in modules)
+    busy, notes = 0, []
+    for root in sorted(roots):
+        ledger = None
+        for row in inflight.rows(root):
+            if row['kind'] == 'launch' and row['state'] == 'sent':
+                continue  # delivered to the Manager chat; the work continues there, not in Office
+            if row['state'] in ('sending', 'attempted') and row['boot'] == inflight.BOOT:
+                busy += 1  # in flight now
+                continue
+            if row['kind'] == 'launch':
+                ledger = ledger or rq.load(root)
+                request = next((r for r in ledger['requests'] if r['id'] == row['ref']), None)
+                if request is not None and request['state'] != 'open':
+                    continue  # answered: the Manager took it
+                if request is None and row['state'] == 'sending':
+                    continue  # stopped before the ledger write and before any message left
+                notes.append(f"Launch request {row['ref']} may have reached the Manager chat and is not closed. "
+                             f"Check the Manager chat, then close the request with the Manager's reply "
+                             f"(requests.py reply {row['ref']}) or cancel it in Office, then retry Quit.")
+                continue
+            notes.append(f"{row['kind'].title()} {row['ref']} was interrupted before its outcome was recorded. "
+                         f"The next Office escalation pass records it (it is never sent again); wait a few minutes "
+                         f"or close the request, then retry Quit.")
+    return busy, notes
+
+
 _NATIVE_CACHE = {}
 _NATIVE_CACHE_LOCK = threading.Lock()
 
@@ -79,79 +172,89 @@ def inspect_shutdown(controller, personal=None, rooms=None, managers=None, nativ
 
     busy = 0
     pending = 0
+    unverified = False
+    send_notes = []
+    notes = []  # one actionable sentence for every busy or unknown cause
     seen = set()
     try:
         for item in owned:
             if id(item) in seen:
                 continue
             seen.add(id(item))
-            if hasattr(item, '_history'):
-                state = item.state()
-                if state.get('personal_thread_id') != item.thread_id:
-                    raise ValueError('Native thread identity mismatch')
-                native_status = state.get('native_thread_status')
-                if native_status == 'active':
-                    busy += 1
-                elif native_status != 'idle':
-                    raise ValueError('Native thread state is unknown')
-                if state.get('active'):
-                    busy += 1
-                for delivery in state.get('deliveries', []):
-                    status = delivery.get('state')
-                    if status in ('sending', 'accepted'):
-                        busy += 1
-                    elif status == 'ambiguous':
-                        raise ValueError('Native delivery outcome is unresolved')
-                    elif status not in TERMINAL | {'pending'}:
-                        raise ValueError('Native delivery state is unknown')
-                    if status == 'pending':
-                        pending += 1
-                continue
-
-            mutex = getattr(item, 'mutex', None)
-            if mutex is None:
-                mutex = getattr(item, 'lock', threading.RLock())
-            with mutex:
-                if getattr(item, 'active', None):
-                    busy += 1
-                store = getattr(item, 'store', None)
-                if store is not None and hasattr(store, 'deliveries'):
-                    for delivery in store.deliveries():
+            who = _who(item)
+            try:
+                if hasattr(item, '_history'):
+                    state = item.shutdown_view() if hasattr(item, 'shutdown_view') else item.state()
+                    if state.get('personal_thread_id') != item.thread_id:
+                        raise ValueError('Native thread identity mismatch')
+                    # state()['active'] mirrors any native turn; only Office's own deliveries below are owned work.
+                    for delivery in state.get('deliveries', []):
                         status = delivery.get('state')
                         if status in ('sending', 'accepted'):
                             busy += 1
+                            notes.append(_in_progress(who, f"Office delivery {delivery.get('id')} ({status})"))
                         elif status == 'ambiguous':
-                            raise ValueError('Delivery outcome is unresolved')
+                            raise ValueError('Native delivery outcome is unresolved')
                         elif status not in TERMINAL | {'pending'}:
-                            raise ValueError('Delivery state is unknown')
+                            raise ValueError('Native delivery state is unknown')
                         if status == 'pending':
                             pending += 1
-                work = getattr(item, 'work', None)
-                if work is not None:
-                    for task in work.tasks():
-                        if task.get('state') in TERMINAL:
-                            continue
-                        state = task.get('state')
-                        phase = task.get('issue_phase')
-                        if state not in {'queued', 'creating_issue', 'developer', 'applying', 'verifier', 'ambiguous'} | TERMINAL:
-                            raise ValueError('Work task state is unknown')
-                        if phase not in {'pending', 'creating', 'created'}:
-                            raise ValueError('Work issue state is unknown')
-                        if state == 'ambiguous':
-                            raise ValueError('Work outcome is unresolved')
-                        if phase == 'creating' or state in ('creating_issue', 'applying'):
-                            busy += 1
-                        else:
-                            pending += 1
-                        for step in work.steps(task['id']):
-                            if step.get('state') in ('sending', 'accepted'):
-                                busy += 1
-                            elif step.get('state') == 'ambiguous':
-                                raise ValueError('Native work outcome is unresolved')
-                            elif step.get('state') not in TERMINAL | {'pending'}:
-                                raise ValueError('Native work state is unknown')
+                    # Valid status is required; an active turn that Office did not start does not block Stop.
+                    if state.get('native_thread_status') not in NATIVE_STATUSES:
+                        raise ValueError('Native thread state is unknown')
+                    continue
 
-        # Bindings not opened as Office sessions still belong to native Desktop.
+                mutex = getattr(item, 'mutex', None)
+                if mutex is None:
+                    mutex = getattr(item, 'lock', threading.RLock())
+                with mutex:
+                    if getattr(item, 'active', None):
+                        busy += 1
+                        notes.append(_in_progress(who, 'an Office turn'))
+                    store = getattr(item, 'store', None)
+                    if store is not None and hasattr(store, 'deliveries'):
+                        for delivery in store.deliveries():
+                            status = delivery.get('state')
+                            if status in ('sending', 'accepted'):
+                                busy += 1
+                                notes.append(_in_progress(who, f"Office delivery {delivery.get('id')} ({status})"))
+                            elif status == 'ambiguous':
+                                raise ValueError('Delivery outcome is unresolved')
+                            elif status not in TERMINAL | {'pending'}:
+                                raise ValueError('Delivery state is unknown')
+                            if status == 'pending':
+                                pending += 1
+                    work = getattr(item, 'work', None)
+                    if work is not None:
+                        for task in work.tasks():
+                            if task.get('state') in TERMINAL:
+                                continue
+                            state = task.get('state')
+                            phase = task.get('issue_phase')
+                            if state not in {'queued', 'creating_issue', 'developer', 'applying', 'verifier', 'ambiguous'} | TERMINAL:
+                                raise ValueError('Work task state is unknown')
+                            if phase not in {'pending', 'creating', 'created'}:
+                                raise ValueError('Work issue state is unknown')
+                            if state == 'ambiguous':
+                                raise ValueError('Work outcome is unresolved')
+                            if phase == 'creating' or state in ('creating_issue', 'applying'):
+                                busy += 1
+                                notes.append(_in_progress(who, f"work task {task.get('id')} ({state})"))
+                            else:
+                                pending += 1
+                            for step in work.steps(task['id']):
+                                if step.get('state') in ('sending', 'accepted'):
+                                    busy += 1
+                                    notes.append(_in_progress(who, f"work step of task {task.get('id')} ({step.get('state')})"))
+                                elif step.get('state') == 'ambiguous':
+                                    raise ValueError('Native work outcome is unresolved')
+                                elif step.get('state') not in TERMINAL | {'pending'}:
+                                    raise ValueError('Native work state is unknown')
+            except Exception as error:
+                unverified = True
+                notes.append(_problem(who, error))
+
+        # Bindings not opened as Office sessions: only Office's own durable outbox counts as owned work.
         if personal is not None:
             bindings = getattr(personal, 'native_bindings', {})
             bridge = getattr(personal, 'native_bridge', None)
@@ -160,52 +263,67 @@ def inspect_shutdown(controller, personal=None, rooms=None, managers=None, nativ
             for bot, thread_id in bindings.items():
                 if (bot, thread_id) in opened:
                     continue
-                key = (bot, thread_id)
-                with _NATIVE_CACHE_LOCK:
-                    hit = _NATIVE_CACHE.get(key)
-                if native_cache_ttl and hit and time.monotonic() - hit[0] < native_cache_ttl:
-                    busy += hit[1]
-                    pending += hit[2]
+                try:
+                    key = (bot, thread_id)
+                    with _NATIVE_CACHE_LOCK:
+                        hit = _NATIVE_CACHE.get(key)
+                    if native_cache_ttl and hit and time.monotonic() - hit[0] < native_cache_ttl:
+                        busy += hit[1]
+                        pending += hit[2]
+                        notes.extend(hit[3])
+                        continue
+                    busy_before, pending_before, notes_before = busy, pending, len(notes)
+                    if bridge is None:
+                        raise ValueError('Native Desktop connection is unavailable')
+                    result = bridge.call('read_thread', {'threadId': thread_id, 'hostId': 'local',
+                        'turnLimit': 1, 'includeOutputs': False, 'maxOutputCharsPerItem': 1})
+                    thread = result.get('thread', {})
+                    if thread.get('id') != thread_id:
+                        raise ValueError('Native thread identity mismatch')
+                    thread_status = thread.get('status', {}).get('type')
+                    # Only work Office started or delivered blocks Stop (its outbox below); an active turn in a
+                    # linked chat is not Office's and survives an Office stop. The status must still be a known one.
+                    if thread_status not in NATIVE_STATUSES:
+                        raise ValueError('Native thread state is unknown')
+                    database = personal._native_root(bot, thread_id) / 'native.sqlite'
+                    if database.exists():
+                        add_busy, add_pending, ids = _outbox_counts(database)
+                        busy += add_busy
+                        pending += add_pending
+                        notes.extend(_in_progress(f'Chat {bot}', f'Office delivery {ident}') for ident in ids)
+                    with _NATIVE_CACHE_LOCK:
+                        _NATIVE_CACHE[key] = (time.monotonic(), busy - busy_before, pending - pending_before, notes[notes_before:])
+                except Exception as error:
+                    unverified = True  # counters observed so far stay; later bindings are still checked
+                    notes.append(_problem(f'Chat {bot}', error))
+        # Project Manager chats: read every durable outbox from disk, also when no session is open after a restart.
+        open_roots = {Path(getattr(s, 'root')).resolve() for holder in (personal, rooms, managers) if holder is not None
+                      for s in list(getattr(holder, 'controllers', {}).values()) + list(getattr(holder, 'sessions', {}).values())
+                      if getattr(s, 'root', None)}
+        for root in (managers.native_roots() if managers is not None and hasattr(managers, 'native_roots') else []):
+            try:
+                if Path(root).resolve() in open_roots:
                     continue
-                busy_before, pending_before = busy, pending
-                if bridge is None:
-                    raise ValueError('Native Desktop connection is unavailable')
-                result = bridge.call('read_thread', {'threadId': thread_id, 'hostId': 'local',
-                    'turnLimit': 1, 'includeOutputs': False, 'maxOutputCharsPerItem': 1})
-                thread = result.get('thread', {})
-                if thread.get('id') != thread_id:
-                    raise ValueError('Native thread identity mismatch')
-                thread_status = thread.get('status', {}).get('type')
-                if thread_status == 'active' or any(
-                        turn.get('status') == 'inProgress' for turn in result.get('turns', [])):
-                    busy += 1
-                elif thread_status != 'idle':
-                    raise ValueError('Native thread state is unknown')
-                root = personal._native_root(bot, thread_id)
-                database = root / 'native.sqlite'
-                if database.exists():
-                    uri = database.resolve().as_uri() + '?mode=ro'
-                    with sqlite3.connect(uri, uri=True, timeout=1) as db:
-                        rows = db.execute("SELECT state FROM outbox WHERE state NOT IN "
-                            "('completed','failed','interrupted','cancelled')").fetchall()
-                    for (status,) in rows:
-                        if status in ('sending', 'accepted'):
-                            busy += 1
-                        elif status == 'ambiguous':
-                            raise ValueError('Native delivery outcome is unresolved')
-                        elif status == 'pending':
-                            pending += 1
-                        else:
-                            raise ValueError('Native delivery state is unknown')
-                with _NATIVE_CACHE_LOCK:
-                    _NATIVE_CACHE[key] = (time.monotonic(), busy - busy_before, pending - pending_before)
-    except Exception:
+                add_busy, add_pending, ids = _outbox_counts(Path(root) / 'native.sqlite')
+                busy += add_busy
+                pending += add_pending
+                notes.extend(_in_progress(f'Manager chat {Path(root).name}', f'Office delivery {ident}') for ident in ids)
+            except Exception as error:
+                unverified = True
+                notes.append(_problem(f'Manager chat {Path(root).name}', error))
+        add_busy, send_notes = _send_records()
+        busy += add_busy
+    except Exception as error:
+        unverified = True
+        notes.append(_problem('Office', error))
+    if unverified or send_notes:
+        generic = 'A service or native Desktop operation could not be verified.'
         return {'safety': 'unknown', 'busy_count': busy, 'pending_count': pending,
-                'reason': 'A service or native Desktop operation could not be verified.'}
+                'reason': ' '.join(notes + send_notes) or generic}
 
     return {'safety': 'busy' if busy else 'safe', 'busy_count': busy,
             'pending_count': pending,
-            'reason': 'Waiting for owned work to reach a safe boundary.' if busy else ''}
+            'reason': ' '.join(['Waiting for owned work to reach a safe boundary.'] + notes) if busy else ''}
 
 
 def set_draining(controller, personal=None, rooms=None, managers=None, value=True):

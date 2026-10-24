@@ -9,10 +9,13 @@ Configuration file locations (strictly portable and local):
 2. Project-local state: <served.PROJECT>/.bot-mode/local/office-project-roots.json
 Never scans arbitrary filesystem paths or uses hardcoded absolute task paths.
 """
+import copy
 import json
 import os
 from pathlib import Path
 import re
+import threading
+import time
 
 from . import manifest, roster
 
@@ -129,7 +132,61 @@ def _get_display_name(proot, workspace, default_role):
     return default_role
 
 
+OVERVIEW_TTL = 15.0  # safety net for agent.yaml display names, which the fingerprint does not stat
+_OVERVIEW_CACHE = {}
+_OVERVIEW_LOCK = threading.Lock()
+
+
+def clear_overview_cache():
+    with _OVERVIEW_LOCK:
+        _OVERVIEW_CACHE.clear()
+
+
+def _stat(file):
+    try:
+        info = os.stat(file)
+        return (info.st_mtime_ns, info.st_size)
+    except OSError:
+        return None
+
+
+def _fingerprint(config_file, current_project_root):
+    """Stat of the registry file and of every roster and bindings file the overview reads."""
+    roots = []
+    try:
+        raw = json.loads(Path(config_file).read_text(encoding="utf-8")) if config_file else {}
+        listed = raw.get("projects") if isinstance(raw, dict) else None
+        # Any other shape is reported by validate_config; the fingerprint then covers the registry file alone.
+        roots = [p.get("root") for p in listed if isinstance(p, dict) and isinstance(p.get("root"), str)] if isinstance(listed, list) else []
+    except (OSError, ValueError):
+        pass
+    if current_project_root:
+        roots.append(str(current_project_root))
+    files = [config_file] if config_file else []
+    for root in roots:
+        files.extend((Path(root) / ".bot-mode" / "roster.json", Path(root) / ".bot-mode" / "local" / "bindings.json"))
+    return tuple((str(f), _stat(f)) for f in files)
+
+
 def build_overview(config_file, current_project_id=None, current_project_root=None):
+    """Registry overview, reused while the registry, rosters and bindings are unchanged (stat fingerprint).
+
+    Building it resolves and parses every project, which costs a noticeable share of a core when the Office pages
+    poll it. Each caller gets its own copy.
+    """
+    key = (str(config_file), current_project_id, str(current_project_root))
+    fingerprint = _fingerprint(config_file, current_project_root)
+    with _OVERVIEW_LOCK:
+        hit = _OVERVIEW_CACHE.get(key)
+        if hit and hit[0] == fingerprint and time.monotonic() - hit[1] < OVERVIEW_TTL:
+            return copy.deepcopy(hit[2])
+    value = _build_overview(config_file, current_project_id, current_project_root)
+    with _OVERVIEW_LOCK:
+        _OVERVIEW_CACHE[key] = (fingerprint, time.monotonic(), copy.deepcopy(value))
+    return value
+
+
+def _build_overview(config_file, current_project_id=None, current_project_root=None):
     reg = load_registry(config_file)
     if reg['status'] != 'ok':
         current_projects = []

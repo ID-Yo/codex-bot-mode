@@ -34,6 +34,7 @@ Windows x64 preview of the Codex Office desktop controller (signed with self-sig
 - Guided New project setup, project visibility controls, dashboard counters and fresher read models.
 - Speech status, label and contrast fixes, and a shared language layer in the Office UI.
 - Compact single-column controller layout.
+- Agent Monitor reports reviews that were never started (listed alerts, relay reads and checkpoints are bounded and degrade into findings), delivers Manager messages from the automation prompt, installs the Manager registry closure in its rollout and reports stage signals that could not be delivered.
 
 ### Fixed
 - Upgrade stops the previous Office gracefully, archives a stale service descriptor and aborts on any unsuccessful stop instead of forcing it.
@@ -43,9 +44,17 @@ Windows x64 preview of the Codex Office desktop controller (signed with self-sig
 - The installer shows a Retry/Cancel dialog (English and Bulgarian) when it cannot stop the previous Office; silent installs exit with code 2 without prompting.
 - The service no longer spins the CPU while the controller polls its status: the project registry scan behind the Desktop relay allow-list is built once, kept while the registry and rosters are unchanged, and native thread checks are reused between status polls.
 - The Desktop relay is addressed on 127.0.0.1 instead of localhost, which avoided a slow refused IPv6 attempt on every call; relay addresses from older descriptors are still accepted and are validated the same way everywhere.
+- Shutdown inspection reads no turn history, falls back when Desktop refuses a large answer, and names every busy or unknown cause; chats that are not loaded are treated as not running.
+- Office sends are recorded durably (intent and outcome) so an interrupted launch or escalation stays unresolved until its request is closed, and shutdown inspection reads those records.
+- Shutdown inspection opens its databases read-only with a valid URI for Windows extended-length and UNC paths, so a controller that stores such paths no longer reports an unknown shutdown state ("invalid uri authority").
+- The registry overview is cached between polls, and relay and overview fingerprints tolerate invalid project values.
+
+### Changed
+- The test suite runs against a throw-away config and home (`tests/isolation.py`, for pytest and unittest), so running it never writes to a real Chief of Staff project list.
 
 ### Notes
 - Executables are signed with self-signed certificate `desktop/Codex-Office-ID-Yo.cer` (`2C4510778788894A8CAA3C891FE3BCB899A0C0F0`). Import the certificate into Trusted Root / Trusted Publisher to trust it.
+- Installer `Codex Office_0.1.6_x64-setup.exe`: 17,613,464 bytes, SHA-256 `552BA08291BA11AF164698ECAC258B57AB9694C4EDB65F2AF61AAA14040CE549`.
 
 ## [0.1.0] - 2026-10-13
 

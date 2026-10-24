@@ -221,6 +221,182 @@ class StatusSourceTests(unittest.TestCase):
         self.assertEqual(tasks[0]["candidate"], {"id": sha2, "author": "developer"})
         self.assertNotIn(("candidate_missing", "p/pr-272"), self.codes(tasks))
 
+    def test_remsup_97_pr_head_clears_candidate_missing(self):
+        # Replay of issue #284 support case:
+        # Issue #97 with label state:review; request links to issue #97; PR #98 is linked to issue #97.
+        # PR #98 has headRefOid="ab148d99294c9f0185073dc7c4818c8cb2c9992c".
+        head_sha = "ab148d99294c9f0185073dc7c4818c8cb2c9992c"
+        self.fetched["issue"] = [{
+            "number": 97, "state": "OPEN", "title": "Silver WebView2 support",
+            "updatedAt": iso(-2), "url": "https://github.com/example/support/issues/97",
+            "labels": [{"name": "state:review"}]
+        }]
+        self.fetched["pr"] = [{
+            "number": 98, "state": "OPEN", "title": "Fixes #97: Silver WebView2",
+            "updatedAt": iso(-1), "url": "https://github.com/example/support/pull/98",
+            "headRefOid": head_sha
+        }]
+        requests = [
+            self.request("sup-impl-97", "developer", iso(-4), "answered", "done", iso(-2),
+                         link="https://github.com/example/support/issues/97"),
+            self.request("sup-review-97", "code-reviewer", iso(-2), "open",
+                         link="https://github.com/example/support/issues/97")
+        ]
+        tasks, _ = self.status(self.project(requests=requests, repository="example/support"))
+        self.assertEqual(len(tasks), 1)
+        self.assertEqual(tasks[0]["candidate"], {"id": head_sha, "author": "developer"})
+        self.assertNotIn(("candidate_missing", "p/issue-97"), self.codes(tasks))
+
+    def check_foreign_title(self, title):
+        sha = "ab148d99294c9f0185073dc7c4818c8cb2c9992c"
+        if True:
+            if True:
+                self.fetched["issue"] = [{"number": 97, "state": "OPEN", "title": "Support", "updatedAt": iso(-2),
+                    "url": "https://github.com/example/support/issues/97", "labels": [{"name": "state:review"}]}]
+                self.fetched["pr"] = [{"number": 98, "state": "OPEN", "title": title, "updatedAt": iso(-1),
+                    "url": "https://github.com/example/support/pull/98", "headRefOid": sha}]
+                requests = [
+                    self.request("sup-impl-97", "developer", iso(-4), "answered", "done", iso(-2),
+                                 link="https://github.com/example/support/issues/97"),
+                    self.request("sup-review-97", "code-reviewer", iso(-2), "open",
+                                 link="https://github.com/example/support/issues/97")]
+                tasks, _ = self.status(self.project(requests=requests, repository="example/support"))
+                self.assertNotEqual((tasks[0].get("candidate") or {}).get("id"), sha)
+
+    def test_fixes_970_does_not_match_issue_97(self):
+        self.check_foreign_title("Fixes #970: unrelated")
+
+    def test_fixes_other_repo_97_does_not_match_issue_97(self):
+        self.check_foreign_title("Fixes other/repo#97")
+
+    def test_bare_mention_does_not_match_issue_97(self):
+        self.check_foreign_title("Mentions #97 only")
+
+    def linked_case(self, prs, **extra):
+        self.fetched["issue"] = [{"number": 97, "state": "OPEN", "title": "Support", "updatedAt": iso(-2),
+            "url": "https://github.com/example/support/issues/97", "labels": [{"name": "state:review"}]}]
+        self.fetched["pr"] = [{"number": n, "state": state, "title": "Fixes #97: x", "updatedAt": iso(-1),
+            "url": f"https://github.com/example/support/pull/{n}", "headRefOid": sha} for n, state, sha in prs]
+        requests = [
+            self.request("sup-impl-97", "developer", iso(-4), "answered", "done", iso(-2),
+                         link="https://github.com/example/support/issues/97"),
+            {**self.request("sup-review-97", "code-reviewer", iso(-2), "open",
+                            link="https://github.com/example/support/issues/97"), **extra}]
+        return self.status(self.project(requests=requests, repository="example/support"))[0]
+
+    def check_ambiguous(self, prs):
+        tasks = self.linked_case(prs)
+        self.assertIsNone(tasks[0].get("candidate"))
+        self.assertIn(("candidate_missing", "p/issue-97"), self.codes(tasks))
+
+    def test_two_open_prs_with_different_heads_are_ambiguous(self):
+        self.check_ambiguous([(98, "OPEN", "a" * 40), (99, "OPEN", "b" * 40)])
+
+    def test_ambiguity_does_not_depend_on_pr_order(self):
+        self.check_ambiguous([(99, "OPEN", "b" * 40), (98, "OPEN", "a" * 40)])
+
+    def test_structured_candidate_wins_over_ambiguous_prs(self):
+        tasks = self.linked_case([(98, "OPEN", "a" * 40), (99, "OPEN", "b" * 40)], candidate="c" * 40)
+        self.assertEqual(tasks[0]["candidate"]["id"], "c" * 40)
+
+    def test_single_open_pr_among_closed_ones_is_the_candidate(self):
+        tasks = self.linked_case([(90, "MERGED", "a" * 40), (99, "OPEN", "b" * 40)])
+        self.assertEqual(tasks[0]["candidate"]["id"], "b" * 40)
+
+    def test_active_issue_with_old_closed_pr_and_live_implementation_stays_in_progress(self):
+        self.fetched["issue"] = [{"number": 97, "state": "OPEN", "title": "Support", "updatedAt": iso(-2),
+            "url": "https://github.com/example/support/issues/97", "labels": [{"name": "state:active"}]}]
+        self.fetched["pr"] = [{"number": 90, "state": "CLOSED", "title": "Fixes #97: old attempt", "updatedAt": iso(-9),
+            "url": "https://github.com/example/support/pull/90", "headRefOid": "a" * 40}]
+        requests = [self.request("sup-impl-97", "developer", iso(-1), "open",
+                                 link="https://github.com/example/support/issues/97")]
+        tasks, _ = self.status(self.project(requests=requests, repository="example/support"))
+        self.assertEqual(len(tasks), 1)
+        self.assertEqual(tasks[0]["status"], "in-progress")
+
+    def test_review_label_with_live_implementation_request_and_closed_pr_stays_open(self):
+        self.fetched["issue"] = [{"number": 97, "state": "OPEN", "title": "Support", "updatedAt": iso(-2),
+            "url": "https://github.com/example/support/issues/97", "labels": [{"name": "state:review"}]}]
+        self.fetched["pr"] = [{"number": 90, "state": "CLOSED", "title": "Fixes #97: old attempt", "updatedAt": iso(-9),
+            "url": "https://github.com/example/support/pull/90", "headRefOid": "a" * 40}]
+        requests = [self.request("sup-impl-97", "developer", iso(-1), "open",
+                                 link="https://github.com/example/support/issues/97")]
+        tasks, _ = self.status(self.project(requests=requests, repository="example/support"))
+        self.assertEqual(len(tasks), 1)
+
+    def check_review_named_to_developer(self, rid):
+        self.fetched["issue"] = [{"number": 97, "state": "OPEN", "title": "Support", "updatedAt": iso(-2),
+            "url": "https://github.com/example/support/issues/97", "labels": [{"name": "state:review"}]}]
+        self.fetched["pr"] = [{"number": 90, "state": "CLOSED", "title": "Fixes #97: old", "updatedAt": iso(-9),
+            "url": "https://github.com/example/support/pull/90", "headRefOid": "a" * 40}]
+        requests = [self.request(rid, "developer", iso(-1), "open",
+                                 link="https://github.com/example/support/issues/97")]
+        tasks, _ = self.status(self.project(requests=requests, repository="example/support"))
+        self.assertEqual(len(tasks), 1)
+
+    def check_developer_like_bot_keeps_task_open(self, bot):
+        self.fetched["issue"] = [{"number": 97, "state": "OPEN", "title": "Support", "updatedAt": iso(-2),
+            "url": "https://github.com/example/support/issues/97", "labels": [{"name": "state:review"}]}]
+        self.fetched["pr"] = [{"number": 90, "state": "CLOSED", "title": "Fixes #97: old", "updatedAt": iso(-9),
+            "url": "https://github.com/example/support/pull/90", "headRefOid": "a" * 40}]
+        requests = [self.request("sup-impl-97", bot, iso(-1), "open",
+                                 link="https://github.com/example/support/issues/97")]
+        tasks, _ = self.status(self.project(requests=requests, repository="example/support"))
+        self.assertEqual(len(tasks), 1)
+
+    def test_preview_developer_keeps_the_task_open(self):
+        self.check_developer_like_bot_keeps_task_open("preview-developer")
+
+    def test_nonverifier_developer_keeps_the_task_open(self):
+        self.check_developer_like_bot_keeps_task_open("nonverifier-developer")
+
+    def test_review_fix_request_to_developer_keeps_the_task_open(self):
+        self.check_review_named_to_developer("sup-review-fix-97")
+
+    def test_correction_review_feedback_request_to_developer_keeps_the_task_open(self):
+        self.check_review_named_to_developer("sup-correction-review-feedback-97")
+
+    def test_open_issue_with_only_merged_or_closed_prs_is_finished(self):
+        tasks = self.linked_case([(98, "MERGED", "a" * 40), (99, "CLOSED", "b" * 40)])
+        self.assertEqual(tasks, [])
+
+    def test_pr_linked_in_request_url_resolves_candidate_head_sha(self):
+        head_sha = "ab148d99294c9f0185073dc7c4818c8cb2c9992c"
+        self.fetched["pr"] = [{
+            "number": 98, "state": "OPEN", "title": "Silver WebView2",
+            "updatedAt": iso(-1), "url": "https://github.com/example/support/pull/98",
+            "headRefOid": head_sha
+        }]
+        requests = [
+            self.request("sup-impl-98", "developer", iso(-4), "answered", "done", iso(-2),
+                         link="https://github.com/example/support/pull/98"),
+            self.request("sup-review-98", "code-reviewer", iso(-2), "open",
+                         link="https://github.com/example/support/pull/98")
+        ]
+        tasks, _ = self.status(self.project(requests=requests, repository="example/support"))
+        self.assertEqual(len(tasks), 1)
+        self.assertEqual(tasks[0]["candidate"], {"id": head_sha, "author": "developer"})
+        self.assertNotIn(("candidate_missing", "p/pr-98"), self.codes(tasks))
+
+    def test_merged_or_closed_linked_pr_raises_no_candidate_signal(self):
+        # When linked PR is merged or closed and work is finished, stage is done and no candidate_missing
+        self.fetched["issue"] = [{
+            "number": 97, "state": "CLOSED", "title": "Silver WebView2",
+            "updatedAt": iso(-1), "url": "https://github.com/example/support/issues/97",
+            "labels": []
+        }]
+        self.fetched["pr"] = [{
+            "number": 98, "state": "MERGED", "title": "Fixes #97: Silver WebView2",
+            "updatedAt": iso(-1), "url": "https://github.com/example/support/pull/98",
+            "headRefOid": "ab148d99294c9f0185073dc7c4818c8cb2c9992c"
+        }]
+        requests = [
+            self.request("sup-review-97", "code-reviewer", iso(-2), "answered", "done", iso(-1),
+                         link="https://github.com/example/support/pull/98")
+        ]
+        tasks, _ = self.status(self.project(requests=requests, repository="example/support"))
+        self.assertEqual(tasks, [])
+
     def test_checkpoint_holds_the_findings_of_many_projects(self):
         from monitor_checkpoint import STATE_READ_LIMIT
         requests = [self.request(f"impl-{n}", "developer", iso(-30), due=iso(-29), link=f"https://github.com/o/r/issues/{n}")

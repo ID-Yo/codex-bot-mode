@@ -53,6 +53,11 @@ class Uncertain(RuntimeError):
     pass
 
 
+
+
+class TooLarge(Uncertain):
+    """Desktop refused the read because its answer would be too large; asking for less is safe."""
+
 def digest(data):
     return hashlib.sha256(data).hexdigest()
 

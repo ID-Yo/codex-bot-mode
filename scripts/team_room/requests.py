@@ -84,7 +84,7 @@ def open_request(data, key, sender, recipient, summary, link=None, due_minutes=6
         raise RequestError(f'Request {key} already exists')
     at = at or now()
     entry = {'id': key, 'from': sender, 'to': recipient, 'summary': summary.strip(),
-             'link': link, 'opened': at.isoformat(),
+             'link': link or '', 'opened': at.isoformat(),
              'due': (at + timedelta(minutes=int(due_minutes))).isoformat(),
              'state': 'open', 'escalations': []}
     if candidate is not None:
@@ -95,13 +95,32 @@ def open_request(data, key, sender, recipient, summary, link=None, due_minutes=6
     return data
 
 
-def reply(data, key, by, link=None, outcome='done', at=None):
+def reply(data, key, by, link=None, outcome='done', at=None, successor=None):
     item = _find(data, key)
     if by != item['to']:
         raise RequestError(f'Only {item["to"]} can reply to {key}')
     if outcome not in ('done', 'blocked', 'failed', 'refused', 'partial'):
         raise RequestError('Outcome must be done, blocked, failed, refused or partial')
     item.update(state='answered', outcome=outcome, answered=(at or now()).isoformat(), reply_link=link)
+    if successor:
+        item['successor'] = successor
+    return data
+
+
+def accept(data, key, by, link=None, at=None):
+    """The requester (or the owner) accepts a partial outcome and records where the remainder is tracked.
+
+    The Monitor stops signalling a partial reply only after this record exists; the follow-up is the link given here
+    or the successor the recipient named at the partial reply."""
+    item = _find(data, key)
+    if by not in (item['from'], 'owner'):
+        raise RequestError('Only the requester or the owner can accept a partial outcome')
+    if item.get('state') != 'answered' or item.get('outcome') != 'partial':
+        raise RequestError(f'{key} is not an answered request with outcome partial')
+    follow_up = (link or item.get('successor') or '').strip()
+    if not follow_up:
+        raise RequestError('Accepting a partial outcome needs the follow-up link (--link)')
+    item['accepted'] = {'by': by, 'at': (at or now()).isoformat(), 'link': follow_up}
     return data
 
 
@@ -171,6 +190,11 @@ def main(argv=None):
     r.add_argument('--by', required=True)
     r.add_argument('--link')
     r.add_argument('--outcome', default='done')
+    r.add_argument('--successor', help='With --outcome partial: link of the follow-up that tracks the remainder.')
+    a = sub.add_parser('accept', help='Requester records that a partial outcome is accepted, with its follow-up.')
+    a.add_argument('id')
+    a.add_argument('--by', required=True)
+    a.add_argument('--link', help='Follow-up issue or pull request; defaults to the successor named in the reply.')
     c = sub.add_parser('cancel')
     c.add_argument('id')
     c.add_argument('--by', required=True)
@@ -189,7 +213,9 @@ def main(argv=None):
             open_request(data, args.id, args.sender, args.to, args.summary, args.link, args.due_minutes,
                          candidate=args.candidate, author=args.author)
         elif args.action == 'reply':
-            reply(data, args.id, args.by, args.link, args.outcome)
+            reply(data, args.id, args.by, args.link, args.outcome, successor=args.successor)
+        elif args.action == 'accept':
+            accept(data, args.id, args.by, args.link)
         else:
             cancel(data, args.id, args.by, args.reason)
         save(args.project, data, expected)

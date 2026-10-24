@@ -30,13 +30,15 @@ MAX_FINDINGS = 12
 LEASE_FRESH_SECONDS = 120
 LEASE_LIMIT = 4096
 
+REGISTRY_IMPORT_ERROR = None
 try:
     from team_room import registry as room_registry
-except ImportError:
+except ImportError as _first_error:
     try:
         import registry as room_registry
     except ImportError:
         room_registry = None
+        REGISTRY_IMPORT_ERROR = f"{type(_first_error).__name__}: {_first_error}"[:160]
 
 
 def utc(value):
@@ -87,6 +89,19 @@ def other_invocations(runs_dir, run_id, now):
     return rows, readable
 
 
+def relay_roots(config, project_root):
+    """Project roots to search for the Desktop Relay descriptor, in order: monitoring.json desktop_relay_root, the
+    project itself, and the project that owns the registry file (<root>/.bot-mode/local/<registry>.json)."""
+    roots = []
+    if isinstance(config.get("desktop_relay_root"), str) and config["desktop_relay_root"]:
+        roots.append(config["desktop_relay_root"])
+    roots.append(project_root)
+    registry = Path(config["registry_path"]) if config.get("registry_path") else None
+    if registry and registry.parent.name == "local" and registry.parent.parent.name == ".bot-mode":
+        roots.append(str(registry.parent.parent.parent))
+    return list(dict.fromkeys(roots))
+
+
 def project_tasks(project, now, interval=20):
     """(tasks, summary) of one project from GitHub labels, the request ledger and explicit task records."""
     return status_sources.project_status(project, now, interval)
@@ -115,7 +130,7 @@ def build(config, run_id, now, invocations, invocations_available):
              and isinstance(p.get("root"), str) and p["root"]]
     with ThreadPoolExecutor(max_workers=6) as pool:  # GitHub reads dominate the run time; keep a run well under a minute
         results = dict(zip((p["id"] for p in valid), pool.map(one, valid)))
-    hygiene = {}
+    hygiene, open_requests = {}, {}
     for index, project in enumerate(rows):
         pid = project.get("id") if isinstance(project, dict) else None
         root = project.get("root") if isinstance(project, dict) else None
@@ -129,6 +144,8 @@ def build(config, run_id, now, invocations, invocations_available):
             continue
         found, summary = result
         tasks.extend(found)
+        open_requests[pid] = {"root": root, "relay_roots": relay_roots(config, root),
+                              "items": summary.pop("open_requests", [])}
         project_status[pid] = summary
         if summary.get("hygiene"):
             hygiene[pid] = summary["hygiene"]
@@ -154,7 +171,7 @@ def build(config, run_id, now, invocations, invocations_available):
             "project_status": project_status, "hygiene": hygiene,
             "evidence": [f"ref:monitor-run:{run_id}", f"ref:registry-projects:{covered_projects}/{len(rows)}"],
             "invocations": [*invocations, {"run_id": run_id, "status": "active", "updated_at": utc(now)}]}}
-    return snapshot, {"projects": len(rows), "projects_covered": covered_projects}
+    return snapshot, {"projects": len(rows), "projects_covered": covered_projects, "open_requests": open_requests}
 
 
 def report_text(run_id, complete, coverage, unavailable, findings, state_file, next_check):
@@ -185,6 +202,120 @@ def report_text(run_id, complete, coverage, unavailable, findings, state_file, n
         lines += [f"- {f['code']} ({f['scope']}): {f['detail']}" for f in findings[:MAX_FINDINGS]]
     lines.append(f"Checkpoint file: {state_file}. Next check: {next_check}. Delivery is recorded by the Monitor after sending.")
     return "\n".join(lines)
+
+
+MAX_SIGNAL_ITEMS = 10  # items per signal type in one Manager prompt
+# Alert codes the Monitor forwards to the project Manager: (headline, list label, requested action).
+SIGNAL_CODES = {
+    "stage_finished": ("stage finished without active successor", "Tasks",
+                       "Inspect finished turn and start the next executor or record a blocker in the same turn."),
+    "request_not_started": ("request opened but not started", "Requests",
+                            "Check that the recipient received it, re-dispatch or reassign it, or record a blocker in the same turn."),
+    "request_not_started_overflow": ("more requests opened but not started than are listed", "Remaining requests",
+                                     "Close, re-dispatch or cancel the old open requests of this project; the oldest are listed separately."),
+}
+
+
+def delivery_finding(project, detail):
+    return {"code": "manager_delivery_unavailable", "scope": project, "detail": detail}
+
+
+def manager_signals(config, new_alerts):
+    """(deliveries, findings) for new stage_finished and request_not_started alerts: one delivery per project whose single Manager resolves.
+
+    Nothing is dropped silently: a missing registry module, a missing registry_path, a resolution error or a project
+    without a resolvable Manager each become a manager_delivery_unavailable finding for that project."""
+    by_project = {}
+    for alert in new_alerts:
+        if alert.get("code") in SIGNAL_CODES and alert.get("scope"):
+            project, _, task = alert["scope"].partition("/")
+            task = task or "(project)"
+            by_project.setdefault(project, {}).setdefault(alert["code"], []).append((task, alert.get("detail")))
+    deliveries, findings = [], []
+    registry_file = Path(config["registry_path"]) if config.get("registry_path") else None
+    for project, grouped in sorted(by_project.items()):
+        if room_registry is None:
+            findings.append(delivery_finding(project, "The Manager registry module could not be imported "
+                                             f"({REGISTRY_IMPORT_ERROR or 'ImportError'}); the Manager signal was not delivered"))
+            continue
+        if registry_file is None:
+            findings.append(delivery_finding(project, "registry_path is not configured; the Manager signal was not delivered"))
+            continue
+        try:
+            manager = room_registry.resolve_project_manager(registry_file, project)
+        except Exception as error:
+            findings.append(delivery_finding(project, f"Manager could not be resolved ({type(error).__name__}); the Manager signal was not delivered"))
+            continue
+        thread = manager.get("thread_id") if isinstance(manager, dict) and manager.get("status") == "ok" else None
+        if not thread:
+            status = manager.get("status") if isinstance(manager, dict) else "invalid"
+            findings.append(delivery_finding(project, f"No Manager thread to notify (resolution status: {status}); the Manager signal was not delivered"))
+            continue
+        sections = []
+        for code, (headline, label, action) in SIGNAL_CODES.items():
+            if code in grouped:
+                shown = grouped[code][:MAX_SIGNAL_ITEMS]
+                lines = "\n".join(f"- {task}: {detail}" for task, detail in shown)
+                if len(grouped[code]) > len(shown):
+                    lines += f"\n- ... and {len(grouped[code]) - len(shown)} more (see the Monitor report)"
+                sections.append(f"Agent Monitor signal for {project} Manager: {headline}.\n{label}:\n{lines}\n{action}")
+        deliveries.append({
+            "project_id": project,
+            "thread_id": thread,
+            "manager_bot": manager.get("bot"),
+            "prompt": "\n\n".join(sections),
+        })
+    return deliveries, findings
+
+
+CHECKPOINT_FINDING_STEPS = (150, 60, 20)  # findings kept when the checkpoint block would exceed its size bound
+LEDGER_KEYS = ("first_seen", "status", "escalated", "reported")
+
+
+def is_size_error(error):
+    return isinstance(error, ValueError) and "bounded size limit" in str(error)
+
+
+def persist_state(state_file, findings, snapshot, now, complete, run_id):
+    """update_monitor_state that degrades instead of raising when the findings do not fit the bounded checkpoint.
+
+    On a size error the findings are cut to the most important ones (hygiene notes last) and a checkpoint_overflow
+    finding states how many were left out per code, so the report still shows that more exists. The final save of the
+    run is checked too (the delivery status is added after this call)."""
+    attempt, omitted = list(findings), None
+    for limit in (None, *CHECKPOINT_FINDING_STEPS):
+        if limit is not None:
+            ranked = sorted(findings, key=lambda f: f["code"] == "record_not_closed")
+            kept, dropped = ranked[:limit], ranked[limit:]
+            counts = {}
+            for f in dropped:
+                counts[f["code"]] = counts.get(f["code"], 0) + 1
+            omitted = {"code": "checkpoint_overflow", "scope": "monitor",
+                       "detail": (f"{len(dropped)} finding(s) did not fit the bounded checkpoint and are not tracked: "
+                                  + ", ".join(f"{code} {n}" for code, n in sorted(counts.items())))}
+            attempt = [*kept, omitted]
+        try:
+            state, new_alerts = tc.update_monitor_state(state_file, attempt, snapshot, now, complete=complete, run_id=run_id)
+            probe = dict(state)
+            probe["alert_ledger"] = slim_ledger(state)
+            probe["delivery_status"] = "not_attempted"
+            monitor_checkpoint.checkpoint_block(probe)  # raises on size without writing
+            return state, new_alerts, attempt
+        except ValueError as error:
+            if not is_size_error(error):
+                raise
+    raise ValueError("Monitor checkpoint exceeds the bounded size limit even with the findings cut")
+
+
+def slim_ledger(state):
+    ledger = state.get("alert_ledger") if isinstance(state.get("alert_ledger"), dict) else {}
+    return {fp: {k: v for k, v in entry.items() if k in LEDGER_KEYS} for fp, entry in ledger.items()}
+
+
+def save_final_state(state_file, state):
+    final = dict(state)
+    final["alert_ledger"] = slim_ledger(state)  # details live in the report and the snapshot, not the bounded block
+    monitor_checkpoint.save_checkpoint(state_file, final)
 
 
 def run(monitor_dir, run_id, now=None):
@@ -229,6 +360,11 @@ def run(monitor_dir, run_id, now=None):
         for pid, ids in snapshot["monitor_audit"].get("hygiene", {}).items():
             findings.extend({"code": "record_not_closed", "scope": f"{pid}/{rid}",
                              "detail": "Ledger record is open but its GitHub issue is closed"} for rid in ids)
+        try:
+            findings.extend(status_sources.request_start_findings(stats.get("open_requests", {}), now))
+        except Exception as error:
+            findings.append({"code": "request_start_unavailable", "scope": "monitor",
+                             "detail": f"Request start check failed ({type(error).__name__}); open requests were not verified"})
     else:
         findings = [*extra, {"code": "snapshot_build_failed", "scope": "monitor",
                              "detail": f"Snapshot could not be built ({build_error})"},
@@ -239,49 +375,25 @@ def run(monitor_dir, run_id, now=None):
     # Shared state is written only when other runs were observed and this run was registered.
     private = concurrent or not available
     state_file = monitor_dir / "agent" / (f"run-{safe_id}-state.md" if private else "STATE.md")
-    state, new_alerts = tc.update_monitor_state(state_file, findings, snapshot, now, complete=complete, run_id=run_id)
+    state, new_alerts, findings = persist_state(state_file, findings, snapshot, now, complete, run_id)
     audit = (snapshot or {}).get("monitor_audit", {})
     unavailable = list(audit.get("unavailable_scopes") or (["snapshot"] if snapshot is None else []))
     if not available and "invocation-metadata" not in unavailable:
         unavailable.append("invocation-metadata")
     coverage = audit.get("coverage", "none")
     report = (not complete) or bool(new_alerts)
+    manager_deliveries, delivery_findings = manager_signals(config, new_alerts)
+    findings = [*findings, *delivery_findings]
     state["delivery_status"] = "not_attempted" if report else "not_required"
-    monitor_checkpoint.save_checkpoint(state_file, dict(state))
+    save_final_state(state_file, state)
     if not report:
         try:
             write_lease(runs_dir, run_id, "finished", now)
         except OSError:
             pass
-    text = report_text(run_id, complete, coverage, unavailable, new_alerts if complete else findings,
+    text = report_text(run_id, complete, coverage, unavailable,
+                       [*new_alerts, *delivery_findings] if complete else findings,
                        state_file.name, audit.get("next_check_at", "unknown")) if report else None
-
-    manager_deliveries = []
-    if report and room_registry is not None and config.get("registry_path"):
-        reg_file = Path(config["registry_path"])
-        # Group stage_finished alerts by project
-        sf_alerts = [a for a in new_alerts if a.get("code") == "stage_finished" and "/" in a.get("scope", "")]
-        by_proj = {}
-        for a in sf_alerts:
-            pid, _, tid = a["scope"].partition("/")
-            by_proj.setdefault(pid, []).append((tid, a.get("detail")))
-        for pid, items in sorted(by_proj.items()):
-            try:
-                mgr = room_registry.resolve_project_manager(reg_file, pid)
-                tid = mgr.get("thread_id") if mgr and mgr.get("status") == "ok" else None
-                if tid:
-                    task_lines = "\n".join(f"- {t}: {d}" for t, d in items)
-                    msg = (f"Agent Monitor signal for {pid} Manager: stage finished without active successor.\n"
-                           f"Tasks:\n{task_lines}\n"
-                           f"Inspect finished turn and start the next executor or record a blocker in the same turn.")
-                    manager_deliveries.append({
-                        "project_id": pid,
-                        "thread_id": tid,
-                        "manager_bot": mgr.get("bot"),
-                        "prompt": msg
-                    })
-            except Exception:
-                pass
 
     return {"ok": complete and not findings, "audit_complete": complete, "run_id": run_id,
             "snapshot_path": str(snapshot_path) if snapshot_path else None,

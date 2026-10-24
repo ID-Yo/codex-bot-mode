@@ -208,7 +208,8 @@ class DesktopLifecycleTests(unittest.TestCase):
         self.assertEqual(inspect_shutdown(FakeController(), personal, None)['safety'], 'unknown')
 
         personal.native_bridge = Bridge({'thread': {'id': 'thread-one', 'status': {'type': 'active'}}})
-        self.assertEqual(inspect_shutdown(FakeController(), personal, None)['safety'], 'busy')
+        # An active turn that Office did not start does not block Stop; Office's own outbox does.
+        self.assertEqual(inspect_shutdown(FakeController(), personal, None)['safety'], 'safe')
 
         personal.native_bridge = Bridge({'thread': {'id': 'thread-one', 'status': {'type': 'idle'}}})
         self.assertEqual(inspect_shutdown(FakeController(), personal, None)['safety'], 'safe')

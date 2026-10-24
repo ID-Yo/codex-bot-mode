@@ -9,6 +9,7 @@ import time
 import uuid
 
 from .controller import Conflict
+from .sqlite_uri import readonly_uri
 
 
 class RoomQueue:
@@ -63,7 +64,7 @@ class RoomQueue:
             else:
                 raise RuntimeError('Room database changed; retry queue refresh')
 
-            db = sqlite3.connect(snapshot.as_uri() + '?mode=ro', uri=True)
+            db = sqlite3.connect(readonly_uri(snapshot), uri=True)
             db.row_factory = sqlite3.Row
             try:
                 table = db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='room_waiting'").fetchone()
