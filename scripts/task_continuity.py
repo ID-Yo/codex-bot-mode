@@ -696,6 +696,29 @@ def produce_snapshot(project_dir, now=None, explicit_only=False):
             cand_sha = meta.get("candidate sha")
             if cand_sha:
                 candidate = {"id": cand_sha, "author": executor or "builder"}
+            else:
+                # Check matching request for candidate/author structured fields or summary fallback
+                for r in reversed(requests_list):
+                    if (local_req_id and r.get("id") == local_req_id) or (task_id.lower() in r.get("id", "").lower()) or (task_id.lower() in r.get("link", "").lower()):
+                        sha = r.get("candidate")
+                        auth = r.get("author")
+                        s_text = r.get("summary") or ""
+                        if not sha:
+                            shas_40 = re.findall(r"(?<![0-9A-Za-z])[0-9a-f]{40}(?![0-9A-Za-z])", s_text)
+                            unique_shas = list(dict.fromkeys(s.lower() for s in shas_40))
+                            if len(unique_shas) == 1:
+                                sha = unique_shas[0]
+                            elif len(unique_shas) > 1:
+                                marker_match = re.search(r"\b(?:candidate|commit)[:\s]+([0-9a-f]{40})\b", s_text, re.IGNORECASE)
+                                if marker_match:
+                                    sha = marker_match.group(1).lower()
+                        if not auth:
+                            m_auth = re.search(r"\bauthor[:\s]+([a-z][a-z0-9-]{0,47})\b", s_text, re.IGNORECASE)
+                            if m_auth:
+                                auth = m_auth.group(1).lower()
+                        if sha and auth:
+                            candidate = {"id": sha, "author": auth}
+                            break
 
             review = None
             rev_verdict = meta.get("review verdict")

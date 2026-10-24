@@ -15,6 +15,7 @@ import tempfile
 
 ID = re.compile(r'^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$')
 BOT = re.compile(r'^(owner|[a-z][a-z0-9-]{0,47})$')
+SHA_40 = re.compile(r'^[0-9a-f]{40}$')
 STEPS = ('reminder', 'manager', 'owner')
 
 
@@ -60,7 +61,8 @@ def _find(data, key):
     return found
 
 
-def open_request(data, key, sender, recipient, summary, link=None, due_minutes=60, at=None):
+def open_request(data, key, sender, recipient, summary, link=None, due_minutes=60, at=None,
+                 candidate=None, author=None):
     if not ID.match(key or ''):
         raise RequestError('Request ID: letters, digits, dot, dash, underscore')
     for value, field in ((sender, 'from'), (recipient, 'to')):
@@ -70,13 +72,26 @@ def open_request(data, key, sender, recipient, summary, link=None, due_minutes=6
         raise RequestError('A request needs a different recipient')
     if not isinstance(summary, str) or not 1 <= len(summary.strip()) <= 300:
         raise RequestError('Summary must be 1-300 characters')
+    if candidate is not None:
+        if not isinstance(candidate, str) or not SHA_40.match(candidate.strip().lower()):
+            raise RequestError('Candidate must be a 40-hex commit SHA')
+        candidate = candidate.strip().lower()
+    if author is not None:
+        if not isinstance(author, str) or not BOT.match(author.strip()):
+            raise RequestError('Author must be a valid bot ID')
+        author = author.strip()
     if any(r['id'] == key for r in data['requests']):
         raise RequestError(f'Request {key} already exists')
     at = at or now()
-    data['requests'].append({'id': key, 'from': sender, 'to': recipient, 'summary': summary.strip(),
-                             'link': link, 'opened': at.isoformat(),
-                             'due': (at + timedelta(minutes=int(due_minutes))).isoformat(),
-                             'state': 'open', 'escalations': []})
+    entry = {'id': key, 'from': sender, 'to': recipient, 'summary': summary.strip(),
+             'link': link, 'opened': at.isoformat(),
+             'due': (at + timedelta(minutes=int(due_minutes))).isoformat(),
+             'state': 'open', 'escalations': []}
+    if candidate is not None:
+        entry['candidate'] = candidate
+    if author is not None:
+        entry['author'] = author
+    data['requests'].append(entry)
     return data
 
 
@@ -149,6 +164,8 @@ def main(argv=None):
     o.add_argument('--summary', required=True)
     o.add_argument('--link')
     o.add_argument('--due-minutes', type=int, default=60)
+    o.add_argument('--candidate', help='Exact 40-hex candidate commit SHA.')
+    o.add_argument('--author', help='Author bot ID for review candidate.')
     r = sub.add_parser('reply', help='Close a request addressed to you after sending the reply.')
     r.add_argument('id')
     r.add_argument('--by', required=True)
@@ -169,7 +186,8 @@ def main(argv=None):
             return 0
         expected = version(data)
         if args.action == 'open':
-            open_request(data, args.id, args.sender, args.to, args.summary, args.link, args.due_minutes)
+            open_request(data, args.id, args.sender, args.to, args.summary, args.link, args.due_minutes,
+                         candidate=args.candidate, author=args.author)
         elif args.action == 'reply':
             reply(data, args.id, args.by, args.link, args.outcome)
         else:

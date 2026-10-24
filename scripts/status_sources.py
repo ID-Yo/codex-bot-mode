@@ -20,7 +20,10 @@ from collections import Counter
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-import task_continuity as tc
+try:
+    import task_continuity as tc
+except ImportError:  # imported as scripts.status_sources
+    from scripts import task_continuity as tc
 
 LEDGER = ".bot-mode/local/requests.json"
 LABEL_STATUS = {"state:needs-owner": "blocked", "state:review": "review", "state:active": "in-progress",
@@ -144,13 +147,36 @@ def make_task(key, requests, github, ledger_path, now, interval, project_request
                      "requested_at": opened, "acknowledged_at": opened, "started_at": opened,
                      "finished_at": stamp(answered) if answered else None,
                      "evidence": [latest.get("link") or f"ref:ledger:{ledger_path}#{latest['id']}"]}]
-        shas = re.findall(r"(?<![0-9A-Za-z])[0-9a-f]{7,40}(?![0-9A-Za-z])", latest["id"])
-        # The author is the latest implementation worker of this work item, found by link or by the
-        # request id prefix the Manager uses for the whole chain (cbm244-review-x belongs to cbm244-*).
-        prefix = re.split(r"-(?:review|qa)-", latest["id"])[0]
-        chain = [r for r in project_requests if r.get("id", "").startswith(prefix + "-") and stage_of(r) == "implementation"]
-        author = next((r.get("to") for r in reversed(requests[:-1] or chain) if stage_of(r) == "implementation"), None)
-        sha = shas[-1] if shas else (github or {}).get("headRefOid")
+        # Candidate and author resolution:
+        # 1. Structured candidate/author fields in the request
+        # 2. Fallback: 40-hex SHA and author from summary (e.g. 'author <bot>' or 'author: <bot>')
+        # 3. Fallback: SHA from request ID / GitHub PR and implementation chain author
+        sha = latest.get("candidate")
+        author = latest.get("author")
+        summary_text = latest.get("summary") or ""
+        if not sha:
+            shas_40 = re.findall(r"(?<![0-9A-Za-z])[0-9a-f]{40}(?![0-9A-Za-z])", summary_text)
+            unique_shas = list(dict.fromkeys(s.lower() for s in shas_40))
+            if len(unique_shas) == 1:
+                sha = unique_shas[0]
+            elif len(unique_shas) > 1:
+                marker_match = re.search(r"\b(?:candidate|commit)[:\s]+([0-9a-f]{40})\b", summary_text, re.IGNORECASE)
+                if marker_match:
+                    sha = marker_match.group(1).lower()
+        if not author:
+            author_match = re.search(r"\bauthor[:\s]+([a-z][a-z0-9-]{0,47})\b", summary_text, re.IGNORECASE)
+            if author_match:
+                author = author_match.group(1).lower()
+        if not sha:
+            shas = re.findall(r"(?<![0-9A-Za-z])[0-9a-f]{7,40}(?![0-9A-Za-z])", latest["id"])
+            sha = shas[-1] if shas else (github or {}).get("headRefOid")
+        if not author:
+            # The author is the latest implementation worker of this work item, found by link or by the
+            # request id prefix the Manager uses for the whole chain (cbm244-review-x belongs to cbm244-*).
+            prefix = re.split(r"-(?:review|qa)-", latest["id"])[0]
+            chain = [r for r in project_requests if r.get("id", "").startswith(prefix + "-") and stage_of(r) == "implementation"]
+            author = next((r.get("to") for r in reversed(requests[:-1] or chain) if stage_of(r) == "implementation"), None)
+
         if (status == "review" or stage_of(latest) == "review") and sha and author:
             candidate = {"id": sha, "author": author}
     blocker = None
