@@ -3,13 +3,16 @@
   const t=(key,values)=>officeI18n.t(key,values),$=id=>document.getElementById(id);
   const TEAMS=[['manager','Manager only'],['development','Development team'],['marketing','Marketing team'],['development_marketing','Development and Marketing teams']];
   const KINDS=[['existing','Existing Codex project'],['new','New project (Office creates the folder)']];
-  const STEPS={create_folder:'Project folder created',init_roster:'Empty team roster created',register:'Registered in Office',appoint_team:'Team appointed in Codex'};
+  const STEPS={create_folder:'Project folder created',init_roster:'Empty team roster created',register:'Registered in Office',appoint_team:'Team appointed in Codex',adopt_dreamdocs:'Open Dreamdocs adopted'};
   const label=(list,value)=>t(list.find(item=>item[0]===value)?.[1]||value);
-  const fresh=()=>({name:'',folder:'',repository:'',kind:'existing',initial_team:'manager',show_dashboard:true});
+  const OFFER='Optional: Open Dreamdocs. It gives this project one canonical place for project, product and marketing documentation, selective indexes, your own source materials, and an evidence and memory structure. It does not replace Codex Bot Mode: Codex Bot Mode holds roles, teams, task coordination and working instructions; Dreamdocs holds organised project knowledge. Each works alone. Nothing is installed unless you choose Yes and then approve the exact files.';
+  const DREAMDOCS=[['yes','Yes: inspect this project and show an install plan'],['no','No: continue without it'],['skip','Skip: decide later']];
+  const DREAMDOCS_SUMMARY={yes:'Yes: a Codex chat will inspect the project and show an install plan; nothing is copied before you approve it.',no:'No: continue without it.',skip:'Skip: decide later.'};
+  const fresh=()=>({name:'',folder:'',repository:'',kind:'existing',initial_team:'manager',show_dashboard:true,dreamdocs:''});
   let draft=fresh(),stage='form',plan=null,result=null,error='',busy=false,copied=false;
   function el(tag,cls,text){const node=document.createElement(tag);if(cls)node.className=cls;if(text!==undefined)node.textContent=text;return node;}
   function configuration(){
-    const config={name:draft.name.trim(),folder:draft.folder.trim(),kind:draft.kind,initial_team:draft.initial_team,show_dashboard:draft.show_dashboard};
+    const config={name:draft.name.trim(),folder:draft.folder.trim(),kind:draft.kind,initial_team:draft.initial_team,show_dashboard:draft.show_dashboard,dreamdocs:draft.dreamdocs||'skip'};
     if(draft.repository.trim())config.repository=draft.repository.trim();
     return config;
   }
@@ -58,6 +61,21 @@
     for(const [value,text] of list){const option=el('option',null,t(text));option.value=value;input.append(option);}
     input.value=draft[key];input.onchange=()=>{draft[key]=input.value;};return input;
   }
+  function dreamdocsField(){
+    const box=el('fieldset','np-dd');box.id='np-dreamdocs';box.append(el('legend','np-label',t('Open Dreamdocs (optional)')),el('p','np-hint',t(OFFER)));
+    for(const [value,text] of DREAMDOCS){
+      const row=el('label','np-check'),input=el('input');input.type='radio';input.name='np-dreamdocs';input.id='np-dd-'+value;input.value=value;input.checked=draft.dreamdocs===value;
+      input.onchange=()=>{draft.dreamdocs=value;};row.append(input,el('span',null,t(text)));box.append(row);
+    }
+    box.append(el('p','np-hint',t('No answer counts as Skip. Yes and No are kept until you ask to change them.')));return box;
+  }
+  function dreamdocsBlock(page,handoff){
+    page.append(el('h2',null,t('Open Dreamdocs')));
+    const prompt=el('textarea','np-prompt');prompt.id='np-dd-handoff';prompt.readOnly=true;prompt.rows=4;prompt.value=t(handoff);
+    const copy=el('button','secondary',t('Copy instruction'));copy.type='button';copy.id='np-dd-copy';
+    copy.onclick=async()=>{try{await navigator.clipboard.writeText(prompt.value);}catch{prompt.select();}copy.textContent=t('Copied');};
+    page.append(el('label','np-label',t('Instruction for Codex')),prompt,copy);
+  }
   function errorLine(){
     const line=el('p','np-error',error?t(error):'');line.id='np-error';line.setAttribute('role','alert');line.hidden=!error;return line;
   }
@@ -74,7 +92,7 @@
     const cancel=el('button','secondary',t('Cancel'));cancel.type='button';cancel.id='np-cancel';cancel.onclick=()=>$('page-back').click();
     actions.append(next,cancel);
     form.append(field('Project name',name),field('Project folder',folder,'Absolute path on this computer.'),field('GitHub repository (optional)',repository,'Only the owner/repository name is stored; no repository is created.'),
-      field('How is it added?',select('np-kind','kind',KINDS)),field('Starting team',select('np-team','initial_team',TEAMS),'This records the request. No agent is appointed without your approval in Codex.'),showLabel,errorLine(),actions);
+      field('How is it added?',select('np-kind','kind',KINDS)),field('Starting team',select('np-team','initial_team',TEAMS),'This records the request. No agent is appointed without your approval in Codex.'),dreamdocsField(),showLabel,errorLine(),actions);
     form.onsubmit=event=>{event.preventDefault();if(!form.reportValidity())return;prepare();};
     page.append(form);
   }
@@ -108,6 +126,7 @@
     summaryRow(summary,'Project name',config.name);summaryRow(summary,'Project folder',config.folder);
     summaryRow(summary,'GitHub repository',config.repository||t('None'));summaryRow(summary,'How is it added?',label(KINDS,config.kind));
     summaryRow(summary,'Starting team',label(TEAMS,config.initial_team));summaryRow(summary,'Dashboard',t(config.show_dashboard?'Shown after it is added':'Hidden after it is added'));
+    {const dd=plan.dreamdocs||{choice:'skip'};summaryRow(summary,'Open Dreamdocs',dd.already_present?t('Already in this project; nothing to install.'):t(DREAMDOCS_SUMMARY[dd.choice])+(dd.decided?' '+t('(answered earlier; kept until you ask to change it)'):''));}
     summaryRow(summary,'Project ID',plan.project_id);summaryRow(summary,'Appointed Managers found',String(plan.manager_count));
     if(plan.already_connected)summaryRow(summary,'Office registry',t('Already registered; confirming keeps one registration and applies only the Dashboard choice.'));
     page.append(el('h2',null,t('Plan')),summary);
@@ -133,6 +152,7 @@
       copy.onclick=async()=>{try{await navigator.clipboard.writeText(prompt.value);}catch{prompt.select();}copied=true;copy.textContent=t('Copied');};
       page.append(el('h2',null,t('Next steps in Codex')),todo,el('label','np-label',t('Instruction for Codex')),prompt,copy);
     }
+    if(plan.dreamdocs?.handoff)dreamdocsBlock(page,plan.dreamdocs.handoff);
     page.append(errorLine());
     const actions=el('div','np-actions');
     if(ready){const go=el('button',null,t(create?(busy?'Creating…':'Create project'):(busy?'Connecting…':'Connect to Office')));go.type='button';go.id='np-confirm';go.disabled=busy;go.onclick=confirm;actions.append(go);}
@@ -156,8 +176,10 @@
         el('p',null,t('Record this stop in a linked issue. Office does not create it.')));
       page.append(box);
     }
-    const next=(result.remaining||[]).find(step=>step.handoff);
+    const next=(result.remaining||[]).find(step=>step.handoff&&step.id!=='adopt_dreamdocs');
     if(next){page.append(el('h2',null,t('Next step in Codex')));handoffBox(page,next.handoff);}
+    if(result.dreamdocs?.handoff)dreamdocsBlock(page,result.dreamdocs.handoff);
+    if(result.dreamdocs&&!result.dreamdocs.recorded)page.append(el('p','np-hint',t('Your Open Dreamdocs answer could not be saved in the project; you will be asked again in Codex.')));
     page.append(el('p','pc-muted',t('After a Manager is appointed in Codex, add the project again as an existing project to connect it.')));
     const actions=el('div','np-actions');
     const dash=el('button',null,t('Open Dashboard'));dash.type='button';dash.id='np-dashboard-open';dash.onclick=()=>window.officeShell.go('dashboard');
@@ -170,6 +192,8 @@
     banner.append(el('strong',null,t('Project connected')),el('p',null,t(result.already_connected?'This project was already registered; Office kept one registration.':'Office registered the project folder.')));
     const summary=el('dl','np-summary');summaryRow(summary,'Project ID',result.project_id);summaryRow(summary,'Dashboard',t(plan.configuration.show_dashboard?'Shown on the Dashboard':'Hidden from the Dashboard; open it from Projects'));
     page.append(banner,summary);
+    if(result.dreamdocs?.handoff)dreamdocsBlock(page,result.dreamdocs.handoff);
+    if(result.dreamdocs&&!result.dreamdocs.recorded)page.append(el('p','np-hint',t('Your Open Dreamdocs answer could not be saved in the project; you will be asked again in Codex.')));
     const actions=el('div','np-actions');
     const dash=el('button',null,t('Open Dashboard'));dash.type='button';dash.id='np-dashboard-open';dash.onclick=()=>window.officeShell.go('dashboard');
     const another=el('button','secondary',t('Add another project'));another.type='button';another.id='np-another';another.onclick=()=>{draft=fresh();plan=null;result=null;error='';copied=false;stage='form';paint();};

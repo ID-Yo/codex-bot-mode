@@ -9,6 +9,7 @@
 .np-hint{font-size:10px;color:var(--muted)}
 .np-field input,.np-field select{max-width:100%;font-size:12px}
 .np-check{display:flex;gap:8px;align-items:center;font-size:12px}
+.np-dd{margin:0;padding:10px 12px;border:1px solid var(--line);border-radius:6px;display:grid;gap:6px;min-width:0}.np-dd legend{padding:0 4px}.np-dd .np-hint{margin:0}
 .np-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:6px}
 .np-error{margin:0;padding:8px 10px;border-left:3px solid var(--hot);background:var(--hotbg);color:var(--hot);font-size:11px;overflow-wrap:anywhere}
 .np-error[hidden]{display:none}

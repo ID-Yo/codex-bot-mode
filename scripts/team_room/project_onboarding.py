@@ -11,7 +11,7 @@ import re
 import tempfile
 import threading
 
-from . import registry, roster
+from . import dreamdocs_offer, registry, roster
 from .store import ProcessLock
 
 MAX_BYTES = 256 * 1024
@@ -118,6 +118,13 @@ def prepare(host_root, payload):
     team = payload.get('initial_team', 'manager')
     if team not in ('manager', 'development', 'marketing', 'development_marketing'):
         raise ValueError('Choose a supported initial team')
+    answer = payload.get('dreamdocs', 'skip')
+    if answer not in dreamdocs_offer.CHOICES:
+        raise ValueError('Open Dreamdocs answer must be yes, no or skip')
+    # An earlier Yes or No stays until the owner asks to change it; no answer counts as Skip.
+    saved = dreamdocs_offer.decided(root) if root.is_dir() else None
+    answer = saved or answer
+    present = root.is_dir() and dreamdocs_offer.already_present(root)
     file, data = _configuration(host)
     row = next((p for p in data['projects'] if Path(p['root']).resolve() == root), None)
     pid = row['id'] if row else 'project-' + hashlib.sha256(str(root).casefold().encode()).hexdigest()[:16]
@@ -134,23 +141,41 @@ def prepare(host_root, payload):
     ready = bool(managers) and kind == 'existing'
     creatable = kind == 'new' and not source_hashes and (not root.exists() or not any(root.iterdir())) and root.parent.is_dir()
     config = {'name': name.strip(), 'folder': str(root), 'repository': repo, 'kind': kind,
-              'initial_team': team, 'show_dashboard': visible}
+              'initial_team': team, 'show_dashboard': visible, 'dreamdocs': answer}
+    handoff = ('Open the project in Codex and have its Manager follow the "Optional Open Dreamdocs" step of the '
+               'codex-team-launch skill: inspect the project, show the exact install scope and collision plan for the '
+               'latest stable Open Dreamdocs release, and copy nothing until I approve it.') if answer == 'yes' and not present else None
     setup = [{'id': 'create_folder', 'supported': True, 'done': root.is_dir()},
              {'id': 'init_roster', 'supported': True, 'done': bool(source_hashes)},
              {'id': 'register', 'supported': True, 'done': row is not None},
              {'id': 'appoint_team', 'supported': False, 'done': bool(managers),
               'handoff': 'Open the new project in Codex and have its Manager run the codex-team-launch skill for "' + team + '".'}] if kind == 'new' else []
-    return {'schema': 1, 'state': 'ready_to_create' if creatable and row is None else 'ready_to_connect' if ready else 'needs_codex_setup',
+    if handoff:
+        setup.append({'id': 'adopt_dreamdocs', 'supported': False, 'done': False, 'handoff': handoff})
+    return {'schema': 1, 'dreamdocs': {'choice': answer, 'decided': saved is not None, 'already_present': present, 'handoff': handoff},
+            'state': 'ready_to_create' if creatable and row is None else 'ready_to_connect' if ready else 'needs_codex_setup',
             'setup_steps': setup,
             'project_id': pid, 'configuration': config, 'already_connected': row is not None,
             'manager_count': len(managers),
-            'version': _digest({'configuration': config, 'registry': data, 'roster': source_hashes}),
+            'version': _digest({'configuration': config, 'registry': data, 'roster': source_hashes,
+                                'dreamdocs': [saved, present]}),
             'steps': ['Review this project folder and repository.',
                       'Open or create the project in Codex and explicitly approve the appointed Manager/team.',
                       'Confirm an existing appointed project to register it in Office.'],
             'capabilities': {'create_codex_project': False, 'appoint_team': False,
                              'connect_existing': ready, 'create_local_project': creatable and row is None},
             'registry_path': str(file)}
+
+
+def _offer_outcome(config, plan):
+    """Save the owner's answer in the project; a failure never undoes the connection."""
+    out = {'choice': config['dreamdocs'], 'recorded': False, 'handoff': plan['dreamdocs']['handoff']}
+    try:
+        dreamdocs_offer.record(config['folder'], config['dreamdocs'], 'office')
+        out['recorded'] = True
+    except (ValueError, OSError):
+        pass
+    return out
 
 
 def confirm(host_root, payload, expected_version, *, confirmed=False):
@@ -184,7 +209,8 @@ def confirm(host_root, payload, expected_version, *, confirmed=False):
                 existing = next((p for p in data['projects'] if p['id'] == plan['project_id']), None)
                 if existing is not None:
                     return {'state': 'connected', 'project_id': existing['id'],
-                            'already_connected': True, 'show_dashboard': config['show_dashboard']}
+                            'already_connected': True, 'show_dashboard': config['show_dashboard'],
+                            'dreamdocs': _offer_outcome(config, plan)}
                 row = {'id': plan['project_id'], 'name': config['name'], 'root': config['folder']}
                 if config['repository']:
                     row['repository'] = config['repository']
@@ -211,9 +237,11 @@ def confirm(host_root, payload, expected_version, *, confirmed=False):
                 return {'state': 'created_pending_team', 'project_id': plan['project_id'], 'already_connected': False,
                         'show_dashboard': config['show_dashboard'], 'completed': [c for c in created if c != 'pending_team_marker'] + ['register'],
                         'remaining': [s for s in plan['setup_steps'] if not s['supported']],
-                        'blocker': {'issue_required': True, 'reason': 'Team appointment needs Codex; no supported Desktop operation exists'}}
+                        'blocker': {'issue_required': True, 'reason': 'Team appointment needs Codex; no supported Desktop operation exists'},
+                        'dreamdocs': _offer_outcome(config, plan)}
             return {'state': 'connected', 'project_id': plan['project_id'],
-                    'already_connected': False, 'show_dashboard': config['show_dashboard']}
+                    'already_connected': False, 'show_dashboard': config['show_dashboard'],
+                    'dreamdocs': _offer_outcome(config, plan)}
         finally:
             lock.close()
 

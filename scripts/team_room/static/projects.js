@@ -493,11 +493,13 @@
       return bot.thread_id&&a?.runtime?.freshness==='fresh'&&['active','idle'].includes(a.runtime.status)&&Number.isFinite(at)&&Date.now()>=at&&Date.now()-at<=60000;
     });
     const fields=[['Open tasks',sourceKnown&&Number.isInteger(p.open_tasks)?p.open_tasks:null],
-      ['Recorded completed',sourceKnown&&Array.isArray(p.tasks)?p.tasks.filter(task=>task.state==='done').length:null],
+      ['Recorded completed',!sourceKnown?null:p.work?(p.work.state==='known'&&Number.isInteger(p.work.done)?p.work.done:null):Array.isArray(p.tasks)?p.tasks.filter(task=>task.state==='done').length:null],
       ['Teams',teamKnown?teams.filter(t=>t.status==='ok').length:null],
       ['Owner waits',sourceKnown&&Array.isArray(p.decisions)?pending(p).length:null],
       ['Verified active agents',runtimeKnown?bots.filter(isWorking).length:null]];
     for(const [label,value] of fields){const row=el('div');row.append(el('dt',null,officeI18n.t(label)),el('dd',null,value===null?officeI18n.t('Unknown'):String(value)));metrics.append(row);}
+    // An unavailable work source says why, so Unknown is not mistaken for zero.
+    if(p.source?.available!==true&&typeof p.source?.error==='string'&&p.source.error){const row=el('div','project-metric-reason');row.append(el('dt',null,officeI18n.t('Why unknown')),el('dd',null,officeI18n.t(p.source.error)));metrics.append(row);}
     return metrics;
   }
   function projectTeams(p){
