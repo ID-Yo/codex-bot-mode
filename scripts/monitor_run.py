@@ -30,6 +30,14 @@ MAX_FINDINGS = 12
 LEASE_FRESH_SECONDS = 120
 LEASE_LIMIT = 4096
 
+try:
+    from team_room import registry as room_registry
+except ImportError:
+    try:
+        import registry as room_registry
+    except ImportError:
+        room_registry = None
+
 
 def utc(value):
     return value.strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -247,6 +255,34 @@ def run(monitor_dir, run_id, now=None):
             pass
     text = report_text(run_id, complete, coverage, unavailable, new_alerts if complete else findings,
                        state_file.name, audit.get("next_check_at", "unknown")) if report else None
+
+    manager_deliveries = []
+    if report and room_registry is not None and config.get("registry_path"):
+        reg_file = Path(config["registry_path"])
+        # Group stage_finished alerts by project
+        sf_alerts = [a for a in new_alerts if a.get("code") == "stage_finished" and "/" in a.get("scope", "")]
+        by_proj = {}
+        for a in sf_alerts:
+            pid, _, tid = a["scope"].partition("/")
+            by_proj.setdefault(pid, []).append((tid, a.get("detail")))
+        for pid, items in sorted(by_proj.items()):
+            try:
+                mgr = room_registry.resolve_project_manager(reg_file, pid)
+                tid = mgr.get("thread_id") if mgr and mgr.get("status") == "ok" else None
+                if tid:
+                    task_lines = "\n".join(f"- {t}: {d}" for t, d in items)
+                    msg = (f"Agent Monitor signal for {pid} Manager: stage finished without active successor.\n"
+                           f"Tasks:\n{task_lines}\n"
+                           f"Inspect finished turn and start the next executor or record a blocker in the same turn.")
+                    manager_deliveries.append({
+                        "project_id": pid,
+                        "thread_id": tid,
+                        "manager_bot": mgr.get("bot"),
+                        "prompt": msg
+                    })
+            except Exception:
+                pass
+
     return {"ok": complete and not findings, "audit_complete": complete, "run_id": run_id,
             "snapshot_path": str(snapshot_path) if snapshot_path else None,
             "coverage": coverage, "projects": stats["projects"], "projects_covered": stats["projects_covered"],
@@ -254,7 +290,8 @@ def run(monitor_dir, run_id, now=None):
             "findings": [{"code": f["code"], "scope": f["scope"]} for f in findings[:MAX_FINDINGS]],
             "new_alerts": len(new_alerts), "state_file": str(state_file), "private_state": private,
             "report_required": report, "report_thread_id": config.get("report_target_thread_id") if report else None,
-            "report_text": text, "delivery_status": state["delivery_status"]}
+            "report_text": text, "delivery_status": state["delivery_status"],
+            "manager_deliveries": manager_deliveries}
 
 
 def main(argv=None):
