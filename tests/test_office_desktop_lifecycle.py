@@ -303,6 +303,21 @@ class DesktopLifecycleTests(unittest.TestCase):
         self.assertFalse(lifecycle.draining)
         lifecycle.end_operation()
 
+    def test_watch_operation_does_not_block_drain_and_rejects_when_draining(self):
+        from scripts.office_desktop import LifecycleBusy
+        lifecycle = self.lifecycle()
+        # Under watch_operation, inflight is NOT incremented
+        with lifecycle.watch_operation():
+            self.assertEqual(lifecycle._inflight, 0)
+            # Drain succeeds immediately even while watch_operation is active
+            gen = lifecycle.begin_drain(timeout=1)
+            self.assertIsInstance(gen, int)
+            self.assertTrue(lifecycle.draining)
+        # Once draining, new watch_operation raises LifecycleBusy
+        with self.assertRaises(LifecycleBusy):
+            with lifecycle.watch_operation():
+                pass
+
 
 if __name__ == '__main__':
     unittest.main()

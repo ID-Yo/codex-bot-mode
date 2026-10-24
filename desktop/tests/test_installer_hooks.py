@@ -53,7 +53,7 @@ SectionEnd
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertTrue((generated / 'hooks-full.exe').is_file())
 
-    def run_helper(self, ps_body):
+    def run_helper(self, ps_body, defines=''):
         script = self.dir / 'helper.ps1'
         script.write_text(ps_body, encoding='utf-8')
         marker = self.dir / 'after-hook.txt'
@@ -62,6 +62,8 @@ SectionEnd
 OutFile "{nsis_path(self.dir / 'harness.exe')}"
 RequestExecutionLevel user
 SilentInstall silent
+SetCompress off
+{defines}
 !include "{nsis_path(HOOKS)}"
 Section Install
   !insertmacro CodexOfficeStopService "{nsis_path(script)}" harness
@@ -74,6 +76,29 @@ SectionEnd
         self.assertEqual(built.returncode, 0, built.stdout + built.stderr)
         run = subprocess.run([str(self.dir / 'harness.exe'), '/S'], capture_output=True, timeout=120)
         return run.returncode, marker.exists()
+
+    def test_busy_service_exits_2_in_silent_mode_without_retrying(self):
+        counter = self.dir / 'runs.txt'
+        counter.unlink(missing_ok=True)
+        returncode, continued = self.run_helper(f"Add-Content '{counter}' x; exit 2")
+        self.assertEqual((returncode, continued), (2, False))
+        self.assertEqual(len(counter.read_text().split()), 1, 'silent mode must not loop')
+
+    def test_retry_repeats_the_stop_until_it_succeeds(self):
+        counter = self.dir / 'runs.txt'
+        counter.unlink(missing_ok=True)
+        helper = f"Add-Content '{counter}' x; if ((Get-Content '{counter}').Count -lt 3) {{ exit 2 }} else {{ exit 0 }}"
+        returncode, continued = self.run_helper(helper, '!define CODEX_OFFICE_BUSY_SD IDRETRY')
+        self.assertEqual((returncode, continued), (0, True))
+        self.assertEqual(len((counter.read_text()).split()), 3)
+
+    def test_busy_dialog_is_retry_cancel_and_bilingual(self):
+        self.run_helper('exit 0')
+        installer = (self.dir / 'harness.exe').read_bytes()
+        self.assertTrue(HOOKS.read_bytes().startswith(b'\xef\xbb\xbf'), 'hooks.nsh needs a UTF-8 BOM for Bulgarian text')
+        for text in ('Close the Office tabs in your browser', 'Затворете табовете на Office в браузъра',
+                     'Quit from the Codex Office tray icon', 'иконата в трея'):
+            self.assertTrue(text.encode('utf-16-le') in installer, 'missing from the installer: ' + text)
 
     def test_installer_continues_only_when_the_helper_reports_success(self):
         self.assertEqual(self.run_helper('exit 0'), (0, True))

@@ -152,7 +152,7 @@ def create_server(controller, port=0, *, ipv6=False, token=None, desktop_lifecyc
             if desktop_lifecycle is None:
                 return self._do_get_guarded()
             try:
-                with desktop_lifecycle.operation():
+                with desktop_lifecycle.watch_operation():
                     return self._do_get_guarded()
             except LifecycleBusy as error:
                 return self.reply(409, {'error': str(error), 'state': 'stopping'})
@@ -430,7 +430,7 @@ def create_server(controller, port=0, *, ipv6=False, token=None, desktop_lifecyc
                         cursor = 0
                     # Bounded streams reconnect using durable cursor; no dispatch on GET.
                     deadline = time.monotonic() + 20
-                    while not controller.closing and time.monotonic() < deadline:
+                    while not controller.closing and not getattr(controller, 'draining', False) and (desktop_lifecycle is None or not desktop_lifecycle.draining) and time.monotonic() < deadline:
                         events = controller.store.events(cursor)
                         for event in events:
                             body = json.dumps(event, ensure_ascii=False)

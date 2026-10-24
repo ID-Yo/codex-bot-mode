@@ -279,6 +279,13 @@ class DesktopLifecycle:
         finally:
             self.end_operation()
 
+    @contextmanager
+    def watch_operation(self):
+        """Observational / long-polling requests do not block drain; they exit when draining starts."""
+        if self.draining:
+            raise LifecycleBusy('Office is draining; observational request closed.')
+        yield
+
     def begin_drain(self, timeout=5):
         with self._condition:
             if self._draining or self._stop_requested or self._stop_committed:

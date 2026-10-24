@@ -20,6 +20,8 @@ ALLOWED = {('LICENSE', 'owner account'),
            ('CHANGELOG.md', 'owner account'),
            ('desktop/README.md', 'owner account'),
            # Bulgarian microphone labels are matched on purpose.
+           ('desktop/src-tauri/windows/hooks.nsh', 'cyrillic text'),  # Bulgarian installer dialog
+           ('desktop/tests/test_installer_hooks.py', 'cyrillic text'),
            ('scripts/team_room/static/media.js', 'cyrillic text'),
            # Owner-approved EN/BG interface catalog and native language selector.
            ('scripts/team_room/static/i18n.js', 'cyrillic text'),
