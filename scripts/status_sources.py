@@ -93,6 +93,16 @@ def stage_of(request):
     return "implementation"
 
 
+REVIEW_ROLES = {"reviewer", "verifier", "qa"}
+
+
+def is_review_work(request):
+    """True only for a request addressed to a reviewer or verifier; the request id never decides it."""
+    worker = str(request.get("to") or "")
+    # whole components of the bot id: code-reviewer-2 counts, preview-developer and nonverifier-developer do not
+    return bool(REVIEW_ROLES & set(worker.lower().split("-"))) and worker != request.get("author")
+
+
 def ledger_requests(root, problems):
     path = Path(root) / LEDGER
     if not path.is_file():
@@ -113,6 +123,13 @@ def status_label(labels):
     return None
 
 
+def linked_pulls(issue_number):
+    """Pull requests whose title closes this issue (closing reference only, never owner/repo#N)."""
+    pattern = re.compile(r"\b(?:fixes|closes|resolves)\s+(?<![\w/])#" + str(issue_number) + r"\b", re.IGNORECASE)
+    rows = getattr(make_task, "issues_map", None) or {}
+    return [row for k, row in rows.items() if k[0] == "pull" and pattern.search(row.get("title", ""))]
+
+
 def make_task(key, requests, github, ledger_path, now, interval, project_requests=()):
     """(status, task) of one work item from its ledger requests and GitHub issue; task is None when done."""
     requests = sorted(requests, key=lambda r: when(r.get("opened")) or datetime.min.replace(tzinfo=timezone.utc))
@@ -120,6 +137,13 @@ def make_task(key, requests, github, ledger_path, now, interval, project_request
     live = [r for r in requests if r.get("state") != "answered"]
     current = live[-1] if live else latest
     if github and github.get("state") in ("CLOSED", "MERGED"):
+        return "done", None
+    pulls = linked_pulls(github["number"]) if github and github.get("number") and "/pull/" not in str(github.get("url")) else []
+    # Review stage only: issue labelled state:review, no live implementation or correction request, and every
+    # linked PR merged or closed. An active issue or a live implementation request stays in progress.
+    if (pulls and not any(p.get("state") == "OPEN" for p in pulls)
+            and status_label(github.get("labels")) == "review"
+            and all(is_review_work(r) for r in live)):
         return "done", None
     label = status_label(github.get("labels")) if github else None
     if label:
@@ -148,13 +172,35 @@ def make_task(key, requests, github, ledger_path, now, interval, project_request
                      "finished_at": stamp(answered) if answered else None,
                      "evidence": [latest.get("link") or f"ref:ledger:{ledger_path}#{latest['id']}"]}]
         # Candidate and author resolution:
-        # 1. Structured candidate/author fields in the request
-        # 2. Fallback: 40-hex SHA and author from summary (e.g. 'author <bot>' or 'author: <bot>')
-        # 3. Fallback: SHA from request ID / GitHub PR and implementation chain author
+        # 1. Structured candidate/author fields in the request (--candidate / --author)
+        # 2. Head SHA of linked PR (read from GitHub, authoritative)
+        # 3. Fallback: 40-hex SHA and author from summary (e.g. 'author <bot>' or 'author: <bot>')
+        # 4. Fallback: SHA from request ID / GitHub PR and implementation chain author
         sha = latest.get("candidate")
+        ambiguous = False
         author = latest.get("author")
-        summary_text = latest.get("summary") or ""
+
+        # Source 2: Linked PR head SHA
         if not sha:
+            if github and github.get("headRefOid"):
+                sha = github["headRefOid"]
+            elif hasattr(make_task, "issues_map") and make_task.issues_map:
+                for r in reversed(requests):
+                    lk = work_key(r.get("link"))
+                    if lk and lk[0] == "pull":
+                        pr_item = make_task.issues_map.get(lk)
+                        if pr_item and pr_item.get("headRefOid"):
+                            sha = pr_item["headRefOid"]
+                            break
+                if not sha and pulls:
+                    heads = {p["headRefOid"] for p in pulls if p.get("state") == "OPEN" and p.get("headRefOid")}
+                    if len(heads) == 1:
+                        sha = heads.pop()
+                    elif heads:
+                        ambiguous = True  # several open PRs with different heads: no guess
+
+        summary_text = latest.get("summary") or ""
+        if not sha and not ambiguous:
             shas_40 = re.findall(r"(?<![0-9A-Za-z])[0-9a-f]{40}(?![0-9A-Za-z])", summary_text)
             unique_shas = list(dict.fromkeys(s.lower() for s in shas_40))
             if len(unique_shas) == 1:
@@ -167,7 +213,7 @@ def make_task(key, requests, github, ledger_path, now, interval, project_request
             author_match = re.search(r"\bauthor[:\s]+([a-z][a-z0-9-]{0,47})\b", summary_text, re.IGNORECASE)
             if author_match:
                 author = author_match.group(1).lower()
-        if not sha:
+        if not sha and not ambiguous:
             shas = re.findall(r"(?<![0-9A-Za-z])[0-9a-f]{7,40}(?![0-9A-Za-z])", latest["id"])
             sha = shas[-1] if shas else (github or {}).get("headRefOid")
         if not author:
@@ -176,6 +222,8 @@ def make_task(key, requests, github, ledger_path, now, interval, project_request
             prefix = re.split(r"-(?:review|qa)-", latest["id"])[0]
             chain = [r for r in project_requests if r.get("id", "").startswith(prefix + "-") and stage_of(r) == "implementation"]
             author = next((r.get("to") for r in reversed(requests[:-1] or chain) if stage_of(r) == "implementation"), None)
+            if not author and latest.get("from") and latest.get("from") not in ("manager", "owner"):
+                author = latest.get("from")
 
         if (status == "review" or stage_of(latest) == "review") and sha and author:
             candidate = {"id": sha, "author": author}
@@ -257,6 +305,7 @@ def project_status(project, now, interval=20, fetch=None):
     if requests:
         sources.append(f"ledger:{len(requests)} requests")
 
+    make_task.issues_map = issues
     for key, items in groups.items():
         name = "req-" + key[1] if key[0] == "request" else ("issue-" if key[0] == "issues" else "pr-") + key[1]
         status, task = make_task(name, items, issues.get(key), ledger_path, now, interval, requests)
