@@ -5,7 +5,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/). Versions follow [SemVer
 ## [Unreleased]
 
 ### Added
-- Chief of Staff playbook limits message bursts to agents: at most 3 messages in a row, mass changes at least 20 seconds apart, and one configuration-level change preferred over many messages.
+- Chief of Staff playbook limits message bursts to agents: at most 3 messages in a row, mass changes wait at least 20 seconds between messages, and one configuration-level change preferred over many messages.
 - Windows x64 Codex Office controller with tray, external Chrome workflow and bundled service; scoped signed component updates, inventory, preview, recovery and separate activation evidence.
 - Evidence-aware LinkedIn editorial handbook, drafting/review checklist and post-audit template, discoverable by team and standalone Strategist, Content Writer and Content Reviewer roles.
 - One canonical SVG working-structure diagram in the public README and website, with four unified tiers (Human owner, Chief of Staff, Project Director, Teams A/B/C), Project grouping and scoped two-way communication.

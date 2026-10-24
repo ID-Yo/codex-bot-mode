@@ -49,7 +49,7 @@ Sending many messages in a burst overloads the Codex Desktop app-server queue; s
 stalls and the owner has to restart Codex. So:
 
 - Never send more than 3 messages to agents one after another.
-- Space mass changes at least 20 seconds apart.
+- For mass changes, wait at least 20 seconds between messages to agents.
 - Prefer one change at configuration level (a shared profile, the roster, the request
   ledger, or one coordination message to the lead) over many separate messages.
 
