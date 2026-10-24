@@ -1,7 +1,16 @@
 name: test
 
 on:
+  push:
+    branches: [main]
   workflow_dispatch:
+  pull_request:
+    paths:
+      - 'catalog/**'
+      - 'scripts/**'
+      - 'tests/**'
+      - 'docs/**'
+      - '.github/workflows/test.yml'
 
 permissions:
   contents: read
