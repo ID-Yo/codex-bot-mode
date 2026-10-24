@@ -1,0 +1,197 @@
+{
+ "note": "Installed Monitor checkpoint after a live run (2026-10-24 08:00 UTC): 38 signals, none delivered; project ids anonymized",
+ "run_id": "live-run-01",
+ "delivery_status": "not_required",
+ "alert_ledger": {
+  "approval_mismatch:project-01/ORG-002-director-promotion": {
+   "first_seen": "2026-10-23T19:57:15Z",
+   "status": "deduplicated",
+   "escalated": false
+  },
+  "candidate_missing:project-01/ORG-002-director-promotion": {
+   "first_seen": "2026-10-23T19:57:15Z",
+   "status": "deduplicated",
+   "escalated": false
+  },
+  "review_missing:project-01/ORG-002-director-promotion": {
+   "first_seen": "2026-10-23T19:57:15Z",
+   "status": "deduplicated",
+   "escalated": false
+  },
+  "acceptance_missing:project-01/ORG-002-director-promotion": {
+   "first_seen": "2026-10-23T19:57:15Z",
+   "status": "deduplicated",
+   "escalated": false
+  },
+  "task_overdue:project-02/issue-117": {
+   "first_seen": "2026-10-24T08:00:14Z",
+   "status": "re_escalated",
+   "escalated": true
+  },
+  "task_overdue:project-02/req-cos-011-routeport-owner-decisions": {
+   "first_seen": "2026-10-24T08:00:14Z",
+   "status": "re_escalated",
+   "escalated": true
+  },
+  "task_overdue:project-02/req-cos-017-routeport-domain-split": {
+   "first_seen": "2026-10-24T08:00:14Z",
+   "status": "re_escalated",
+   "escalated": true
+  },
+  "task_overdue:project-02/pr-148": {
+   "first_seen": "2026-10-24T08:00:14Z",
+   "status": "re_escalated",
+   "escalated": true
+  },
+  "task_overdue:project-02/req-ODD-RC-PREFLIGHT-20261023": {
+   "first_seen": "2026-10-24T08:00:14Z",
+   "status": "re_escalated",
+   "escalated": true
+  },
+  "task_overdue:project-03/issue-89": {
+   "first_seen": "2026-10-24T08:00:14Z",
+   "status": "re_escalated",
+   "escalated": true
+  },
+  "candidate_missing:project-03/issue-89": {
+   "first_seen": "2026-10-24T08:00:14Z",
+   "status": "re_escalated",
+   "escalated": true
+  },
+  "task_overdue:project-03/issue-95": {
+   "first_seen": "2026-10-24T08:00:14Z",
+   "status": "re_escalated",
+   "escalated": true
+  },
+  "task_overdue:project-03/issue-90": {
+   "first_seen": "2026-10-24T08:00:14Z",
+   "status": "re_escalated",
+   "escalated": true
+  },
+  "candidate_missing:project-03/issue-100": {
+   "first_seen": "2026-10-24T08:00:14Z",
+   "status": "deduplicated",
+   "escalated": false
+  },
+  "review_stage:project-03/issue-100": {
+   "first_seen": "2026-10-24T08:00:14Z",
+   "status": "deduplicated",
+   "escalated": false
+  },
+  "task_overdue:project-04/req-cos-012-owner-decisions": {
+   "first_seen": "2026-10-24T08:00:14Z",
+   "status": "re_escalated",
+   "escalated": true
+  },
+  "task_overdue:project-04/req-ODD-RC-PREFLIGHT-20261023": {
+   "first_seen": "2026-10-24T08:00:14Z",
+   "status": "re_escalated",
+   "escalated": true
+  },
+  "task_overdue:project-01/req-cos-projects-order-logos-20261014": {
+   "first_seen": "2026-10-24T08:00:14Z",
+   "status": "re_escalated",
+   "escalated": true
+  },
+  "task_overdue:project-01/req-ODD-RC-PREFLIGHT-20261023": {
+   "first_seen": "2026-10-24T08:00:14Z",
+   "status": "re_escalated",
+   "escalated": true
+  },
+  "task_overdue:project-05/issue-163": {
+   "first_seen": "2026-10-24T08:00:14Z",
+   "status": "re_escalated",
+   "escalated": true
+  },
+  "task_overdue:project-05/issue-159": {
+   "first_seen": "2026-10-24T08:00:14Z",
+   "status": "re_escalated",
+   "escalated": true
+  },
+  "task_overdue:project-05/issue-227": {
+   "first_seen": "2026-10-24T08:00:14Z",
+   "status": "re_escalated",
+   "escalated": true
+  },
+  "stage_finished:project-05/issue-227": {
+   "first_seen": "2026-10-24T08:00:14Z",
+   "status": "re_escalated",
+   "escalated": true
+  },
+  "active_handoffs:project-05/issue-227": {
+   "first_seen": "2026-10-24T08:00:14Z",
+   "status": "re_escalated",
+   "escalated": true
+  },
+  "task_overdue:project-05/req-ODD-RC-PREFLIGHT-20261023": {
+   "first_seen": "2026-10-24T08:00:14Z",
+   "status": "re_escalated",
+   "escalated": true
+  },
+  "worker_not_started:project-05/issue-49": {
+   "first_seen": "2026-10-24T08:00:14Z",
+   "status": "deduplicated",
+   "escalated": false
+  },
+  "executor_mismatch:project-05/issue-49": {
+   "first_seen": "2026-10-24T08:00:14Z",
+   "status": "deduplicated",
+   "escalated": false
+  },
+  "active_handoffs:project-05/issue-49": {
+   "first_seen": "2026-10-24T08:00:14Z",
+   "status": "deduplicated",
+   "escalated": false
+  },
+  "task_overdue:project-06/req-ODD-RC-PREFLIGHT-20261023": {
+   "first_seen": "2026-10-24T08:00:14Z",
+   "status": "re_escalated",
+   "escalated": true
+  },
+  "task_overdue:project-07/req-ODD-RC-PREFLIGHT-20261023": {
+   "first_seen": "2026-10-24T08:00:14Z",
+   "status": "re_escalated",
+   "escalated": true
+  },
+  "task_overdue:project-08/req-ODD-RC-PREFLIGHT-20261023": {
+   "first_seen": "2026-10-24T08:00:14Z",
+   "status": "re_escalated",
+   "escalated": true
+  },
+  "stage_finished:project-09/issue-22": {
+   "first_seen": "2026-10-24T08:00:14Z",
+   "status": "deduplicated",
+   "escalated": false
+  },
+  "active_handoffs:project-09/issue-22": {
+   "first_seen": "2026-10-24T08:00:14Z",
+   "status": "deduplicated",
+   "escalated": false
+  },
+  "task_overdue:project-09/req-ODD-RC-PILOT-20261023": {
+   "first_seen": "2026-10-24T08:00:14Z",
+   "status": "re_escalated",
+   "escalated": true
+  },
+  "stage_finished:project-10/req-ODD-RC-PREFLIGHT-20261023": {
+   "first_seen": "2026-10-24T08:00:14Z",
+   "status": "deduplicated",
+   "escalated": false
+  },
+  "active_handoffs:project-10/req-ODD-RC-PREFLIGHT-20261023": {
+   "first_seen": "2026-10-24T08:00:14Z",
+   "status": "deduplicated",
+   "escalated": false
+  },
+  "task_overdue:project-11/req-ODD-RC-PREFLIGHT-20261023": {
+   "first_seen": "2026-10-24T08:00:14Z",
+   "status": "re_escalated",
+   "escalated": true
+  },
+  "task_overdue:project-12/req-ODD-RC-PREFLIGHT-20261023": {
+   "first_seen": "2026-10-24T08:00:14Z",
+   "status": "re_escalated",
+   "escalated": true
+  }
+ }
+}

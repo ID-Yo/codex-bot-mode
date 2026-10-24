@@ -185,7 +185,7 @@ def project_status(project, now, interval=20, fetch=None):
     root = Path(project["root"])
     if not root.is_dir():
         raise FileNotFoundError("project root unavailable")
-    problems, tasks, counts, sources = [], [], Counter(), []
+    problems, tasks, counts, sources, hygiene = [], [], Counter(), [], []
 
     if (root / "work" / "tasks").is_dir():
         try:
@@ -218,6 +218,13 @@ def project_status(project, now, interval=20, fetch=None):
                 issues[("pull", str(row["number"]))] = row
         except Exception as error:
             problems.append(f"github unavailable ({type(error).__name__}: {error})")
+    # GitHub is authoritative: a record without an issue link belongs to the issue that names its id in the title.
+    for key in [k for k in groups if k[0] == "request"]:
+        rid = key[1].casefold()
+        match = next((k for k, row in issues.items() if len(rid) >= 8 and rid in str(row.get("title", "")).casefold()), None)
+        if match is not None:
+            linked = groups.pop(key)
+            groups.setdefault(match, []).extend(linked)
     for key, row in issues.items():
         if key[0] == "issues" and row.get("state") == "OPEN" and status_label(row.get("labels")):
             groups.setdefault(key, [])
@@ -228,6 +235,8 @@ def project_status(project, now, interval=20, fetch=None):
         name = "req-" + key[1] if key[0] == "request" else ("issue-" if key[0] == "issues" else "pr-") + key[1]
         status, task = make_task(name, items, issues.get(key), ledger_path, now, interval, requests)
         counts[status] += 1
+        if status == "done" and any(r.get("state") != "answered" for r in items) and issues.get(key, {}).get("state") in ("CLOSED", "MERGED"):
+            hygiene.extend(r["id"] for r in items if r.get("state") != "answered")
         if task:
             tasks.append(task)
 
@@ -238,5 +247,5 @@ def project_status(project, now, interval=20, fetch=None):
     declared_none = project.get("tracked_work") == "none"
     state = "known" if counts else ("declared-none" if declared_none else "unknown")
     return tasks, {"state": state, "total": sum(counts.values()), "by_status": dict(counts),
-                   "sources": sources, "problems": problems}
+                   "sources": sources, "problems": problems, "hygiene": hygiene}
 

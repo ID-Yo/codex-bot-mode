@@ -99,6 +99,72 @@ class MonitorRunTests(unittest.TestCase):
         self.assertEqual(fx.checkpoint()["delivery_status"], "not_attempted")
         self.assertEqual(fx.checkpoint()["audit_status"], "incomplete")
 
+    def test_repeated_invocation_of_the_same_run_still_reports_undelivered_signals(self):
+        # Live run 01a16cec: the first invocation wrote the ledger, a second one (same run id, 36 s later)
+        # saw every signal as already known, so nothing reached the recipient.
+        fx = Fixture(self)
+        root = fx.project("alpha", tracked_work="none")
+        (root / ".bot-mode" / "local").mkdir(parents=True)
+        (root / ".bot-mode" / "local" / "requests.json").write_text(json.dumps({"schema": 1, "requests": [{
+            "id": "overdue-1", "from": "manager", "to": "developer", "summary": "s", "link": "codex://threads/x",
+            "opened": "2026-10-20T10:00:00+00:00", "due": "2026-10-20T11:00:00+00:00", "state": "open", "escalations": []}]}), encoding="utf-8")
+        del fx.projects[0]["tracked_work"]
+        fx.write()
+        first = fx.run("run-x", now=datetime.now(timezone.utc))
+        self.assertTrue(first["report_required"], first)
+        second = fx.run("run-x", now=datetime.now(timezone.utc))
+        self.assertTrue(second["report_required"])
+        self.assertGreater(second["new_alerts"], 0)
+        statuses = {e["status"] for e in fx.checkpoint()["alert_ledger"].values()}
+        self.assertEqual(statuses, {"new"})
+        monitor_checkpoint.set_delivery_status(fx.monitor / "agent" / "STATE.md", "sent")
+        third = fx.run("run-y", now=datetime.now(timezone.utc))
+        self.assertEqual(third["new_alerts"], 0)
+        self.assertFalse(third["report_required"])
+
+    def test_real_checkpoint_of_run_01a16cec_gives_new_alerts_not_re_escalations(self):
+        fixture = json.loads((ROOT / "tests" / "fixtures" / "cbm259-run-01a16cec-checkpoint.json").read_text(encoding="utf-8"))
+        ledger = fixture["alert_ledger"]
+        self.assertEqual(len(ledger), 38)
+        self.assertIn("re_escalated", {e["status"] for e in ledger.values()})
+        state = Path(tempfile.mkdtemp()) / "STATE.md"
+        self.addCleanup(shutil.rmtree, state.parent, True)
+        monitor_checkpoint.save_checkpoint(state, {"version": 1, "run_id": fixture["run_id"], "delivery_status": "not_required",
+                                                   "alert_ledger": ledger})
+        findings = [{"code": fp.split(":", 1)[0], "scope": fp.split(":", 1)[1], "detail": "d"} for fp in ledger]
+        snapshot = {"monitor_audit": {"run_id": fixture["run_id"], "coverage": "complete", "observed_at": stamp(NOW),
+                                      "next_check_at": stamp(NOW + timedelta(minutes=30)), "unavailable_scopes": []}}
+        _, new_alerts = tc.update_monitor_state(state, findings, snapshot, NOW, complete=True, run_id=fixture["run_id"])
+        self.assertEqual(len(new_alerts), 38)
+        self.assertEqual({e["status"] for e in monitor_checkpoint.load_checkpoint(state)["alert_ledger"].values()}, {"new"})
+
+    def test_record_whose_github_issue_is_closed_is_not_an_alert_and_is_noted_once_per_project(self):
+        fx = Fixture(self)
+        root = fx.project("alpha", tasks=True)
+        (root / ".bot-mode" / "local").mkdir(parents=True, exist_ok=True)
+        (root / ".bot-mode" / "local" / "requests.json").write_text(json.dumps({"schema": 1, "requests": [{
+            "id": "ODD-RC-PREFLIGHT-20261023", "from": "chief-of-staff", "to": "manager", "summary": "s",
+            "link": "codex://threads/x", "opened": "2026-10-23T14:20:55+00:00", "due": "2026-10-23T17:20:55+00:00",
+            "state": "open", "escalations": []}]}), encoding="utf-8")
+        registry = json.loads((fx.dir / "registry.json").read_text()) if (fx.dir / "registry.json").exists() else None
+        fx.projects[0]["repository"] = "o/alpha"
+        fx.write()
+        import status_sources
+        original = status_sources.github_fetch
+        status_sources.github_fetch = lambda repo: {"issue": [{"number": 157, "state": "CLOSED", "title": "ODD-RC-PREFLIGHT-20261023: preparation",
+                                                               "updatedAt": "2026-10-24T05:00:00Z", "url": "https://github.com/o/alpha/issues/157", "labels": []}], "pr": []}
+        self.addCleanup(setattr, status_sources, "github_fetch", original)
+        result = fx.run("run-h", now=datetime.now(timezone.utc))
+        codes = {(f["code"], f["scope"]) for f in result["findings"]}
+        self.assertNotIn(("task_overdue", "alpha/issue-157"), codes)
+        self.assertFalse(any(c == "task_overdue" and "ODD-RC" in s for c, s in codes))
+        self.assertIn(("record_not_closed", "alpha/ODD-RC-PREFLIGHT-20261023"), codes)
+        self.assertIn("Hygiene (reported once)", result["report_text"])
+        self.assertIn("alpha 1", result["report_text"])
+        monitor_checkpoint.set_delivery_status(fx.monitor / "agent" / "STATE.md", "sent")
+        again = fx.run("run-h2", now=datetime.now(timezone.utc))
+        self.assertEqual(again["new_alerts"], 0)
+
     def test_second_fresh_lease_uses_private_state_and_leaves_shared_state(self):
         fx = Fixture(self)
         fx.project("alpha", tracked_work="none")

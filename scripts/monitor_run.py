@@ -19,6 +19,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import monitor_checkpoint
+from concurrent.futures import ThreadPoolExecutor
+
 import status_sources
 import task_continuity as tc
 
@@ -96,20 +98,32 @@ def build(config, run_id, now, invocations, invocations_available):
     rows = registry.get("projects", [])
     if not isinstance(rows, list):
         raise ValueError("registry projects must be a list")
+    def one(project):
+        try:
+            return project_tasks(project, now, interval), None
+        except Exception as error:
+            return None, error
+    valid = [p for p in rows if isinstance(p, dict) and isinstance(p.get("id"), str) and p["id"]
+             and isinstance(p.get("root"), str) and p["root"]]
+    with ThreadPoolExecutor(max_workers=6) as pool:  # GitHub reads dominate the run time; keep a run well under a minute
+        results = dict(zip((p["id"] for p in valid), pool.map(one, valid)))
+    hygiene = {}
     for index, project in enumerate(rows):
         pid = project.get("id") if isinstance(project, dict) else None
         root = project.get("root") if isinstance(project, dict) else None
         if not isinstance(pid, str) or not pid or not isinstance(root, str) or not root:
             unavailable.append(f"registry-entry:{pid if isinstance(pid, str) and pid else index} (missing id or root)")
             continue
-        try:
-            found, summary = project_tasks(project, now, interval)
-        except Exception as error:
+        result, error = results[pid]
+        if error is not None:
             unavailable.append(f"project:{pid} ({type(error).__name__})")
             project_status[pid] = {"state": "unavailable", "total": 0, "by_status": {}, "sources": [], "problems": [type(error).__name__]}
             continue
+        found, summary = result
         tasks.extend(found)
         project_status[pid] = summary
+        if summary.get("hygiene"):
+            hygiene[pid] = summary["hygiene"]
         if summary["problems"]:
             unavailable.append(f"project:{pid} ({'; '.join(summary['problems'])})")
         elif summary["state"] == "unknown":
@@ -129,7 +143,7 @@ def build(config, run_id, now, invocations, invocations_available):
             "coverage": "complete" if not unavailable else "partial",
             "observed_at": utc(now), "next_check_at": later,
             "covered_tasks": [task["id"] for task in tasks], "unavailable_scopes": unavailable,
-            "project_status": project_status,
+            "project_status": project_status, "hygiene": hygiene,
             "evidence": [f"ref:monitor-run:{run_id}", f"ref:registry-projects:{covered_projects}/{len(rows)}"],
             "invocations": [*invocations, {"run_id": run_id, "status": "active", "updated_at": utc(now)}]}}
     return snapshot, {"projects": len(rows), "projects_covered": covered_projects}
@@ -138,6 +152,15 @@ def build(config, run_id, now, invocations, invocations_available):
 def report_text(run_id, complete, coverage, unavailable, findings, state_file, next_check):
     lines = [f"Agent Monitor report for run {run_id}.",
              f"Audit: {'complete' if complete else 'INCOMPLETE'}; coverage: {coverage}."]
+    notes = [f for f in findings if f["code"] == "record_not_closed"]
+    findings = [f for f in findings if f["code"] != "record_not_closed"]
+    if notes:
+        grouped = {}
+        for f in notes:
+            project, _, record = f["scope"].partition("/")
+            grouped.setdefault(project, []).append(record)
+        lines.append("Hygiene (reported once): records still open although their GitHub issue is closed: " + "; ".join(
+            f"{project} {len(ids)} ({', '.join(ids[:3])}{', ...' if len(ids) > 3 else ''})" for project, ids in sorted(grouped.items())) + ".")
     if unavailable:
         lines.append("Unavailable scopes: " + "; ".join(unavailable[:10]) + ".")
     if len(findings) > MAX_FINDINGS:
@@ -195,6 +218,9 @@ def run(monitor_dir, run_id, now=None):
         cycle = tc.check_monitor_cycle(snapshot, now, current_run_id=run_id)
         findings, complete = [*extra, *cycle["findings"]], cycle["audit_complete"]
         concurrent = concurrent or any(f["code"] == "concurrent_audit" for f in cycle["findings"])
+        for pid, ids in snapshot["monitor_audit"].get("hygiene", {}).items():
+            findings.extend({"code": "record_not_closed", "scope": f"{pid}/{rid}",
+                             "detail": "Ledger record is open but its GitHub issue is closed"} for rid in ids)
     else:
         findings = [*extra, {"code": "snapshot_build_failed", "scope": "monitor",
                              "detail": f"Snapshot could not be built ({build_error})"},

@@ -77,6 +77,10 @@ def set_delivery_status(path, status):
     if not data:
         raise ValueError("Monitor checkpoint is unavailable")
     data["delivery_status"] = status
+    if status in ("sent", "acknowledged") and isinstance(data.get("alert_ledger"), dict):
+        for entry in data["alert_ledger"].values():
+            if isinstance(entry, dict):
+                entry["reported"] = True  # delivered signals deduplicate from now on
     save_checkpoint(path, data)
     finish_lease(path, data.get("run_id"))
 
