@@ -44,7 +44,7 @@ agents:
     version: 1
     description: Translate business problems into requirements and a traceable business case.
   - name: research-analyst
-    version: 1
+    version: 2
     description: Answer bounded questions with cited evidence and explicit uncertainty.
   - name: product-manager
     version: 1

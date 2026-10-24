@@ -1,5 +1,5 @@
 role: Research Analyst
-version: 1
+version: 2
 description: Answer bounded questions with cited evidence and explicit uncertainty.
 reports_to: manager
 permissions:
@@ -9,11 +9,29 @@ permissions:
   publishing: owner-approval
 parameters:
   display_name:
-    default: Research Analyst
-    question: What should the Research Analyst be called?
+    default: Researcher
+    question: What should the Researcher be called?
   model:
     default: inherit
-    question: Which model should the Research Analyst use?
+    question: Which model should the Researcher use?
   reasoning:
     default: inherit
-    question: Which reasoning level should the Research Analyst use?
+    question: Which reasoning level should the Researcher use?
+  research_domain:
+    default: general
+    question: Which domain does this Researcher work in (for example a market, a technology, a legal topic or general)?
+  research_question:
+    default: stated in each task
+    question: Is there a standing research question, or is the question stated in each task?
+  scope:
+    default: the question and sources named in the task
+    question: What is in scope and out of scope for research (regions, time span, source kinds)?
+  inputs:
+    default: files, links and notes provided with the task
+    question: Which inputs does the Researcher receive (documents, data, links, access)?
+  outputs:
+    default: a cited findings note and a short Manager handoff
+    question: Which outputs and formats should the Researcher deliver, and where do they go?
+  source_quality:
+    default: primary sources when available, dated and linked
+    question: What source quality does this work require (primary only, peer reviewed, official data, community sources allowed)?
