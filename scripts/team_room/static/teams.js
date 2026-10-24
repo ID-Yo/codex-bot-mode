@@ -16,7 +16,7 @@
   function reset(){planned=null;go.hidden=true;out.hidden=true;}
   details.addEventListener('toggle',async()=>{if(!details.open||templates.length)return;
     try{const data=await api('/api/teams');templates=data.templates;select.replaceChildren(...templates.map(t=>new Option(t.name[0].toUpperCase()+t.name.slice(1)+' · '+t.roles.length+' roles',t.name)));
-      name.placeholder=current()?.team[0]?.default||'';renderQuestions();}catch(error){notice.textContent=error.message;}});
+      name.placeholder=current()?.team[0]?.default||'';renderQuestions();}catch(error){notice.textContent=officeI18n.t(error.message);}});
   select.addEventListener('change',()=>{name.placeholder=current()?.team[0]?.default||'';renderQuestions();reset();});
   form.addEventListener('change',event=>{if(event.target.name==='team-mode')renderQuestions();reset();});
   form.addEventListener('submit',async event=>{event.preventDefault();reset();
@@ -24,9 +24,9 @@
       planned={template:select.value,team_name:name.value,answers:answers(),team_answers:teamAnswers()};clientId=crypto.randomUUID().replaceAll('-','');
       out.textContent=['Team: '+plan.team,'Sidebar section: '+plan.section,'Room: '+plan.room,...plan.agents.map(a=>'• '+a.display_name+' ('+a.role+') → '+a.workspace),...(plan.director_proposal?['','Project Director proposed: '+plan.director_proposal]:[])].join('\n');
       out.textContent+='\nTracking: '+(plan.work_tracking.mode||'Choose a mode')+'\nStatus authority: '+(plan.work_tracking.authority||'Choose an authority for both');
-      out.hidden=false;go.hidden=!plan.work_tracking.mode||!plan.work_tracking.authority;notice.textContent='';}catch(error){notice.textContent=error.message;}});
+      out.hidden=false;go.hidden=!plan.work_tracking.mode||!plan.work_tracking.authority;notice.textContent='';}catch(error){notice.textContent=officeI18n.t(error.message);}});
   go.addEventListener('click',async()=>{if(!planned)return;go.disabled=true;
     try{const result=await api('/api/teams/launch',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...planned,client_message_id:clientId})});
       notice.textContent=result.state==='sent'?'Sent to '+botName(result.manager)+' ('+result.request+'). The chats appear in Codex; restart Office to see the new room.':result.state==='uncertain'?'Delivery unconfirmed ('+result.request+'); check the Manager chat before trying again.':'Already requested ('+result.request+').';
-      reset();details.open=false;}catch(error){notice.textContent=error.message;}finally{go.disabled=false;}});
+      reset();details.open=false;}catch(error){notice.textContent=officeI18n.t(error.message);}finally{go.disabled=false;}});
 })();

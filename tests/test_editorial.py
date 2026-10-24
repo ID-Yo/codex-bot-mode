@@ -1,4 +1,5 @@
-﻿import unittest
+﻿import sys as _sys, pathlib as _pl; _sys.path.insert(0, str(_pl.Path(__file__).resolve().parent)); import isolation; isolation.isolate()  # noqa: E402,E401 (#310)
+import unittest
 from pathlib import Path
 import tempfile
 import shutil

@@ -10,6 +10,7 @@ Examples:
   python -B scripts/team.py plan-team development --project <project>
   python -B scripts/team.py install-team development --project <project> --tracking-mode github --approval once --confirm
   python -B scripts/team.py add-agent --project <project> --team Development --template blank --answers a.json --actor manager --approval once --confirm
+  python -B scripts/team.py dreamdocs-offer --project <project> [--set yes|no|skip] [--owner-change]
 """
 import argparse
 import json
@@ -17,7 +18,7 @@ from pathlib import Path
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from team_room import manifest, teams  # noqa: E402
+from team_room import dreamdocs_offer, manifest, teams  # noqa: E402
 
 
 def answers(path):
@@ -64,6 +65,13 @@ def main(argv=None):
             p.add_argument('--actor', required=True, help='owner, chief-of-staff, director or a manager bot ID')
             p.add_argument('--proposed-by')
             p.add_argument('--confirm', action='store_true')
+    d = sub.add_parser('dreamdocs-offer', help='Show or record the owner\'s answer to the optional Open Dreamdocs offer.')
+    d.add_argument('--project', default='.')
+    d.add_argument('--place', choices=dreamdocs_offer.PLACES, default='team-launch')
+    d.add_argument('--set', choices=dreamdocs_offer.CHOICES, help='Record the owner\'s explicit answer.')
+    d.add_argument('--owner-change', action='store_true', help='Change an earlier Yes or No; only when the owner asks.')
+    d.add_argument('--adopted-tag', help='Stable release tag adopted after the owner approved the install scope.')
+    d.add_argument('--adopted-commit', help='Full commit of that tag.')
     a = sub.add_parser('approvals', help='List standing approvals.')
     a.add_argument('--project', default='.')
     args = parser.parse_args(argv)
@@ -115,11 +123,21 @@ def main(argv=None):
             result = teams.install(plan)
             teams.record_use(args.project, approval, args.actor, f'{plan["kind"]} {result[0]["bot"]}')
             emit({'installed': result})
+        elif args.action == 'dreamdocs-offer':
+            if args.adopted_tag or args.adopted_commit:
+                if not (args.adopted_tag and args.adopted_commit):
+                    raise teams.TeamError('Give both --adopted-tag and --adopted-commit')
+                dreamdocs_offer.mark_adopted(args.project, args.adopted_tag, args.adopted_commit)
+            elif args.set:
+                dreamdocs_offer.record(args.project, args.set, args.place, owner_change=args.owner_change)
+            emit({'record': dreamdocs_offer.load(args.project),
+                  'ask_now': dreamdocs_offer.should_offer(args.project, args.place),
+                  'already_present': dreamdocs_offer.already_present(args.project)})
         elif args.action == 'approvals':
             file = teams.approvals_path(args.project)
             emit(manifest.load(file) if file.exists() else {'approvals': []})
         return 0
-    except (teams.TeamError, manifest.ManifestError, json.JSONDecodeError, OSError) as error:
+    except (teams.TeamError, manifest.ManifestError, json.JSONDecodeError, OSError, ValueError) as error:
         print(f'error: {error}', file=sys.stderr)
         return 2
 

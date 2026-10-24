@@ -74,6 +74,11 @@ one was given. If delivery fails, state it in your own chat and tell the owner.
 - After you send a reply, close the request:
   `python -B {{host}}/.bot-mode/requests.py --project {{host}} reply <id> --by <you> --link <reply link> [--outcome blocked|failed|refused|partial]`.
   Closing a GitHub or tracker issue includes closing the linked request record in the request ledger in the same turn.
+  A `partial` reply keeps the Monitor signalling until the requester records that the remainder is tracked
+  elsewhere. Open the follow-up issue or request first, then the requester (or the owner) runs:
+  `python -B {{host}}/.bot-mode/requests.py --project {{host}} accept <id> --by <you> --link <follow-up link>`;
+  the recipient may name the follow-up in the reply with `--successor <link>`, which the requester then confirms
+  with `accept` without `--link`. No other participant can accept.
   Office reminds you while a request addressed to you stays open, then tells
   your Manager and the owner.
 - Messaging other roster participants is allowed for assigned work. Messages to

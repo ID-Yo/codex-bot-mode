@@ -10,6 +10,7 @@ import time
 from urllib.parse import urlsplit, parse_qs
 
 from .controller import Conflict
+from .cross_rooms import CrossRoomError
 from .store import BOTS
 from .work import WorkConflict
 from .images import Images, MAX_BYTES
@@ -45,6 +46,10 @@ class IPv6RoomHTTPServer(RoomHTTPServer):
     def server_bind(self):
         self.socket.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 1)
         super().server_bind()
+
+
+# The controller polls /desktop/status every few seconds; native thread checks are reused for this long.
+STATUS_NATIVE_CACHE_SECONDS = 10
 
 
 def create_server(controller, port=0, *, ipv6=False, token=None, desktop_lifecycle=None):
@@ -108,7 +113,12 @@ def create_server(controller, port=0, *, ipv6=False, token=None, desktop_lifecyc
             if not secrets.compare_digest(self.headers.get('X-Room-Token',''),token):
                 raise ValueError('Local access token required')
             parts = self.path.split('/',4)
-            if len(parts) != 5 or parts[4].split('/')[0].split('?')[0] not in ('state','events','messages','start','stop','resume','images'):
+            if (len(parts) == 5 and re.fullmatch(r'[0-9a-f]{32}', parts[3]) and re.fullmatch(
+                    r'participants|discussion|outcomes(?:/[0-9a-f]{32}/(?:approve|cancel)|/[0-9a-f]{32}/assignments/a\d{1,3}/issue)?',
+                    parts[4].split('?')[0])):
+                self.room_id = parts[3]  # cross-project membership has no session controller; path stays unchanged
+                return controller
+            if len(parts) != 5 or parts[4].split('/')[0].split('?')[0] not in ('state','events','messages','start','stop','resume','images','queue'):
                 raise ValueError('Unknown room action')
             rooms = getattr(controller,'rooms',None)
             if rooms is None: raise ValueError('Rooms are unavailable')
@@ -137,7 +147,8 @@ def create_server(controller, port=0, *, ipv6=False, token=None, desktop_lifecyc
                     return self.reply(200, desktop_lifecycle.health())
                 if url.path == '/desktop/status':
                     state = inspect_shutdown(controller, getattr(controller, 'personal', None),
-                        getattr(controller, 'rooms', None), getattr(controller, 'project_managers', None))
+                        getattr(controller, 'rooms', None), getattr(controller, 'project_managers', None),
+                        native_cache_ttl=STATUS_NATIVE_CACHE_SECONDS)
                     return self.reply(200, {**desktop_lifecycle.health(), **state,
                         'stop_pending': desktop_lifecycle.stop_requested})
                 if url.path == '/desktop/logs':
@@ -146,7 +157,7 @@ def create_server(controller, port=0, *, ipv6=False, token=None, desktop_lifecyc
             if desktop_lifecycle is None:
                 return self._do_get_guarded()
             try:
-                with desktop_lifecycle.operation():
+                with desktop_lifecycle.watch_operation():
                     return self._do_get_guarded()
             except LifecycleBusy as error:
                 return self.reply(409, {'error': str(error), 'state': 'stopping'})
@@ -165,12 +176,62 @@ def create_server(controller, port=0, *, ipv6=False, token=None, desktop_lifecyc
                 except (ValueError, OSError) as error: return self.reply(400, {'error':str(error)})
             if not self.origin_ok():
                 return self.reply(403, {'error': 'Local same-origin access required'})
+            url = urlsplit(self.path)
             if self.path.startswith('/api/rooms/') and not secrets.compare_digest(self.headers.get('X-Room-Token',''),token):
                 return self.reply(403, {'error':'Local access token required'})
+            parts = url.path.split('/')
+            if (len(parts) == 5 and parts[:3] == ['', 'api', 'rooms'] and parts[4] == 'queue'):
+                rooms = getattr(settings_controller, 'rooms', None)
+                if rooms is None: return self.reply(404, {'error':'Rooms are unavailable'})
+                try:
+                    return self.reply(200, {'items':rooms.queue_state(parts[3])})
+                except ValueError as error:
+                    return self.reply(404, {'error':str(error)})
+                except OSError:
+                    return self.reply(503, {'error':'Room queue is temporarily unavailable'})
+                except RuntimeError:
+                    return self.reply(503, {'error':'Room unavailable'})
+            if url.path == '/api/rooms/candidates':
+                from . import project as served, cross_rooms
+                query = parse_qs(url.query)
+                try:
+                    rows = cross_rooms.search(cross_rooms.candidate_index(served.PROJECT),
+                                              query.get('q',[''])[0], query.get('project',[''])[0][:160])
+                except CrossRoomError as error:
+                    return self.reply(error.status, error.payload)
+                except (ValueError, OSError):
+                    return self.reply(503, {'code':'registry_unavailable','error':'Agent registry is unavailable'})
+                return self.reply(200, {'agents':rows})
             try: controller = self.selected_room()
             except ValueError as error: return self.reply(404, {'error':str(error)})
             except Exception: return self.reply(503, {'error':'Room could not be opened; no message submitted'})
             url = urlsplit(self.path)
+            discussion_match = re.fullmatch(r'/api/rooms/([0-9a-f]{32})/discussion', url.path)
+            if discussion_match:
+                from . import project as served
+                from .room_outcomes import Deps
+                rooms = getattr(controller, 'rooms', None)
+                if rooms is None: return self.reply(404, {'code':'rooms_unavailable','error':'Rooms are unavailable'})
+                try:
+                    room, store = rooms.cross_discussion(discussion_match[1])
+                    return self.reply(200, store.list(room, Deps(served.PROJECT, getattr(controller, 'project_managers', None))))
+                except CrossRoomError as error:
+                    return self.reply(error.status, error.payload)
+                except (RuntimeError, OSError, ValueError):
+                    return self.reply(503, {'code':'discussion_unavailable','error':'The room discussion is temporarily unavailable'})
+            outcomes_match = re.fullmatch(r'/api/rooms/([0-9a-f]{32})/outcomes', url.path)
+            if outcomes_match:
+                from . import project as served
+                from .room_outcomes import Deps
+                rooms = getattr(controller, 'rooms', None)
+                if rooms is None: return self.reply(404, {'code':'rooms_unavailable','error':'Rooms are unavailable'})
+                try:
+                    room, store = rooms.cross_outcomes(outcomes_match[1])
+                    return self.reply(200, store.list(room, Deps(served.PROJECT, getattr(controller, 'project_managers', None))))
+                except CrossRoomError as error:
+                    return self.reply(error.status, error.payload)
+                except (RuntimeError, OSError, ValueError):
+                    return self.reply(503, {'code':'outcomes_unavailable','error':'Outcomes are temporarily unavailable'})
             if url.path == '/api/updates/status':
                 if not secrets.compare_digest(self.headers.get('X-Room-Token',''), token):
                     return self.reply(403, {'error': 'Local access token required'})
@@ -279,6 +340,11 @@ def create_server(controller, port=0, *, ipv6=False, token=None, desktop_lifecyc
                         'fetched_at': desktop_relay.now_utc(), 'source': 'error',
                         'active_bots': [], 'bots': [], 'error': 'Metadata unavailable'
                     })
+            if url.path == '/api/owner-inbox':
+                if not self.origin_ok() or not secrets.compare_digest(self.headers.get('X-Room-Token', ''), token):
+                    return self.reply(403, {'error': 'Local access token required'})
+                from . import project as served, owner_inbox
+                return self.reply(200, owner_inbox.build(served.PROJECT))
             if url.path == '/api/projects':
                 if not secrets.compare_digest(self.headers.get('X-Room-Token',''),token):
                     return self.reply(403, {'error':'Local access token required'})
@@ -344,6 +410,11 @@ def create_server(controller, port=0, *, ipv6=False, token=None, desktop_lifecyc
                         'desktop_connected':bool(controller.work)})
                 except Exception:
                     return self.reply(503, {'error': 'Codex sessions are unavailable; retry when Desktop is connected'})
+            if url.path == '/api/queue':
+                if not self.origin_ok() or not secrets.compare_digest(self.headers.get('X-Room-Token', ''), token):
+                    return self.reply(403, {'error': 'Local access token required'})
+                from .room_queue import RoomQueue
+                return self.reply(200, {'items': RoomQueue(controller, initialize=False).state()})
             if url.path == '/api/state':
                 return self.reply(200, project(controller.state(), 'room',controller,self.room_id))
             if url.path == '/api/events':
@@ -364,7 +435,7 @@ def create_server(controller, port=0, *, ipv6=False, token=None, desktop_lifecyc
                         cursor = 0
                     # Bounded streams reconnect using durable cursor; no dispatch on GET.
                     deadline = time.monotonic() + 20
-                    while not controller.closing and time.monotonic() < deadline:
+                    while not controller.closing and not getattr(controller, 'draining', False) and (desktop_lifecycle is None or not desktop_lifecycle.draining) and time.monotonic() < deadline:
                         events = controller.store.events(cursor)
                         for event in events:
                             body = json.dumps(event, ensure_ascii=False)
@@ -378,7 +449,8 @@ def create_server(controller, port=0, *, ipv6=False, token=None, desktop_lifecyc
                     pass
                 self.close_connection = True
                 return
-            files = {'/': ('index.html','text/html'), '/room.css': ('room.css','text/css'),
+            files = {'/atelier.css': ('atelier.css','text/css'), '/shell.js': ('shell.js','text/javascript'),
+                     '/i18n.js': ('i18n.js','text/javascript'), '/': ('index.html','text/html'), '/room.css': ('room.css','text/css'),
                      '/room.js': ('room.js','text/javascript'),
                      '/media.js': ('media.js','text/javascript'),
                      '/speech.js': ('speech.js','text/javascript'),
@@ -390,6 +462,13 @@ def create_server(controller, port=0, *, ipv6=False, token=None, desktop_lifecyc
                      '/updates.js': ('updates.js','text/javascript'),
                      '/updates.css': ('updates.css','text/css'),
                      '/agents.css': ('agents.css','text/css'),
+                     '/newproject.js': ('newproject.js','text/javascript'),
+                     '/newproject.css': ('newproject.css','text/css'),
+                     '/crossrooms.js': ('crossrooms.js','text/javascript'),
+                     '/crossrooms.css': ('crossrooms.css','text/css'),
+                     '/outcomes.js': ('outcomes.js','text/javascript'),
+                     '/discussion.js': ('discussion.js','text/javascript'),
+                     '/discussion.css': ('discussion.css','text/css'),
                      '/favicon.svg': ('favicon.svg','image/svg+xml'),
                      '/polish.css': ('polish.css','text/css'),
                      '/markdown.js': ('markdown.js','text/javascript')}
@@ -418,6 +497,14 @@ def create_server(controller, port=0, *, ipv6=False, token=None, desktop_lifecyc
                     return self.reply(409, {**desktop_lifecycle.health(), 'safety': 'busy',
                         'stop_pending': desktop_lifecycle.stop_requested,
                         'reason': 'Shutdown could not acquire an uncancelled drain boundary.'})
+                if generation is False:
+                    if desktop_lifecycle.draining or desktop_lifecycle.stop_requested or desktop_lifecycle.stop_committed:
+                        return self.reply(202, {**desktop_lifecycle.health(), 'safety': 'busy',
+                            'stop_pending': True,
+                            'reason': 'Office shutdown is already in progress.'})
+                    return self.reply(409, {**desktop_lifecycle.health(), 'safety': 'busy',
+                        'stop_pending': False,
+                        'reason': 'Office is busy with in-flight operations and could not begin draining within timeout.'})
                 if not desktop_lifecycle.request_shutdown(generation, on_request=lambda: set_draining(
                         controller, getattr(controller, 'personal', None),
                         getattr(controller, 'rooms', None), getattr(controller, 'project_managers', None), True)):
@@ -506,7 +593,26 @@ def create_server(controller, port=0, *, ipv6=False, token=None, desktop_lifecyc
                     raise ValueError('Content-Type must be application/json')
                 data = json.loads(raw.decode('utf-8'))
                 if not isinstance(data, dict): raise ValueError('JSON object required')
-                if self.path.startswith('/api/updates/'):
+                if self.path in ('/api/queue', '/api/queue/release', '/api/queue/cancel'):
+                    from .room_queue import RoomQueue
+                    queue = RoomQueue(controller)
+                    if self.path == '/api/queue':
+                        result = queue.enqueue(data.get('text'), data.get('recipient'), data.get('client_message_id'))
+                    elif self.path.endswith('/release'):
+                        result = queue.release(data.get('id'), confirmed=data.get('confirmed', False))
+                    else:
+                        result = queue.cancel(data.get('id'))
+                elif self.path == '/api/projects/pending-team/issue':
+                    from . import project as served, project_onboarding
+                    result = project_onboarding.link_pending_issue(served.PROJECT, data.get('project_id'), data.get('issue_url'))
+                elif self.path in ('/api/projects/prepare', '/api/projects/confirm'):
+                    from . import project as served, project_onboarding
+                    if self.path.endswith('/prepare'):
+                        result = project_onboarding.prepare(served.PROJECT, data.get('configuration'))
+                    else:
+                        result = project_onboarding.confirm(served.PROJECT, data.get('configuration'),
+                            data.get('version'), confirmed=data.get('confirmed', False))
+                elif self.path.startswith('/api/updates/'):
                     from .updates import dispatch
                     result = dispatch(getattr(controller, 'updates', None), self.path, data)
                 elif self.path.startswith('/api/settings/'):
@@ -519,7 +625,46 @@ def create_server(controller, port=0, *, ipv6=False, token=None, desktop_lifecyc
                 elif self.path == '/api/rooms':
                     rooms = getattr(controller,'rooms',None)
                     if rooms is None: raise ValueError('Rooms are unavailable')
-                    result = rooms.create(data.get('name'),data.get('bots'),data.get('client_message_id'))
+                    if 'participants' in data:
+                        from . import project as served, cross_rooms
+                        result = rooms.create_cross(data.get('name'),data.get('participants'),data.get('lead'),
+                            data.get('lead_override'),data.get('client_message_id'),
+                            lambda: cross_rooms.candidate_index(served.PROJECT))
+                    else:
+                        result = rooms.create(data.get('name'),data.get('bots'),data.get('client_message_id'))
+                elif re.fullmatch(r'/api/rooms/[0-9a-f]{32}/outcomes(?:/.+)?', self.path):
+                    from . import project as served
+                    from .room_outcomes import Deps
+                    rooms = getattr(controller,'rooms',None)
+                    if rooms is None: raise ValueError('Rooms are unavailable')
+                    segments = self.path.split('/')
+                    room, store = rooms.cross_outcomes(self.room_id)
+                    deps = Deps(served.PROJECT, getattr(controller,'project_managers',None))
+                    if len(segments) == 5:
+                        result = store.create(room, data.get('text'), data.get('mode'), data.get('client_message_id'),
+                                              data.get('confirmed'), deps)
+                    elif len(segments) == 7 and segments[6] == 'approve':
+                        result = store.approve(room, segments[5], data.get('version'), data.get('confirmed'), deps)
+                    elif len(segments) == 7 and segments[6] == 'cancel':
+                        result = store.cancel(room, segments[5], data.get('version'))
+                    elif len(segments) == 9 and segments[6] == 'assignments' and segments[8] == 'issue':
+                        result = store.link_issue(room, segments[5], segments[7], data.get('version'), data.get('issue_url'), deps)
+                    else:
+                        raise ValueError('Unknown outcome action')
+                elif re.fullmatch(r'/api/rooms/[0-9a-f]{32}/discussion', self.path):
+                    from . import project as served
+                    from .room_outcomes import Deps
+                    rooms = getattr(controller,'rooms',None)
+                    if rooms is None: raise ValueError('Rooms are unavailable')
+                    room, store = rooms.cross_discussion(self.room_id)
+                    result = store.post(room, data.get('text'), data.get('client_message_id'), data.get('recipients'),
+                                        Deps(served.PROJECT, getattr(controller,'project_managers',None)))
+                elif re.fullmatch(r'/api/rooms/[0-9a-f]{32}/participants', self.path):
+                    rooms = getattr(controller,'rooms',None)
+                    if rooms is None: raise ValueError('Rooms are unavailable')
+                    from . import project as served, cross_rooms
+                    result = rooms.set_participants(self.room_id,data.get('version'),data.get('participants'),
+                        data.get('lead'),data.get('lead_override'),lambda: cross_rooms.candidate_index(served.PROJECT))
                 elif self.path in ('/api/teams/plan','/api/teams/launch'):
                     from . import launch
                     if self.path == '/api/teams/plan':
@@ -618,6 +763,8 @@ def create_server(controller, port=0, *, ipv6=False, token=None, desktop_lifecyc
                             '/api/work/reconcile':'reconcile'}[self.path])())
                 else: return self.reply(404, {'error':'Not found'})
                 return self.reply(200, result)
+            except CrossRoomError as error:
+                return self.reply(error.status, error.payload)
             except (Conflict, WorkConflict) as error:
                 return self.reply(409, {'error':str(error)})
             except (ValueError, UnicodeDecodeError) as error:

@@ -6,6 +6,7 @@ import sqlite3
 import threading
 
 from .controller import Controller
+from .sqlite_uri import readonly_uri
 from .store import BOTS
 
 
@@ -71,7 +72,7 @@ class PersonalSessions:
         database = original / 'native.sqlite'
         if not database.exists():
             return original
-        with closing(sqlite3.connect(database.resolve().as_uri() + '?mode=ro', uri=True)) as db:
+        with closing(sqlite3.connect(readonly_uri(database), uri=True)) as db:
             row = db.execute('SELECT thread_id FROM binding WHERE id=1').fetchone()
         return original if row is None or row[0] == thread_id else self.root / bot / f'desktop-{thread_id}'
 
@@ -92,7 +93,7 @@ class PersonalSessions:
                 status = 'not-started'
                 active = False
                 if db_path.is_file():
-                    uri = db_path.resolve().as_uri() + '?mode=ro'
+                    uri = readonly_uri(db_path)
                     with closing(sqlite3.connect(uri, uri=True)) as db:
                         db.row_factory = sqlite3.Row
                         participants = db.execute('SELECT bot,thread_id FROM participants').fetchall()

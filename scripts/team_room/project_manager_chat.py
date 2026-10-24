@@ -9,6 +9,7 @@ import threading
 
 from .native import NativePersonal
 from .registry import registry_path, resolve_project_manager
+from .sqlite_uri import readonly_uri
 
 
 class ProjectManagerSessions:
@@ -73,7 +74,7 @@ class ProjectManagerSessions:
                 if db_file.exists():
                     import sqlite3
                     try:
-                        con = sqlite3.connect(db_file.resolve().as_uri() + '?mode=ro', uri=True)
+                        con = sqlite3.connect(readonly_uri(db_file), uri=True)
                         row = con.execute('SELECT thread_id FROM binding WHERE id=1').fetchone()
                         con.close()
                         bound_tid = row[0] if row else None
@@ -86,6 +87,14 @@ class ProjectManagerSessions:
                 sess = NativePersonal(root, f'manager-{project_id}', thread_id, self.bridge, start_worker=True)
                 self.sessions[project_id] = sess
             return sess, mgr
+
+    def native_roots(self):
+        """Every durable outbox folder of project Manager chats on disk, including replaced-thread folders."""
+        base = self.project_root / '.bot-mode' / 'team-room-v1' / 'project-managers'
+        if not base.is_dir():
+            return []
+        return sorted({file.parent for pattern in ('*/native.sqlite', '*/thread-*/native.sqlite') for file in base.glob(pattern)})
+
 
     def close(self):
         with self.lock:

@@ -1,4 +1,5 @@
 import threading
+import time
 """Private, bounded project-status snapshot for Office project cards (CBM-095).
 
 One local writer (Fos through scripts/project_status.py) stores approved per-project
@@ -17,6 +18,10 @@ from urllib.parse import urlsplit
 
 SCHEMA = 1
 MAX_BYTES = 64 * 1024
+CACHE_MAX_BYTES = 256 * 1024  # derived cache envelope: snapshot plus per project watermarks
+WORK_MAX_AGE = 120  # seconds; worst case staleness = this + worker interval (60) + one read (~25 s) = ~205 s < 300 s (#125)
+WORK_FETCH = None  # tests inject a GitHub fetcher; None uses gh
+WORK_COUNTS = ('open', 'ready', 'in_progress', 'review', 'blocked', 'backlog', 'done', 'total')
 STATUSES = ('working', 'needs_decision', 'blocked', 'completed', 'paused', 'unknown', 'unconfigured')
 TASK_STATES = ('open', 'in_progress', 'blocked', 'done')
 DECISION_STATES = ('pending', 'answered', 'cancelled')
@@ -168,9 +173,24 @@ def _source(item, where):
     _text(item.get('error'), where + '.error', 120, True)
 
 
+def _work(item, where):
+    _fields(item, where, ('as_of', 'state'), WORK_COUNTS + ('sources', 'error'))
+    _time(item['as_of'], where + '.as_of'); _choice(item['state'], where + '.state', ('known', 'unknown'))
+    for key in WORK_COUNTS:
+        if key in item and (type(item[key]) is not int or not 0 <= item[key] <= 99999):
+            raise StatusError(f'{where}.{key} must be 0-99999')
+    if item['state'] == 'known' and any(key not in item for key in WORK_COUNTS):
+        raise StatusError(f'{where} needs every counter when known')
+    if not isinstance(item.get('sources', []), list) or len(item.get('sources', [])) > 6:
+        raise StatusError(f'{where}.sources must be a short list')
+    for source in item.get('sources', []):
+        _text(source, where + '.sources', 80)
+    _text(item.get('error'), where + '.error', 160, True)
+
+
 def _project(item, where):
     _fields(item, where, ('id', 'name', 'status', 'summary', 'source'),
-            ('manager', 'open_tasks', 'tracking', 'stale_after_hours', 'reports', 'tasks', 'decisions'))
+            ('manager', 'open_tasks', 'tracking', 'stale_after_hours', 'reports', 'tasks', 'decisions', 'work'))
     if not isinstance(item['id'], str) or not ID.match(item['id']):
         raise StatusError(f'{where}.id must match {ID.pattern}')
     _text(item['name'], where + '.name', 60); _choice(item['status'], where + '.status', STATUSES)
@@ -185,6 +205,8 @@ def _project(item, where):
     if type(hours) is not int or not 1 <= hours <= 720:
         raise StatusError(f'{where}.stale_after_hours must be 1-720')
     _source(item['source'], where + '.source')
+    if 'work' in item:
+        _work(item['work'], where + '.work')
     _items(item.get('reports', []), where + '.reports', 'reports', _report)
     _items(item.get('tasks', []), where + '.tasks', 'tasks', _task)
     _items(item.get('decisions', []), where + '.decisions', 'decisions', _decision)
@@ -205,7 +227,8 @@ def validate(data):
         raise StatusError('generated_by must be a bot id')
     _items(data['projects'], 'projects', 'projects', _project)
     _items(data.get('unassigned', []), 'unassigned', 'unassigned', _unassigned)
-    if len(json.dumps(data, ensure_ascii=False).encode('utf-8')) > MAX_BYTES:
+    # Measure what is stored: upsert and the cache write indent=2, so compact size would under-count (#98).
+    if len(json.dumps(data, ensure_ascii=False, indent=2).encode('utf-8')) + 1 > MAX_BYTES:
         raise StatusError(f'Snapshot exceeds {MAX_BYTES} bytes')
     return data
 
@@ -445,6 +468,46 @@ def parse_approved_manager_report(project_id, source_path, expected_project_name
     return proj_obj
 
 
+def work_counters(project_entry, at):
+    """Fresh work counters for one registry project from GitHub labels, ledger and task records (#259 source)."""
+    import sys
+    scripts = str(Path(__file__).resolve().parents[1])
+    if scripts not in sys.path:
+        sys.path.insert(0, scripts)
+    import status_sources
+    stamp = at.strftime('%Y-%m-%dT%H:%M:%SZ')
+    try:
+        _, summary = status_sources.project_status(project_entry, at, fetch=WORK_FETCH)
+    except Exception as error:
+        return {'as_of': stamp, 'state': 'unknown', 'error': (type(error).__name__ + ': project root unavailable')[:160]}
+    if summary['problems'] or summary['state'] == 'unknown':
+        reason = '; '.join(summary['problems']) or 'no GitHub labels, ledger or task records for this project'
+        return {'as_of': stamp, 'state': 'unknown', 'sources': summary['sources'][:6], 'error': reason[:160]}
+    by = summary['by_status']
+    count = lambda *names: sum(by.get(n, 0) for n in names)
+    work = {'as_of': stamp, 'state': 'known', 'ready': count('ready'), 'in_progress': count('in-progress'),
+            'review': count('review'), 'blocked': count('blocked'), 'backlog': count('backlog'), 'done': count('done'),
+            'total': summary['total'], 'sources': summary['sources'][:6]}
+    work['open'] = work['ready'] + work['in_progress'] + work['review'] + work['blocked'] + work['backlog']
+    return work
+
+
+def apply_work(p_obj, entry, at):
+    """Counters and a fresh source replace the stale Manager report numbers; the report stays as summary."""
+    if not entry or not entry.get('root'):
+        return
+    work = work_counters(entry, at)
+    p_obj['work'] = work
+    if work['state'] == 'known':
+        p_obj['open_tasks'] = work['open']
+        p_obj['source'] = {'kind': 'github' if any(s.startswith('github:') for s in work['sources']) else 'request_ledger',
+                           'label': 'Work status', 'available': True, 'as_of': work['as_of']}
+    else:
+        p_obj['open_tasks'] = None
+        p_obj['source'] = {'kind': 'local', 'label': 'Work status', 'available': False, 'as_of': work['as_of'],
+                           'error': work['error'][:120]}
+
+
 def assemble_derived_read_model(project_root, sources_map=None):
     project_root = Path(project_root).resolve()
     cos_res = read(project_root)
@@ -581,6 +644,7 @@ def assemble_derived_read_model(project_root, sources_map=None):
             if 'tracking' in cos_p:
                 p_obj['tracking'] = copy.deepcopy(cos_p['tracking'])
 
+        apply_work(p_obj, reg_projects.get(pid), datetime.now(timezone.utc))
         derived_projects.append(p_obj)
 
     snapshot = {
@@ -600,6 +664,8 @@ def assemble_derived_read_model(project_root, sources_map=None):
 
     cache_file = derived_cache_path(project_root)
     cache_file.parent.mkdir(parents=True, exist_ok=True)
+    if len(json.dumps(cache_envelope, ensure_ascii=False, indent=2).encode('utf-8')) > CACHE_MAX_BYTES:
+        raise StatusError('Derived read model cache exceeds its size limit')
     handle, temporary = tempfile.mkstemp(dir=cache_file.parent, prefix='derived-read-model-', suffix='.tmp')
     with os.fdopen(handle, 'w', encoding='utf-8', newline='\n') as out:
         json.dump(cache_envelope, out, ensure_ascii=False, indent=2)
@@ -612,7 +678,7 @@ def read_model(project_root, sources_map=None):
     cache_file = derived_cache_path(project_root)
     if cache_file.exists():
         try:
-            if cache_file.stat().st_size <= MAX_BYTES:
+            if cache_file.stat().st_size <= CACHE_MAX_BYTES:
                 raw = json.loads(cache_file.read_text(encoding='utf-8'))
                 snap = raw.get('snapshot') if isinstance(raw, dict) and 'snapshot' in raw else raw
                 data = validate(snap)
@@ -674,7 +740,9 @@ class ReadModelWorker(threading.Thread):
             if src:
                 current_sigs[pid] = self._signature(src)
 
-        if current_sigs != self._last_signatures or not derived_cache_path(self.project_root).exists():
+        cache = derived_cache_path(self.project_root)
+        aged = not cache.exists() or time.time() - cache.stat().st_mtime > WORK_MAX_AGE
+        if current_sigs != self._last_signatures or aged:
             try:
                 assemble_derived_read_model(self.project_root, self.sources_map)
                 self._last_signatures = current_sigs
