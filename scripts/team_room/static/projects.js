@@ -457,7 +457,7 @@
       sumP.setAttribute('aria-label',p.summary);
     }
     c.append(sumP);
-    const facts=el('div','pc-muted',p.manager||'');
+    const facts=el('div','pc-muted pc-manager-line');{const mb=managerBot(p.id);if(mb){const face=el('span','avatar');officeAvatars.fill(face,{key:mb.bot_key,projectId:mb.project_id,botId:mb.bot_id,name:mb.name||mb.bot_id});facts.append(face);}facts.append(document.createTextNode(p.manager||(mb&&(mb.name||mb.bot_id))||''));}
     c.append(facts);
     c.append(projectMetrics(p));
     const rs=[...(p.reports||[])].sort((a,b)=>new Date(b.at)-new Date(a.at));
@@ -473,6 +473,7 @@
     return c;
   }
 
+  function managerBot(pid){return registryFailed?null:officeAvatars.managerOf(registryData,pid);}
   function rosterTeams(pid){return registryFailed?null:(registryData.teams||[]).filter(team=>team.project_id===pid);}
   function observation(bot){
     if(agentFailed)return null;
@@ -514,7 +515,7 @@
       for(const member of team.members||[]){
         const bot={...member,project_id:p.id};
         const card=el('article','project-agent-card'),button=el('button','project-agent-open');button.type='button';button.dataset.botKey=bot.bot_key;
-        const avatar=el('span','avatar',(bot.display_name||bot.bot_id).split(/\s+/).map(x=>x[0]).slice(0,2).join(''));avatar.setAttribute('aria-hidden','true');
+        const avatar=el('span','avatar');officeAvatars.fill(avatar,{key:bot.bot_key,projectId:bot.project_id,botId:bot.bot_id,name:bot.display_name||bot.bot_id});
         button.append(avatar,el('strong',null,bot.display_name||bot.bot_id),el('span','pc-muted',officeI18n.t(bot.role||'Unknown')),
           el('span','pc-status',officeI18n.t(isWorking(bot)?'Working':'Unknown')));
         button.onclick=()=>window.officeAgents.show(bot.bot_key);card.append(button);
@@ -977,7 +978,7 @@
     const heading=document.getElementById('pm-chat-title');
     if(heading){
       heading.replaceChildren();
-      heading.append(el('h2','pc-h2','Manager Chat · '+mgrName));
+      const h2=el('h2','pc-h2','Manager Chat · '+mgrName);if(st?.manager?.bot_key){const face=el('span','avatar');officeAvatars.fill(face,{key:st.manager.bot_key,name:mgrName});h2.prepend(face);}heading.append(h2);
       if(st){
         const bar=el('div','pm-chat-status-bar');
         const statusTxt = st.hold ? officeI18n.t('Held') : (st.status || (st.available ? officeI18n.t('Idle') : officeI18n.t('Unavailable')));

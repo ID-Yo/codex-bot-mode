@@ -1,0 +1,16 @@
+/* Agent avatars (avatars.js) and the card heading that shows them. Loaded last so it wins over the older layers. */
+.avatar.avatar-art{background:transparent;padding:0;overflow:hidden;border-radius:50%;transform:none;box-shadow:inset 0 0 0 1px rgba(20,32,26,.14);flex-shrink:0}
+.avatar-art svg{display:block;width:100%;height:100%}
+.agent-card .agent-card-heading{display:block}
+.agent-card .agent-card-heading .avatar{display:block;width:52px;height:52px;margin:0 0 10px;background:transparent}
+.agent-card .agent-card-heading>span:last-child{display:block;min-width:0}
+.agent-card .agent-card-heading strong{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;line-clamp:2;overflow:hidden;overflow-wrap:normal;word-break:normal;hyphens:manual;font-size:15px;line-height:1.25;text-overflow:ellipsis}
+.agent-card .agent-card-heading small{display:block;margin-top:3px;font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.agent-card .agent-scope{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;line-clamp:2;overflow:hidden;overflow-wrap:normal;word-break:normal;margin:10px 0}
+.agent-detail-who{display:flex;align-items:center;gap:12px;min-width:0}
+.agent-detail-who .avatar{width:44px;height:44px}
+.agent-detail-who h2{margin:0;overflow-wrap:normal;word-break:normal}
+.project-agent-open .avatar{width:36px;height:36px}
+.pc-manager-line{display:flex;align-items:center;gap:8px}
+.pc-manager-line .avatar{width:24px;height:24px}
+.pc-h2 .avatar{display:inline-flex;vertical-align:middle;width:28px;height:28px;margin-right:8px}

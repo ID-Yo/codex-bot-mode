@@ -430,12 +430,27 @@ def _build_overview(config_file, current_project_id=None, current_project_root=N
                         'is_current': True,
                         'applicable': False
                     })
-    return {
+    overview = {
         'status': 'ok',
         'projects': all_projects,
         'bots': all_bots,
         'teams': all_teams
     }
+    overview['managers'] = project_managers(overview)
+    return overview
+
+
+def project_managers(overview):
+    """{project id: Manager bot_key} for every project that has exactly one resolvable project Manager.
+
+    Uses manager_from_overview, so the pages show the same Manager that Manager Chat and Monitor deliveries use:
+    exact Manager role, a project Manager preferred over team Managers (*-manager), no guess when ambiguous."""
+    found = {}
+    for pid in dict.fromkeys(t.get('project_id') for t in overview.get('teams', [])):
+        resolved = manager_from_overview(overview, pid)
+        if resolved.get('status') == 'ok' and resolved.get('bot_key'):
+            found[pid] = resolved['bot_key']
+    return found
 
 
 def resolve_bot_thread(config_file, bot_key, current_project_root=None):

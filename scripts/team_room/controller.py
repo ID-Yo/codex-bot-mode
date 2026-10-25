@@ -83,6 +83,7 @@ class Controller:
                         # An unturned thread has no persisted rollout in this build.
                         self._new_participant(p['bot'], bindings, bindings_file)
                 self._ensure_participants()
+                self._prune_owned_threads(bindings, bindings_file)
             else:
                 for bot in self.bots:
                     self._new_participant(bot, bindings, bindings_file)
@@ -124,6 +125,42 @@ class Controller:
             db.execute('INSERT OR REPLACE INTO participants(bot,thread_id,cwd) VALUES(?,?,?)', (bot, tid, str(cwd)))
         self.language_bindings[bot] = tid
         self.language_bindings_file.write_text(json.dumps(self.language_bindings, indent=2), encoding='utf-8')
+        self._prune_owned_threads(bindings, bindings_file)
+
+    def _prune_owned_threads(self, bindings, bindings_file):
+        """Drop owned-thread entries that nothing needs any more (#319).
+
+        Every Start replaces unturned participant threads (Desktop has no rollout for a thread without a turn), which
+        left the old ids behind. An id is kept while it is a current participant, a language binding, or referenced by
+        any delivery or work step, whatever its state, so ownership of something that may still be active is never
+        dropped. Only this file is edited; no Desktop thread is touched. Whatever is pruned is logged next to it.
+        If the store cannot be read nothing is pruned. The file is the single source of truth: it is read again here,
+        because _new_participant and _ensure_participants each write their own copy of the map, and the caller's dict
+        is brought in line with the result."""
+        try:
+            current = json.loads(bindings_file.read_text())
+            if not isinstance(current, dict):
+                return
+        except (OSError, ValueError):
+            return  # memory and disk stay unchanged
+        bindings.clear()
+        bindings.update(current)
+        try:
+            keep = {r['thread_id'] for r in self.store.rows(
+                'SELECT thread_id FROM participants UNION SELECT thread_id FROM deliveries UNION SELECT thread_id FROM work_steps')
+                if r['thread_id']}
+        except Exception:
+            return
+        keep |= {t for t in self.language_bindings.values() if isinstance(t, str)}
+        stale = [t for t in bindings if t not in keep]
+        if not stale:
+            return
+        for thread_id in stale:
+            del bindings[thread_id]
+        bindings_file.write_text(json.dumps(bindings, indent=2), encoding='utf-8')
+        with open(self.store.root / 'owned-threads-pruned.log', 'a', encoding='utf-8') as log:
+            log.write('%s pruned %d unreferenced owned thread(s): %s\n' % (
+                time.strftime('%Y-%m-%dT%H:%M:%S%z'), len(stale), ', '.join(stale)))
 
     def _ensure_participants(self):
         # Upgrade an old roster only after all original work is terminal. Never
