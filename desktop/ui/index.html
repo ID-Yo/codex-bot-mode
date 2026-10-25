@@ -12,78 +12,53 @@
     <main class="shell">
       <header class="topbar">
         <div class="brand-mark" aria-hidden="true"><span></span></div>
-        <div class="brand-copy">
-          <p class="eyebrow">LOCAL CONTROLLER</p>
-          <h1>Codex Office</h1>
-        </div>
-        <span class="version">v0.1.3</span>
+        <h1>Codex Office</h1>
+        <span class="version">v0.1.6</span>
+        <span id="status-badge" class="status-badge" data-state="unverified" role="status">
+          <span class="status-dot" aria-hidden="true"></span>
+          <span id="status-label">Checking</span>
+        </span>
       </header>
 
-      <section class="service-panel" aria-labelledby="service-title">
-        <div class="service-heading">
-          <div>
-            <p class="eyebrow">SERVICE</p>
-            <h2 id="service-title">Office runtime</h2>
-          </div>
-          <span id="status-badge" class="status-badge" data-state="unverified" role="status">
-            <span class="status-dot" aria-hidden="true"></span>
-            <span id="status-label">Checking</span>
-          </span>
-        </div>
-        <p id="status-detail" class="status-detail">Checking the authenticated local service…</p>
-        <div class="endpoint-row">
-          <span class="endpoint-light" aria-hidden="true"></span>
-          <span>Local endpoint</span>
-          <code>http://localhost:24242</code>
-        </div>
-      </section>
-
-      <section class="setup-panel" aria-labelledby="project-title">
-        <div class="section-heading">
-          <div>
-            <p class="eyebrow">WORKSPACE</p>
-            <h2 id="project-title">Office project</h2>
-          </div>
-          <button id="choose-project" class="button button-quiet" type="button">Choose folder</button>
-        </div>
-        <p id="project-path" class="path-value">Choose the project that contains your Office profiles.</p>
-        <div id="codex-row" class="runtime-row">
-          <div class="runtime-copy">
-            <span class="runtime-title">Codex Desktop runtime</span>
-            <span id="codex-path" class="runtime-path">Looking for the installed Codex runtime…</span>
-          </div>
-          <button id="choose-codex" class="text-button" type="button">Locate</button>
-        </div>
-      </section>
+      <p id="status-detail" class="status-detail">Checking the authenticated local service…</p>
 
       <section class="actions-panel" aria-label="Office controls">
         <div class="button-row">
           <button id="start" class="button button-primary" type="button">Start</button>
           <button id="stop" class="button button-secondary" type="button">Stop</button>
           <button id="restart" class="button button-secondary" type="button">Restart</button>
+          <button id="open-office" class="button button-open" type="button" title="Open http://localhost:24242 in Chrome">
+            Open in Chrome <span class="open-icon" aria-hidden="true">↗</span>
+          </button>
         </div>
-        <button id="open-office" class="button button-open" type="button">
-          <span class="open-icon" aria-hidden="true">↗</span>
-          Open Office in Chrome
-        </button>
-        <button id="cancel-stop" class="button button-cancel" type="button" hidden>Cancel pending stop</button>
-        <button id="recover-startup" class="button button-cancel" type="button" hidden>Recheck owned service</button>
-        <button id="preserve-startup" class="button button-cancel" type="button" hidden>Leave child running and quit controller…</button>
-        <button id="clear-preserved" class="button button-cancel" type="button" hidden>Clear safety lock…</button>
-        <button id="quit-preserved" class="button button-cancel" type="button" hidden>Quit controller and keep safety lock…</button>
+        <div class="recovery-row">
+          <button id="cancel-stop" class="button button-cancel" type="button" hidden>Cancel pending stop</button>
+          <button id="recover-startup" class="button button-cancel" type="button" hidden>Recheck owned service</button>
+          <button id="preserve-startup" class="button button-cancel" type="button" hidden>Leave child running and quit controller…</button>
+          <button id="clear-preserved" class="button button-cancel" type="button" hidden>Clear safety lock…</button>
+          <button id="quit-preserved" class="button button-cancel" type="button" hidden>Quit controller and keep safety lock…</button>
+        </div>
         <p id="action-message" class="action-message" aria-live="polite"></p>
       </section>
 
-      <section class="logs-panel" aria-labelledby="logs-title">
-        <div class="section-heading logs-heading">
-          <div>
-            <p class="eyebrow">LOCAL DIAGNOSTICS</p>
-            <h2 id="logs-title">Recent activity</h2>
-          </div>
-          <button id="refresh" class="text-button" type="button">Refresh</button>
+      <section class="setup-panel" aria-label="Office project and Codex runtime">
+        <div class="setup-row">
+          <span class="setup-label">Project</span>
+          <span id="project-path" class="path-value">Choose the project that contains your Office profiles.</span>
+          <button id="choose-project" class="text-button" type="button">Choose</button>
         </div>
-        <pre id="logs" class="logs" aria-live="polite">No verified service log is available.</pre>
+        <div id="codex-row" class="setup-row">
+          <span class="setup-label">Codex</span>
+          <span id="codex-path" class="path-value">Looking for the installed Codex runtime…</span>
+          <button id="choose-codex" class="text-button" type="button">Locate</button>
+        </div>
       </section>
+
+      <details id="logs-details" class="logs-panel">
+        <summary><span class="logs-title">Recent activity</span><span id="logs-last" class="logs-last"></span></summary>
+        <div class="logs-tools"><button id="refresh" class="text-button" type="button">Refresh</button></div>
+        <pre id="logs" class="logs" aria-live="polite">No verified service log is available.</pre>
+      </details>
 
       <footer class="footer">
         <span>Closing this window keeps Office running in the tray.</span>

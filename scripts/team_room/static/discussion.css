@@ -1,0 +1,26 @@
+/* Cross-project room discussion (#264). The local journal, status bar and composer give way to this panel. */
+#room-view[data-cross-discussion=true]>.statusbar,#room-view[data-cross-discussion=true] #journal,#room-view[data-cross-discussion=true] #work-status,#room-view[data-cross-discussion=true] #intent-status,#room-view[data-cross-discussion=true] #provisional,
+#room-view[data-cross-discussion=true] .composer-panel>:not(#room-outcomes):not(#rd-form){display:none}
+#room-view[data-cross-discussion=true]{grid-template-rows:auto minmax(60px,1fr) auto}
+.rd[hidden],.rd-form[hidden]{display:none}
+.rd{display:grid;gap:8px;padding:6px 0;min-width:0}
+.rd-note{margin:0;font-size:11px;color:var(--muted)}
+.rd-list{list-style:none;margin:0;padding:0;display:grid;gap:8px;min-width:0}
+.rd-empty{font-size:12px;color:var(--muted);padding:12px 0}
+.rd-item{padding:9px 11px;border:1px solid var(--line);border-radius:8px;background:var(--paper);min-width:0}
+.rd-item[data-kind=owner]{border-left:3px solid var(--accent)}
+.rd-head{display:flex;gap:8px;align-items:baseline;flex-wrap:wrap;font-size:11px}.rd-head small,.rd-time{color:var(--muted);font-size:10px}.rd-time{margin-left:auto}
+.rd-text{margin:4px 0 0;font-size:12px;line-height:1.55;white-space:pre-wrap;overflow-wrap:anywhere}
+.rd-deliveries{list-style:none;margin:8px 0 0;padding:0;display:flex;gap:6px 12px;flex-wrap:wrap;font-size:10px}
+.rd-delivery{display:flex;gap:6px;align-items:center;flex-wrap:wrap;min-width:0}
+.rd-state{padding:1px 7px;border-radius:9px;background:var(--soft);border:1px solid var(--line);font-size:9px}
+.rd-delivery[data-state=failed] .rd-state,.rd-delivery[data-state=blocked] .rd-state{border-color:var(--hot);color:var(--hot);background:var(--hotbg)}
+.rd-delivery[data-state=completed] .rd-state{border-color:var(--accent);color:var(--accent)}
+.rd-reason{flex-basis:100%;color:var(--muted);font-size:10px;overflow-wrap:anywhere}
+.rd-form{display:grid;gap:8px;padding:8px 0 0}
+.rd-who{margin:0;padding:0;border:0;display:flex;flex-wrap:wrap;gap:6px 14px;min-width:0}.rd-who legend{font-size:10px;color:var(--muted);padding:0;margin-bottom:4px}
+.rd-recipient{display:flex;gap:5px;align-items:center;font-size:11px;min-width:0;overflow-wrap:anywhere}
+.rd-form textarea{width:100%;font-size:12px;resize:vertical}
+.rd-actions{display:flex;gap:8px}
+.rd-error{margin:0;min-height:0;font-size:11px;color:var(--hot);overflow-wrap:anywhere}.rd-error:empty{display:none}
+@media(max-width:700px){.rd-time{margin-left:0}}

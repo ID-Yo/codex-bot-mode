@@ -180,6 +180,8 @@ context.window.window = context.window;
 context.window.__TAURI__ = { core: { invoke: () => Promise.resolve({}) } };
 
 vm.createContext(context);
+vm.runInContext(fs.readFileSync(path.join(path.dirname(projectsJsPath), 'i18n.js'), 'utf-8'), context);
+context.officeI18n = context.window.officeI18n;
 
 // Load room.js
 const roomCode = fs.readFileSync(roomJsPath, 'utf-8');
@@ -491,6 +493,8 @@ context.window.window = context.window;
 context.window.__TAURI__ = { core: { invoke: () => Promise.resolve({}) } };
 
 vm.createContext(context);
+vm.runInContext(fs.readFileSync(path.join(path.dirname(projectsJsPath), 'i18n.js'), 'utf-8'), context);
+context.officeI18n = context.window.officeI18n;
 
 // Load room.js
 const roomCode = fs.readFileSync(roomJsPath, 'utf-8');

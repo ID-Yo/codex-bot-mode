@@ -10,7 +10,7 @@ from .controller import Conflict
 from .store import ProcessLock
 from .transport import safe_error
 from pathlib import Path
-from .work import Uncertain
+from .work import TooLarge, Uncertain
 from .images import Images, MARKER as IMAGE_MARKER
 
 
@@ -90,12 +90,34 @@ class NativePersonal:
         self.worker = threading.Thread(target=self._worker, daemon=True)
         if start_worker: self.worker.start()
 
+    # Desktop refuses a read whose answer is too large (long Verifier or Reviewer threads); ask for less, never fail.
+    HISTORY_READS = ((10, True, 20000), (4, True, 4000), (2, True, 1000), (1, False, 1))
+
     def _history(self):
+        failure = None
+        for turns, outputs, chars in self.HISTORY_READS:
+            try:
+                result = self.bridge.call('read_thread', {'threadId':self.thread_id,'hostId':'local',
+                    'turnLimit':turns,'includeOutputs':outputs,'maxOutputCharsPerItem':chars})
+            except TooLarge as error:
+                failure = error
+                continue
+            if result.get('thread',{}).get('id') != self.thread_id:
+                raise RuntimeError('Desktop thread identity mismatch')
+            return result
+        raise failure
+
+    def shutdown_view(self):
+        """What shutdown inspection needs: the durable outbox and a light status read, never the turn history."""
         result = self.bridge.call('read_thread', {'threadId':self.thread_id,'hostId':'local',
-            'turnLimit':10,'includeOutputs':True,'maxOutputCharsPerItem':20000})
+            'turnLimit':1,'includeOutputs':False,'maxOutputCharsPerItem':1})
         if result.get('thread',{}).get('id') != self.thread_id:
             raise RuntimeError('Desktop thread identity mismatch')
-        return result
+        with self.lock:
+            rows = [dict(r) for r in self.db.execute('SELECT id,state FROM outbox ORDER BY seq')]
+        return {'personal_thread_id':self.thread_id,
+                'native_thread_status':result.get('thread',{}).get('status',{}).get('type'),
+                'deliveries':rows}
 
     @staticmethod
     def busy(history):

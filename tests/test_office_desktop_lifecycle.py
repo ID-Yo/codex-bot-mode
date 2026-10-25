@@ -208,7 +208,8 @@ class DesktopLifecycleTests(unittest.TestCase):
         self.assertEqual(inspect_shutdown(FakeController(), personal, None)['safety'], 'unknown')
 
         personal.native_bridge = Bridge({'thread': {'id': 'thread-one', 'status': {'type': 'active'}}})
-        self.assertEqual(inspect_shutdown(FakeController(), personal, None)['safety'], 'busy')
+        # An active turn that Office did not start does not block Stop; Office's own outbox does.
+        self.assertEqual(inspect_shutdown(FakeController(), personal, None)['safety'], 'safe')
 
         personal.native_bridge = Bridge({'thread': {'id': 'thread-one', 'status': {'type': 'idle'}}})
         self.assertEqual(inspect_shutdown(FakeController(), personal, None)['safety'], 'safe')
@@ -264,6 +265,7 @@ class DesktopLifecycleTests(unittest.TestCase):
         self.assertFalse(lifecycle.cancel_drain())
         self.assertTrue(lifecycle.draining)
         self.assertTrue(lifecycle.stop_requested)
+        self.assertTrue(lifecycle.stop_committed)
 
     def test_legacy_shutdown_flag_cli_is_removed(self):
         from scripts.team_room import __main__ as entry
@@ -285,6 +287,37 @@ class DesktopLifecycleTests(unittest.TestCase):
         self.assertNotIn('desktop-secret-token', combined)
         self.assertNotIn('abc123', combined)
         self.assertNotIn('liveSecret', combined)
+
+    def test_begin_drain_returns_false_when_already_draining_or_stopped(self):
+        lifecycle = self.lifecycle()
+        self.assertTrue(lifecycle.begin_drain())
+        # Second call while draining returns False
+        self.assertIs(lifecycle.begin_drain(), False)
+        lifecycle.cancel_drain()
+        self.assertFalse(lifecycle.draining)
+
+    def test_begin_drain_returns_false_when_inflight_times_out(self):
+        lifecycle = self.lifecycle()
+        self.assertTrue(lifecycle.admit_operation())
+        # Drain with 0.05s timeout while operation is in-flight returns False
+        self.assertIs(lifecycle.begin_drain(timeout=0.05), False)
+        self.assertFalse(lifecycle.draining)
+        lifecycle.end_operation()
+
+    def test_watch_operation_does_not_block_drain_and_rejects_when_draining(self):
+        from scripts.office_desktop import LifecycleBusy
+        lifecycle = self.lifecycle()
+        # Under watch_operation, inflight is NOT incremented
+        with lifecycle.watch_operation():
+            self.assertEqual(lifecycle._inflight, 0)
+            # Drain succeeds immediately even while watch_operation is active
+            gen = lifecycle.begin_drain(timeout=1)
+            self.assertIsInstance(gen, int)
+            self.assertTrue(lifecycle.draining)
+        # Once draining, new watch_operation raises LifecycleBusy
+        with self.assertRaises(LifecycleBusy):
+            with lifecycle.watch_operation():
+                pass
 
 
 if __name__ == '__main__':

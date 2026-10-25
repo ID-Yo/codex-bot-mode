@@ -9,10 +9,13 @@ Configuration file locations (strictly portable and local):
 2. Project-local state: <served.PROJECT>/.bot-mode/local/office-project-roots.json
 Never scans arbitrary filesystem paths or uses hardcoded absolute task paths.
 """
+import copy
 import json
 import os
 from pathlib import Path
 import re
+import threading
+import time
 
 from . import manifest, roster
 
@@ -129,7 +132,61 @@ def _get_display_name(proot, workspace, default_role):
     return default_role
 
 
+OVERVIEW_TTL = 15.0  # safety net for agent.yaml display names, which the fingerprint does not stat
+_OVERVIEW_CACHE = {}
+_OVERVIEW_LOCK = threading.Lock()
+
+
+def clear_overview_cache():
+    with _OVERVIEW_LOCK:
+        _OVERVIEW_CACHE.clear()
+
+
+def _stat(file):
+    try:
+        info = os.stat(file)
+        return (info.st_mtime_ns, info.st_size)
+    except OSError:
+        return None
+
+
+def _fingerprint(config_file, current_project_root):
+    """Stat of the registry file and of every roster and bindings file the overview reads."""
+    roots = []
+    try:
+        raw = json.loads(Path(config_file).read_text(encoding="utf-8")) if config_file else {}
+        listed = raw.get("projects") if isinstance(raw, dict) else None
+        # Any other shape is reported by validate_config; the fingerprint then covers the registry file alone.
+        roots = [p.get("root") for p in listed if isinstance(p, dict) and isinstance(p.get("root"), str)] if isinstance(listed, list) else []
+    except (OSError, ValueError):
+        pass
+    if current_project_root:
+        roots.append(str(current_project_root))
+    files = [config_file] if config_file else []
+    for root in roots:
+        files.extend((Path(root) / ".bot-mode" / "roster.json", Path(root) / ".bot-mode" / "local" / "bindings.json"))
+    return tuple((str(f), _stat(f)) for f in files)
+
+
 def build_overview(config_file, current_project_id=None, current_project_root=None):
+    """Registry overview, reused while the registry, rosters and bindings are unchanged (stat fingerprint).
+
+    Building it resolves and parses every project, which costs a noticeable share of a core when the Office pages
+    poll it. Each caller gets its own copy.
+    """
+    key = (str(config_file), current_project_id, str(current_project_root))
+    fingerprint = _fingerprint(config_file, current_project_root)
+    with _OVERVIEW_LOCK:
+        hit = _OVERVIEW_CACHE.get(key)
+        if hit and hit[0] == fingerprint and time.monotonic() - hit[1] < OVERVIEW_TTL:
+            return copy.deepcopy(hit[2])
+    value = _build_overview(config_file, current_project_id, current_project_root)
+    with _OVERVIEW_LOCK:
+        _OVERVIEW_CACHE[key] = (fingerprint, time.monotonic(), copy.deepcopy(value))
+    return value
+
+
+def _build_overview(config_file, current_project_id=None, current_project_root=None):
     reg = load_registry(config_file)
     if reg['status'] != 'ok':
         current_projects = []
@@ -181,6 +238,13 @@ def build_overview(config_file, current_project_id=None, current_project_root=No
     all_teams = []
     all_projects = []
     seen_roots = set()
+    names = {}  # each agent.yaml is resolved and parsed once per overview
+
+    def name_of(proot, workspace, default_role):
+        key = (proot, workspace, default_role)
+        if key not in names:
+            names[key] = _get_display_name(proot, workspace, default_role)
+        return names[key]
 
     for p in reg['projects']:
         pid = p.get('id')
@@ -270,7 +334,7 @@ def build_overview(config_file, current_project_id=None, current_project_root=No
                 continue
             bot_id = part.get('bot')
             role = part.get('role') or bot_id.title()
-            display_name = _get_display_name(proot, part.get('workspace') or '', role)
+            display_name = name_of(proot, part.get('workspace') or '', role)
             team_name = part.get('team')
             tid = part.get('thread_id')
             all_bots.append({
@@ -303,7 +367,7 @@ def build_overview(config_file, current_project_id=None, current_project_root=No
                         'bot_key': f'{pid}:{part.get("bot")}',
                         'bot_id': part.get('bot'),
                         'role': part.get('role'),
-                        'display_name': _get_display_name(proot, part.get('workspace') or '', part.get('role') or part.get('bot').title()),
+                        'display_name': name_of(proot, part.get('workspace') or '', part.get('role') or part.get('bot').title()),
                         'thread_id': part.get('thread_id'),
                         'link': roster.link(part.get('thread_id'))
                     }
@@ -387,12 +451,18 @@ def resolve_project_manager(config_file, project_id, current_project_root=None):
     """Resolve exactly one appointed Manager bot details and thread_id for a given project_id.
 
     Reuses build_overview safety, containment, and manifest display name checks.
-    Fails closed if there is none, multiple managers, symlink escape, or missing project.
+    Fails closed if there is none, several project Managers (team Managers named *-manager do not count),
+    symlink escape, or missing project.
     Never returns private filesystem roots to caller.
     """
     if not project_id or not isinstance(project_id, str):
         return {'status': 'invalid_id', 'error': 'Valid project_id required'}
     overview = build_overview(config_file, current_project_root=current_project_root)
+    return manager_from_overview(overview, project_id)
+
+
+def manager_from_overview(overview, project_id):
+    """Same result as resolve_project_manager for an overview that was already built."""
     if overview.get('status') != 'ok':
         return {'status': overview.get('status') or 'error', 'error': overview.get('error') or 'Registry error'}
 
@@ -411,6 +481,9 @@ def resolve_project_manager(config_file, project_id, current_project_root=None):
     mgrs = [b for b in overview.get('bots', []) if b.get('project_id') == project_id and b.get('role') == 'Manager']
     if not mgrs:
         return {'status': 'no_manager', 'error': f'No active Manager appointed for {pname}'}
+    # A team Manager (bot id ending in -manager, e.g. marketing-manager) leads a team, not the project.
+    # It is the project Manager only when no other Manager exists.
+    mgrs = [b for b in mgrs if not str(b.get('bot_id') or '').endswith('-manager')] or mgrs
     if len(mgrs) > 1:
         return {'status': 'multiple_managers', 'error': f'Multiple Managers found for {pname}; manual review required'}
 

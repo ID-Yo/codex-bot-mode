@@ -1,0 +1,54 @@
+{
+  "projects": [
+    {
+      "id": "example-shop",
+      "name": "Example Shop",
+      "status": "needs_decision",
+      "summary": "Checkout redesign is in review; one pricing decision is open.",
+      "manager": "Manager",
+      "open_tasks": 3,
+      "tracking": {
+        "authority": "github",
+        "url": "https://github.com/example-org/example-shop/issues"
+      },
+      "source": {
+        "kind": "fos_relay",
+        "label": "Manager report",
+        "available": true,
+        "url": "codex://threads/00000000-0000-4000-8000-000000000001",
+        "as_of": "2026-10-14T08:40:00Z"
+      },
+      "stale_after_hours": 48,
+      "reports": [
+        {
+          "id": "rpt-2026-10-14-1",
+          "at": "2026-10-14T08:40:00Z",
+          "from": "Manager",
+          "text": "Checkout redesign delivered for independent review; tests pass locally.",
+          "source_url": "codex://threads/00000000-0000-4000-8000-000000000001"
+        }
+      ],
+      "tasks": [
+        {
+          "id": "#12",
+          "title": "Checkout redesign",
+          "state": "in_progress",
+          "url": "https://github.com/example-org/example-shop/issues/12"
+        }
+      ],
+      "decisions": [
+        {
+          "id": "dec-pricing-1",
+          "question": "Keep the free-shipping threshold at 50?",
+          "context": "Two options are prepared with impact estimates.",
+          "requested_by": "Manager",
+          "requested_at": "2026-10-14T08:40:00Z",
+          "due": null,
+          "urgency": "normal",
+          "state": "pending",
+          "source_url": "https://github.com/example-org/example-shop/issues/12"
+        }
+      ]
+    }
+  ]
+}

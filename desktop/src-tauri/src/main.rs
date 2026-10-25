@@ -15,6 +15,8 @@ use tauri::{
     tray::TrayIconBuilder,
     AppHandle, Emitter, Manager, State, WindowEvent,
 };
+mod liveness;
+
 use tauri_plugin_opener::OpenerExt;
 use tauri_plugin_shell::{process::CommandEvent, ShellExt};
 
@@ -365,6 +367,19 @@ fn status_for(controller: &OfficeController, settings: &Settings) -> (ServiceSta
         };
         status.can_start = !child_running && !child_starting && settings.codex_path.is_some();
         return (status, Vec::new());
+    }
+    if !child_running && !child_starting {
+        // The previous controller's service is gone (forced stop, upgrade): archive its descriptor instead of staying Unverified.
+        let archived = checked_existing_runtime(project).ok().and_then(|runtime| {
+            liveness::archive_stale_descriptor(&runtime, std::time::SystemTime::now(),
+                liveness::process_state, liveness::port_state).ok().flatten()
+        });
+        if archived.is_some() {
+            let mut status = status_template("notStarted",
+                "The previous Office service is no longer running; its stale descriptor was archived.");
+            status.can_start = settings.codex_path.is_some();
+            return (status, Vec::new());
+        }
     }
     let descriptor = match read_descriptor_at_port(project, controller.expected_port()) {
         Ok(descriptor) => descriptor,
@@ -1081,25 +1096,31 @@ fn open_default_browser(app: AppHandle, controller: State<'_, Arc<OfficeControll
     app.opener().open_url(OFFICE_URL, None::<&str>).map_err(display_error)
 }
 
+/// Idle states from which the controller may quit without stopping anything.
+fn is_quit_ready(state: &str) -> bool {
+    matches!(state, "notConfigured" | "notStarted" | "stopped")
+}
+
+/// Stops an owned service if there is one and marks the controller safe to exit. Fails while Office is busy or draining.
+fn prepare_quit(controller: &OfficeController) -> Result<(), String> {
+    let _action = controller.action.lock().map_err(display_error)?;
+    let settings = controller.settings()?;
+    let (status, _) = status_for(controller, &settings);
+    let final_status = if is_quit_ready(&status.state) { status } else { stop_inner(controller)? };
+    if !is_quit_ready(&final_status.state) {
+        return Err("Office is busy or still draining; the controller remains in the tray.".to_owned());
+    }
+    let mut child = controller.child_state()?;
+    child.safe_to_exit = true;
+    Ok(())
+}
+
 #[tauri::command]
 async fn quit_application(app: AppHandle, controller: State<'_, Arc<OfficeController>>) -> Result<(), String> {
     let controller = controller.inner().clone();
     let app_exit = app.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let _action = controller.action.lock().map_err(display_error)?;
-        let settings = controller.settings()?;
-        let (status, _) = status_for(&controller, &settings);
-        let final_status = if status.state == "notConfigured"
-            || status.state == "notStarted" || status.state == "stopped" {
-            status
-        } else {
-            stop_inner(&controller)?
-        };
-        if final_status.state != "notStarted" && final_status.state != "stopped" {
-            return Err("Office is busy or still draining; the controller remains in the tray.".to_owned());
-        }
-        let mut child = controller.child_state()?;
-        child.safe_to_exit = true;
+        prepare_quit(&controller)?;
         std::thread::spawn(move || {
             std::thread::sleep(Duration::from_millis(250));
             app_exit.exit(0);
@@ -1430,6 +1451,103 @@ mod tests {
             }
             if let Err(error) = outcome { std::panic::resume_unwind(error); }
         }
+    }
+
+    fn controller_for(project: &Path, codex: PathBuf, port: u16) -> OfficeController {
+        OfficeController {
+            settings_file: project.join("controller-test.json"),
+            settings: Mutex::new(Settings { project_path: Some(project.to_path_buf()),
+                codex_path: Some(codex), ..Settings::default() }),
+            child: Mutex::new(ChildState::default()), action: Mutex::new(()), test_port: port,
+        }
+    }
+
+    fn bare_controller(root: &TestDir, settings: Settings, port: u16) -> OfficeController {
+        OfficeController {
+            settings_file: root.0.join("controller-test.json"), settings: Mutex::new(settings),
+            child: Mutex::new(ChildState::default()), action: Mutex::new(()), test_port: port,
+        }
+    }
+
+    fn write_service_descriptor(runtime: &Path, pid: u32, port: u16) {
+        let data = serde_json::json!({
+            "protocol": 1, "service": SERVICE_NAME, "version": SERVICE_VERSION,
+            "pid": pid, "parent_pid": 1, "port": port,
+            "instance_id": "fixture", "token": "t", "state": "running"
+        });
+        fs::write(runtime.join("desktop.json"), data.to_string()).unwrap();
+        fs::write(runtime.join("running.json"), "{}").unwrap();
+    }
+
+    #[test]
+    fn descriptor_of_a_dead_service_is_archived_and_start_is_enabled() {
+        let root = TestDir::new("stale-descriptor");
+        let project = root.0.canonicalize().unwrap();
+        let runtime = runtime_for(&project).unwrap();
+        let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+        let codex = project.join("codex.exe");
+        fs::write(&codex, b"").unwrap();
+        write_service_descriptor(&runtime, 4_000_000_000, port);
+        let controller = controller_for(&project, codex, port);
+        let status = make_view(&controller).unwrap().status;
+        assert_eq!(status.state, "notStarted");
+        assert!(status.can_start && !status.can_stop && !status.can_open);
+        assert!(!runtime.join("desktop.json").exists() && !runtime.join("running.json").exists());
+        let names: Vec<String> = fs::read_dir(&runtime).unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned()).collect();
+        assert!(names.iter().any(|name| name.starts_with("desktop.stale-")), "{names:?}");
+        assert!(names.iter().any(|name| name.starts_with("running.stale-")), "{names:?}");
+    }
+
+    #[test]
+    fn live_unresponsive_listener_keeps_the_controller_unverified() {
+        let root = TestDir::new("live-unresponsive");
+        let project = root.0.canonicalize().unwrap();
+        let runtime = runtime_for(&project).unwrap();
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let codex = project.join("codex.exe");
+        fs::write(&codex, b"").unwrap();
+        write_service_descriptor(&runtime, 4_000_000_000, port);
+        let controller = controller_for(&project, codex, port);
+        let status = make_view(&controller).unwrap().status;
+        assert_eq!(status.state, "unverified");
+        assert!(!status.can_start);
+        assert!(runtime.join("desktop.json").exists() && runtime.join("running.json").exists());
+        drop(listener);
+    }
+
+    #[test]
+    fn quit_with_no_project_configured_is_allowed_immediately() {
+        let root = TestDir::new("quit-not-configured");
+        let controller = bare_controller(&root, Settings::default(), PORT);
+        assert_eq!(status_for(&controller, &controller.settings().unwrap()).0.state, "notConfigured");
+        controller.child_state().unwrap().safe_to_exit = false;
+        prepare_quit(&controller).expect("setup needed must not block quitting");
+        assert!(controller.child_state().unwrap().safe_to_exit);
+    }
+
+    #[test]
+    fn quit_stays_refused_while_the_service_is_unverified() {
+        use std::net::TcpListener;
+        let root = TestDir::new("quit-unverified");
+        let project = root.0.canonicalize().unwrap();
+        let runtime = runtime_for(&project).unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let data = serde_json::json!({
+            "protocol": 1, "service": SERVICE_NAME, "version": SERVICE_VERSION,
+            "pid": 4_000_000_000u32, "parent_pid": 1, "port": port,
+            "instance_id": "fixture", "token": "t", "state": "running"
+        });
+        fs::write(runtime.join("desktop.json"), data.to_string()).unwrap();
+        let settings = Settings { project_path: Some(project), ..Settings::default() };
+        let controller = bare_controller(&root, settings, port);
+        controller.child_state().unwrap().safe_to_exit = false;
+        assert_eq!(status_for(&controller, &controller.settings().unwrap()).0.state, "unverified");
+        assert!(prepare_quit(&controller).is_err());
+        assert!(!controller.child_state().unwrap().safe_to_exit);
+        drop(listener);
     }
 
     fn fake_startup_child() -> ChildState<&'static str> {

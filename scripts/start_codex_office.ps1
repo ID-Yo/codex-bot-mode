@@ -1,7 +1,7 @@
-param([switch]$NoBrowser, [string]$Project, [string]$Model)
+param([switch]$NoBrowser, [string]$Project, [string]$Model, [switch]$RelayOnly)
 $ErrorActionPreference = 'Stop'
 $officeRoot = Split-Path $PSScriptRoot -Parent
-$officeUrl = 'http://localhost:24242'
+$officeUrl = if ($env:CBM_OFFICE_URL) { $env:CBM_OFFICE_URL } else { 'http://localhost:24242' }
 # Model: -Model, else .bot-mode/office-model.txt (local, not committed), else the Office default.
 if (-not $Model) {
     $modelFile = Join-Path $officeRoot '.bot-mode/office-model.txt'
@@ -21,51 +21,85 @@ function Test-Office {
     } catch { return $false }
 }
 
+$officeRelayRoot = Join-Path $officeRoot '.bot-mode/desktop-relay'
+
+function Resolve-CodexPython {
+    if (-not $script:officePython) { $script:officePython = (Get-Command python -ErrorAction Stop).Source }
+}
+
+function Resolve-Codex {
+    Resolve-CodexPython
+    if ($script:officeBinary) { return }
+    if ($env:CBM_CODEX_BINARY) { $script:officeBinary = $env:CBM_CODEX_BINARY; return }
+    $officePackages = Get-ChildItem 'C:/Program Files/WindowsApps' -Directory -Filter 'OpenAI.Codex_*' -ErrorAction SilentlyContinue |
+        Sort-Object LastWriteTime -Descending
+    foreach ($package in $officePackages) {
+        $candidate = Join-Path $package.FullName 'app/resources/codex.exe'
+        if ((Test-Path $candidate) -and (Get-Item $candidate).Length -gt 0) {
+            $script:officeBinary = $candidate
+            break
+        }
+    }
+    if (-not $script:officeBinary) { throw 'Install Codex before starting Codex Office. No usable Codex runtime was found.' }
+}
+
+# Registers the Desktop relay, or replaces one that no longer answers. Independent of whether Office already runs.
+# Only the lead Manager's own chat (from the roster) can register it; returns $false elsewhere.
+function Ensure-Relay {
+    Resolve-CodexPython
+    $officeManager = & $script:officePython -B -c "from scripts.team_room import project, work; project.configure(); print(work.MANAGER or '')"
+    if (-not ($env:CODEX_THREAD_ID -and $env:CODEX_THREAD_ID -eq $officeManager -and $env:CODEX_APP_TOOLS_PIPE_PATH)) { return $false }
+    # Windows PowerShell turns native stderr into a terminating error under 'Stop'.
+    $ErrorActionPreference = 'Continue'
+    & $script:officePython -B -m scripts.team_room.desktop_relay --root $officeRelayRoot --probe *> $null
+    $probeExit = $LASTEXITCODE
+    $ErrorActionPreference = 'Stop'
+    if ($probeExit -eq 0) { return $true }
+    Resolve-Codex
+    New-Item -ItemType Directory -Path $officeRelayRoot -Force | Out-Null
+    # A registered relay that is alive but silent is replaced by the relay program itself after a sustained failure.
+    $relayArgs = '-B -m scripts.team_room.desktop_relay --codex-path "{0}" --root "{1}"' -f $script:officeBinary,$officeRelayRoot
+    $relayProcess = Start-Process -FilePath $script:officePython -ArgumentList $relayArgs -WorkingDirectory $officeRoot -WindowStyle Hidden -PassThru `
+        -RedirectStandardOutput (Join-Path $officeRelayRoot 'stdout.log') `
+        -RedirectStandardError (Join-Path $officeRelayRoot 'stderr.log')
+    $null = $relayProcess.Handle  # keeps the handle so ExitCode is readable after a fast exit
+    # Ready only when the registrar's relay answers a health probe: a descriptor file can be stale. The registrar
+    # may spend about 10 s on rechecks before it replaces a silent relay, and then registers a new one.
+    $relayDeadline = (Get-Date).AddSeconds(60)
+    while ($true) {
+        $ErrorActionPreference = 'Continue'
+        & $script:officePython -B -m scripts.team_room.desktop_relay --root $officeRelayRoot --probe *> $null
+        $probeExit = $LASTEXITCODE
+        $ErrorActionPreference = 'Stop'
+        if ($probeExit -eq 0) { break }
+        $relayProcess.Refresh()
+        if ($relayProcess.HasExited -and $relayProcess.ExitCode -ne 0) {
+            throw ('Desktop relay registration failed (registrar exit code {0}). See .bot-mode/desktop-relay/stderr.log' -f $relayProcess.ExitCode)
+        }
+        if ($relayProcess.HasExited) { throw 'Desktop relay registrar finished but the relay does not answer. See .bot-mode/desktop-relay/stdout.log' }
+        if ((Get-Date) -gt $relayDeadline) { throw 'Desktop relay did not answer within 60 seconds after registration. See .bot-mode/desktop-relay/stderr.log' }
+        Start-Sleep -Milliseconds 500
+    }
+    return $true
+}
+
 try {
+    $relayReady = Ensure-Relay
+    if ($RelayOnly) {
+        if (-not $relayReady) { throw 'The Desktop relay can only be registered from the appointed Manager chat (its own executor). Run this command there.' }
+        Write-Output "Desktop relay is ready: $officeRelayRoot"
+        exit 0
+    }
     if (-not (Test-Office)) {
-        $officePython = (Get-Command python -ErrorAction Stop).Source
-        $officeBinary = $null
-        $officePackages = Get-ChildItem 'C:/Program Files/WindowsApps' -Directory -Filter 'OpenAI.Codex_*' -ErrorAction SilentlyContinue |
-            Sort-Object LastWriteTime -Descending
-        foreach ($package in $officePackages) {
-            $candidate = Join-Path $package.FullName 'app/resources/codex.exe'
-            if ((Test-Path $candidate) -and (Get-Item $candidate).Length -gt 0) {
-                $officeBinary = $candidate
-                break
-            }
-        }
-        if (-not $officeBinary) { throw 'Install Codex before starting Codex Office. No usable Codex runtime was found.' }
+        Resolve-Codex
         New-Item -ItemType Directory -Path $officeRuntime -Force | Out-Null
-        $officeRelayRoot = Join-Path $officeRoot '.bot-mode/desktop-relay'
-        # Only the lead Manager's own chat (from the roster) can register the Desktop relay.
-        $officeManager = & $officePython -B -c "from scripts.team_room import project, work; project.configure(); print(work.MANAGER or '')"
-        if ($env:CODEX_THREAD_ID -and $env:CODEX_THREAD_ID -eq $officeManager -and $env:CODEX_APP_TOOLS_PIPE_PATH) {
-            # Windows PowerShell turns native stderr into a terminating error under 'Stop'.
-            $ErrorActionPreference = 'Continue'
-            & $officePython -B -m scripts.team_room.desktop_relay --root $officeRelayRoot --probe *> $null
-            $probeExit = $LASTEXITCODE
-            $ErrorActionPreference = 'Stop'
-            if ($probeExit -ne 0) {
-                New-Item -ItemType Directory -Path $officeRelayRoot -Force | Out-Null
-                $relayArgs = '-B -m scripts.team_room.desktop_relay --codex-path "{0}" --root "{1}"' -f $officeBinary,$officeRelayRoot
-                $relayProcess = Start-Process -FilePath $officePython -ArgumentList $relayArgs -WorkingDirectory $officeRoot -WindowStyle Hidden -PassThru `
-                    -RedirectStandardOutput (Join-Path $officeRelayRoot 'stdout.log') `
-                    -RedirectStandardError (Join-Path $officeRelayRoot 'stderr.log')
-                $relayDeadline = (Get-Date).AddSeconds(20)
-                while (-not (Test-Path (Join-Path $officeRelayRoot 'relay.json'))) {
-                    $relayProcess.Refresh()
-                    if ($relayProcess.HasExited -or (Get-Date) -gt $relayDeadline) { throw 'Desktop relay registration failed. See .bot-mode/desktop-relay/stderr.log' }
-                    Start-Sleep -Milliseconds 300
-                }
-            }
-        }
-        $officeArgs = '-B -m scripts.team_room --codex-path "{0}" --model {2} --runtime-root "{1}"' -f $officeBinary,$officeRuntime,$Model
+        $officeArgs = '-B -m scripts.team_room --codex-path "{0}" --model {2} --runtime-root "{1}"' -f $script:officeBinary,$officeRuntime,$Model
         if ($Project) {
             $officeArgs += ' --project "{0}"' -f $Project
         } elseif (Test-Path (Join-Path $officeRelayRoot 'relay.json')) {
             $officeArgs += ' --desktop-relay'
         }
-        $officeProcess = Start-Process -FilePath $officePython -ArgumentList $officeArgs -WorkingDirectory $officeRoot -WindowStyle Hidden -PassThru `
+        $officeProcess = Start-Process -FilePath $script:officePython -ArgumentList $officeArgs -WorkingDirectory $officeRoot -WindowStyle Hidden -PassThru `
             -RedirectStandardOutput (Join-Path $officeRuntime 'office.stdout.log') `
             -RedirectStandardError (Join-Path $officeRuntime 'office.stderr.log')
         $officeDeadline = (Get-Date).AddSeconds(45)
@@ -76,9 +110,9 @@ try {
             Start-Sleep -Milliseconds 500
         }
     }
-    Write-Host "Codex Office is ready: $officeUrl"
+    Write-Output "Codex Office is ready: $officeUrl"
     if (-not $NoBrowser) { Start-Process $officeUrl }
 } catch {
-    Write-Host $_.Exception.Message -ForegroundColor Red
+    [Console]::Error.WriteLine($_.Exception.Message)
     exit 1
 }

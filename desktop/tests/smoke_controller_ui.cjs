@@ -19,7 +19,7 @@ const assert = require('node:assert/strict');
   let browser;
   try {
     browser = await chromium.launch({ channel: 'chrome', headless: true });
-    const page = await browser.newPage({ viewport: { width: 1080, height: 700 } });
+    const page = await browser.newPage({ viewport: { width: 480, height: 340 } });
     await page.addInitScript(() => {
       const f = window.fixture = { calls: [], view: {
         projectPath: 'D:/Projects/' + 'long-project-path/'.repeat(18),
@@ -70,23 +70,17 @@ const assert = require('node:assert/strict');
     assert.equal(await page.isDisabled('#open-office'), false);
     assert.equal(await page.isDisabled('#stop'), true);
     assert.equal(await page.isDisabled('#restart'), true);
-    for (const width of [1080, 500]) {
-      await page.setViewportSize({ width, height: 700 });
+    for (const [width, height] of [[480, 340], [420, 300], [1280, 800]]) {
+      await page.setViewportSize({ width, height });
       const boxes = await page.evaluate(() => {
         const rect = selector => { const b = document.querySelector(selector).getBoundingClientRect();
           return { x: b.x, y: b.y, right: b.right, bottom: b.bottom }; };
-        return { service: rect('.service-panel'), setup: rect('.setup-panel'), actions: rect('.actions-panel'),
+        return { status: rect('#status-detail'), actions: rect('.actions-panel'), setup: rect('.setup-panel'),
           logs: rect('.logs-panel'), overflow: document.documentElement.scrollWidth > innerWidth };
       });
       assert.equal(boxes.overflow, false);
-      if (width > 800) {
-        assert.ok(boxes.service.right < boxes.setup.x);
-        assert.ok(boxes.actions.right < boxes.logs.x);
-      } else {
-        assert.equal(boxes.service.x, boxes.setup.x);
-        assert.ok(boxes.setup.y > boxes.actions.y);
-      }
-      await page.screenshot({ path: path.join(evidence, `${width}-unknown.png`), fullPage: true });
+      assert.ok(boxes.status.bottom <= boxes.actions.y && boxes.actions.bottom <= boxes.setup.y && boxes.setup.bottom <= boxes.logs.y, 'one compact column');
+      await page.screenshot({ path: path.join(evidence, `${width}x${height}-unknown.png`) });
     }
     // An unresolved status read must not create overlapping polling requests.
     const count = await page.evaluate(() => {
@@ -97,7 +91,7 @@ const assert = require('node:assert/strict');
     await page.evaluate(() => { fixture.poll(); fixture.poll(); });
     assert.equal(await page.evaluate(() => fixture.calls.filter(x => x === 'get_view').length), count);
     await page.evaluate(() => { fixture.holdRefresh = false; fixture.resolveRefresh(fixture.view); });
-    console.log('PASS: immediate Starting, duplicate refusal, timeout/recheck, Unknown controls, non-overlap, wide/compact layout');
+    console.log('PASS: immediate Starting, duplicate refusal, timeout/recheck, Unknown controls, non-overlap, compact layout');
   } finally {
     if (browser) await browser.close();
     await new Promise(resolve => server.close(resolve));

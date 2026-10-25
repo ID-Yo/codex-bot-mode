@@ -34,6 +34,14 @@ def load_checkpoint(path):
     return data if isinstance(data, dict) else {}
 
 
+def checkpoint_block(data):
+    """The bounded JSON block as bytes; raises ValueError when it exceeds the size bound (nothing is written)."""
+    block = (MARKER + json.dumps(data, ensure_ascii=False, separators=(",", ":")) + END_MARKER + "\n").encode("utf-8")
+    if len(block) > STATE_READ_LIMIT:
+        raise ValueError("Monitor checkpoint exceeds the bounded size limit")
+    return block
+
+
 def save_checkpoint(path, data):
     """Atomically replace/insert the bounded JSON block while streaming old history."""
     path = Path(path)
@@ -49,9 +57,7 @@ def save_checkpoint(path, data):
         suffix_offset = len(text[:end + len(END_MARKER)].encode("utf-8"))
     else:
         prefix, suffix_offset = b"", 0
-    block = (MARKER + json.dumps(data, ensure_ascii=False, separators=(",", ":")) + END_MARKER + "\n").encode("utf-8")
-    if len(block) > STATE_READ_LIMIT:
-        raise ValueError("Monitor checkpoint exceeds the bounded size limit")
+    block = checkpoint_block(data)
     fd, temporary = tempfile.mkstemp(dir=str(path.parent), prefix="monitor-checkpoint-", suffix=".tmp")
     try:
         with os.fdopen(fd, "wb") as output:

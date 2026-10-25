@@ -1104,6 +1104,32 @@ class Phase2EnforcementTests(unittest.TestCase):
         with self.assertRaises(PermissionError):
             tc.route_stage(self.project_path, apply=True, allowlist=["/different/path/only"])
 
+    def test_default_desktop_relay_adapter_refuses_untrusted_relay_address(self):
+        import unittest.mock as mock
+        (self.local_dir / "bindings.json").write_text(json.dumps({"developer": "thread-dev-123"}), encoding="utf-8")
+        bad = ("http://example.invalid:24243", "http://localhost.evil.invalid:24243", "http://127.0.0.1.evil.invalid:24243",
+               "http://localhost:24243@example.invalid", "https://127.0.0.1:24243", "http://127.0.0.1:24243/x",
+               "http://127.0.0.1:24243?a=1", "http://user@127.0.0.1:24243", "http://127.0.0.1:99999", "http://127.0.0.1")
+        for url in bad:
+            with self.subTest(url=url):
+                (self.project_path / ".bot-mode" / "relay.json").write_text(json.dumps({"url": url, "token": "test-secret-token"}), encoding="utf-8")
+                with mock.patch("urllib.request.OpenerDirector.open") as mock_open:
+                    with self.assertRaises(tc.PreconnectConfigurationError):
+                        tc.default_desktop_relay_adapter(self.project_path, "developer", "req-1", "summary")
+                    mock_open.assert_not_called()
+
+    def test_default_desktop_relay_adapter_sends_to_ipv4_loopback_for_localhost_descriptor(self):
+        import unittest.mock as mock
+        (self.local_dir / "bindings.json").write_text(json.dumps({"developer": "thread-dev-123"}), encoding="utf-8")
+        (self.project_path / ".bot-mode" / "relay.json").write_text(json.dumps({"url": "http://LOCALHOST:24243", "token": "test-secret-token"}), encoding="utf-8")
+        with mock.patch("urllib.request.OpenerDirector.open") as mock_open:
+            mock_resp = mock.MagicMock()
+            mock_resp.read.return_value = json.dumps({"error": "x"}).encode("utf-8")
+            mock_open.return_value.__enter__.return_value = mock_resp
+            with self.assertRaises(RuntimeError):
+                tc.default_desktop_relay_adapter(self.project_path, "developer", "req-1", "summary")
+            self.assertEqual(mock_open.call_args[0][0].full_url, "http://127.0.0.1:24243/call")
+
     def test_default_desktop_relay_adapter_receipt_handling(self):
         import unittest.mock as mock
         from urllib.request import Request

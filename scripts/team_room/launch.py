@@ -6,7 +6,7 @@ Codex chat, which runs the codex-team-launch skill (install, chats, sidebar).
 """
 import json
 
-from . import project as served, requests as rq, teams
+from . import inflight, project as served, requests as rq, teams
 
 
 def catalog():
@@ -61,11 +61,15 @@ def launch(bridge, template, team_name, answers, client_id, team_answers=None):
             + '\n\nPlan:\n' + json.dumps({k: summary[k] for k in ('team', 'section', 'room', 'director_proposal')}, ensure_ascii=False)
             + '\nAgents: ' + ', '.join(f'{a["display_name"]} ({a["role"]})' for a in summary['agents']))
     expected = rq.version(ledger)
-    rq.open_request(ledger, key, 'owner', lead['bot'], f'Launch team {summary["team"]} from {template}', None, 60)
-    rq.save(served.PROJECT, ledger, expected)
-    try:
-        bridge.call('send_message_to_thread', {'threadId': lead['thread_id'], 'hostId': 'local', 'prompt': text})
-        state = 'sent'
-    except Exception:
-        state = 'uncertain'
+    with inflight.track('launch', key) as send:  # intent row before the ledger write; unresolved until the request closes
+        rq.open_request(ledger, key, 'owner', lead['bot'], f'Launch team {summary["team"]} from {template}', None, 60)
+        rq.save(served.PROJECT, ledger, expected)
+        try:
+            send.attempting()
+            bridge.call('send_message_to_thread', {'threadId': lead['thread_id'], 'hostId': 'local', 'prompt': text})
+            state = 'sent'
+            send.finish('sent')
+        except Exception:
+            state = 'uncertain'
+            send.finish('uncertain')
     return {'request': key, 'state': state, 'manager': lead['bot'], 'plan': summary}

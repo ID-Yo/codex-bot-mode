@@ -484,6 +484,35 @@ class RouteLock:
         self.release()
 
 
+def _relay_base_url(url):
+    """Shared validation and normalization from team_room/relay_url.py (same rules as RelayBridge)."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("cbm_relay_url", str(Path(__file__).resolve().parent / "team_room" / "relay_url.py"))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod.relay_base_url(url)
+
+
+REQUEST_TEXT_FIELDS = ("link", "to", "from", "summary", "author", "candidate")
+
+
+def clean_text(value):
+    return value if isinstance(value, str) else ""
+
+
+def clean_request(row):
+    """Copy of a ledger row whose text fields are strings.
+
+    requests.py open without --link used to store "link": null, and a hand-edited ledger can hold any value; every
+    consumer of ledger text (lower(), re, startswith) must see "" instead of None."""
+    row = dict(row)
+    row["id"] = str(row.get("id") or "")
+    for field in REQUEST_TEXT_FIELDS:
+        value = row.get(field)
+        row[field] = value if isinstance(value, str) else ""
+    return row
+
+
 def get_req_ledger(project_path):
     project_path = Path(project_path).resolve()
     req_file = project_path / ".bot-mode" / "requests.py"
@@ -512,25 +541,20 @@ def parse_markdown_metadata(txt):
     return meta
 
 
-def default_desktop_relay_adapter(project_path, bot_id, req_id, summary):
-    """Attempt dispatch via local Desktop Relay if available.
-    
-    Reads appointed thread from roster.json. If relay.json exists in project,
-    posts send_message_to_thread via POST /call. If configuration is missing before
-    connect, raises PreconnectConfigurationError.
-    """
+def bound_thread(project_path, bot_id):
+    """Thread appointed to a bot in the project roster (bindings file as fallback)."""
     project_path = Path(project_path).resolve()
     roster_file = project_path / ".bot-mode" / "roster.json"
     if not roster_file.exists():
         raise PreconnectConfigurationError(f"Roster not found for {project_path}")
-    
+
     r_data = json.loads(roster_file.read_text(encoding="utf-8"))
     thread_id = None
     for p in r_data.get("participants", []):
         if p.get("bot") == bot_id or p.get("bot_id") == bot_id:
             thread_id = p.get("thread_id")
             break
-    
+
     if not thread_id:
         bindings_file = project_path / ".bot-mode" / "local" / "bindings.json"
         if bindings_file.exists():
@@ -546,7 +570,15 @@ def default_desktop_relay_adapter(project_path, bot_id, req_id, summary):
 
     if not thread_id:
         raise PreconnectConfigurationError(f"No appointed thread ID found in roster or bindings for bot {bot_id}")
+    return thread_id
 
+
+def relay_call(project_path, name, arguments, timeout=15):
+    """POST one tool call to the project's local Desktop Relay and return the parsed response body.
+
+    The relay only serves appointed threads and authenticates with the token in relay.json. If relay.json is missing
+    or malformed, raises PreconnectConfigurationError before any connection is made."""
+    project_path = Path(project_path).resolve()
     relay_file = project_path / ".bot-mode" / "desktop-relay" / "relay.json"
     if not relay_file.exists():
         relay_file = project_path / ".bot-mode" / "relay.json"
@@ -564,21 +596,32 @@ def default_desktop_relay_adapter(project_path, bot_id, req_id, summary):
     token = desc.get("token")
     if not url or not token:
         raise PreconnectConfigurationError("Malformed Desktop Relay descriptor")
+    try:
+        url = _relay_base_url(url)
+    except ValueError as e:
+        raise PreconnectConfigurationError(f"Untrusted Desktop Relay address: {e}") from e
 
-    payload = {
-        "name": "send_message_to_thread",
-        "arguments": {
-            "threadId": thread_id,
-            "prompt": f"Stage handoff [{req_id}]: {summary}"
-        }
-    }
     req = Request(
         f"{url}/call",
-        data=json.dumps(payload).encode("utf-8"),
+        data=json.dumps({"name": name, "arguments": arguments}).encode("utf-8"),
         headers={"Content-Type": "application/json", "X-Office-Relay": token}
     )
-    with build_opener(ProxyHandler({})).open(req, timeout=15) as resp:
-        res = json.load(resp)
+    with build_opener(ProxyHandler({})).open(req, timeout=timeout) as resp:
+        return json.load(resp)
+
+
+def default_desktop_relay_adapter(project_path, bot_id, req_id, summary):
+    """Attempt dispatch via local Desktop Relay if available.
+    
+    Reads appointed thread from roster.json. If relay.json exists in project,
+    posts send_message_to_thread via POST /call. If configuration is missing before
+    connect, raises PreconnectConfigurationError.
+    """
+    thread_id = bound_thread(project_path, bot_id)
+    res = relay_call(project_path, "send_message_to_thread", {
+        "threadId": thread_id,
+        "prompt": f"Stage handoff [{req_id}]: {summary}"
+    })
 
     if isinstance(res, dict) and "error" in res:
         raise RuntimeError(f"Relay error: {res['error']}")
@@ -619,7 +662,7 @@ def produce_snapshot(project_dir, now=None, explicit_only=False):
 
     req_ledger = get_req_ledger(project_path)
     requests_data = req_ledger.load(project_path)
-    requests_list = requests_data.get("requests", [])
+    requests_list = [clean_request(r) for r in requests_data.get("requests", []) if isinstance(r, dict)]
 
     tasks = []
     tasks_dir = project_path / "work" / "tasks"
@@ -699,7 +742,7 @@ def produce_snapshot(project_dir, now=None, explicit_only=False):
             else:
                 # Check matching request for candidate/author structured fields or summary fallback
                 for r in reversed(requests_list):
-                    if (local_req_id and r.get("id") == local_req_id) or (task_id.lower() in r.get("id", "").lower()) or (task_id.lower() in r.get("link", "").lower()):
+                    if (local_req_id and r.get("id") == local_req_id) or (task_id.lower() in clean_text(r.get("id")).lower()) or (task_id.lower() in clean_text(r.get("link")).lower()):
                         sha = r.get("candidate")
                         auth = r.get("author")
                         s_text = r.get("summary") or ""
@@ -761,9 +804,9 @@ def produce_snapshot(project_dir, now=None, explicit_only=False):
             handoffs = []
             matching_reqs = []
             for r in requests_list:
-                r_id = r.get("id", "")
-                r_link = r.get("link", "")
-                r_sum = r.get("summary", "")
+                r_id = clean_text(r.get("id"))
+                r_link = clean_text(r.get("link"))
+                r_sum = clean_text(r.get("summary"))
                 if (local_req_id and r_id == local_req_id) or (task_id.lower() in r_id.lower()) or (task_id.lower() in r_link.lower()) or (task_id.lower() in r_sum.lower()):
                     matching_reqs.append(r)
 
@@ -777,13 +820,13 @@ def produce_snapshot(project_dir, now=None, explicit_only=False):
                     return datetime.min.replace(tzinfo=timezone.utc)
             matching_reqs.sort(key=parse_opened)
             for r in matching_reqs:
-                w = r.get("to", "builder")
+                w = clean_text(r.get("to")) or "builder"
                 stg = "implementation"
-                if w in ("code-reviewer", "reviewer") or "review" in r.get("id", ""):
+                if w in ("code-reviewer", "reviewer") or "review" in clean_text(r.get("id")):
                     stg = "review"
-                elif w in ("verifier", "qa") or "qa" in r.get("id", ""):
+                elif w in ("verifier", "qa") or "qa" in clean_text(r.get("id")):
                     stg = "qa"
-                elif w == task_mgr or "integration" in r.get("id", ""):
+                elif w == task_mgr or "integration" in clean_text(r.get("id")):
                     stg = "integration"
 
                 ack = r.get("acknowledged_at")
@@ -864,7 +907,7 @@ def route_stage(project_dir, apply=False, allowlist=None, delivery_adapter=None,
             except Exception:
                 pass
 
-        existing_requests = req_ledger.load(project_path).get("requests", [])
+        existing_requests = [clean_request(r) for r in req_ledger.load(project_path).get("requests", []) if isinstance(r, dict)]
         open_requests = [r for r in existing_requests if r.get("state") == "open"]
 
         actions = []
@@ -906,7 +949,7 @@ def route_stage(project_dir, apply=False, allowlist=None, delivery_adapter=None,
                         })
                         continue
 
-                dup = any(r.get("to") == target and t_id.lower() in r.get("id", "").lower() for r in open_requests)
+                dup = any(r.get("to") == target and t_id.lower() in clean_text(r.get("id")).lower() for r in open_requests)
                 if dup:
                     actions.append({
                         "task_id": t_id,
@@ -942,7 +985,7 @@ def route_stage(project_dir, apply=False, allowlist=None, delivery_adapter=None,
 
                 if verdict in ("request_changes", "changes_requested"):
                     target = "developer"
-                    dup = any(r.get("to") == target and t_id.lower() in r.get("id", "").lower() for r in open_requests)
+                    dup = any(r.get("to") == target and t_id.lower() in clean_text(r.get("id")).lower() for r in open_requests)
                     if dup:
                         actions.append({
                             "task_id": t_id,
@@ -964,7 +1007,7 @@ def route_stage(project_dir, apply=False, allowlist=None, delivery_adapter=None,
                     })
                 elif verdict == "approve":
                     target = task.get("manager", "manager")
-                    dup = any(r.get("to") == target and t_id.lower() in r.get("id", "").lower() for r in open_requests)
+                    dup = any(r.get("to") == target and t_id.lower() in clean_text(r.get("id")).lower() for r in open_requests)
                     if dup:
                         actions.append({
                             "task_id": t_id,

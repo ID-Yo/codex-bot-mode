@@ -34,6 +34,23 @@ class PluginBuildTests(unittest.TestCase):
             with self.assertRaises(SystemExit):
                 build_plugin.build(other)
 
+    def test_team_py_imports_are_included_in_plugin_modules(self):
+        import ast
+        team_py = (ROOT / 'scripts' / 'team.py').read_text(encoding='utf-8')
+        tree = ast.parse(team_py)
+        imported_names = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom) and node.module == 'team_room':
+                for alias in node.names:
+                    imported_names.add(alias.name)
+        for name in imported_names:
+            filename = f"{name}.py"
+            self.assertIn(
+                filename,
+                build_plugin.MODULES,
+                f"team.py imports {name} from team_room, but {filename} is missing from build_plugin.MODULES"
+            )
+
 
 if __name__ == '__main__':
     unittest.main()
