@@ -68,10 +68,14 @@ class DesktopBridge:
         self.origin = os.environ.get('CODEX_THREAD_ID')
         if self.origin != MANAGER or not os.environ.get('CODEX_APP_TOOLS_PIPE_PATH'):
             raise ValueError('Run task host must be launched by the appointed Manager executor')
-        self.lock = threading.Lock()
+        self.lock = threading.RLock()
+        self.command = [str(node), str(server)]
+        self._start()
+
+    def _start(self):
         self.responses = queue.Queue()
         self.next_id = 0
-        self.process = subprocess.Popen([str(node),str(server)],stdin=subprocess.PIPE,
+        self.process = subprocess.Popen(self.command,stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,text=True,encoding='utf-8',
             creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0)
         self.pid = self.process.pid
@@ -93,6 +97,19 @@ class DesktopBridge:
             try: self.responses.put(json.loads(line))
             except ValueError: pass
         self.responses.put(None)
+
+    def alive(self):
+        return self.process.poll() is None
+
+    def reconnect(self):
+        """Start a fresh MCP server process with the inherited Desktop context and initialise it.
+
+        Requests that were in flight on the old process stay unconfirmed (callers get Uncertain and never resend).
+        Raises when Desktop no longer accepts this process's context, e.g. after an app-server restart."""
+        with self.lock:
+            try: self.close()
+            except Exception: pass
+            self._start()
 
     def _write(self, message):
         self.process.stdin.write(json.dumps(message,ensure_ascii=False)+'\n')

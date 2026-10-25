@@ -47,6 +47,7 @@ Windows x64 preview of the Codex Office desktop controller (signed with self-sig
 - Shutdown inspection reads no turn history, falls back when Desktop refuses a large answer, and names every busy or unknown cause; chats that are not loaded are treated as not running.
 - Office sends are recorded durably (intent and outcome) so an interrupted launch or escalation stays unresolved until its request is closed, and shutdown inspection reads those records.
 - Shutdown inspection opens its databases read-only with a valid URI for Windows extended-length and UNC paths, so a controller that stores such paths no longer reports an unknown shutdown state ("invalid uri authority").
+- The Desktop relay restarts its Desktop bridge by itself, gives up cleanly after two minutes without an answer, and `scripts/start_codex_office.ps1 -RelayOnly` replaces a relay that no longer answers (after several failed checks) while Office keeps running; the Monitor names this remedy. The starter reports success on stdout and errors on stderr.
 - The registry overview is cached between polls, and relay and overview fingerprints tolerate invalid project values.
 
 ### Changed

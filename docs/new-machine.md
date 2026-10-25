@@ -195,7 +195,7 @@ python -B -m scripts.team_room.desktop_relay --root .bot-mode\desktop-relay --pr
 
 Expected: `Registered Desktop relay is already available.` (exit 0). `Desktop relay is unavailable.` (exit 1) means it is not registered. The launcher without `-Project` then starts Office with `--desktop-relay`; the tray controller does the same whenever `<project>/.bot-mode/desktop-relay/relay.json` exists in the project you chose, so choose `<cbm>` to use it.
 
-The relay depends on the running Desktop instance. After a Codex Desktop restart: stop Office, write `shutdown` into `.bot-mode\desktop-relay\shutdown.flag`, wait for the relay process to exit, then repeat the registration from the Manager chat. Closing Office does not stop the relay. Details: `docs/operations/team-room.md` of the development repository.
+The relay depends on the running Desktop instance. It restarts its Desktop bridge by itself and gives up after two minutes without an answer. After a Codex Desktop restart that took the relay down, restart it from the Manager chat: run `powershell -File scripts\start_codex_office.ps1 -RelayOnly` there (it works while Office runs); after several failed checks the launcher stops an unhealthy relay that is still running, removes its stale registration and registers a new one. Check with the probe above. Closing Office does not stop the relay. Details: `docs/operations/team-room.md` of the development repository.
 
 ## 7. Agent Monitor
 

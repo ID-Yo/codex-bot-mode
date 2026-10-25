@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 import secrets
 import threading
+import time
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
 from urllib.request import Request, build_opener, ProxyHandler
@@ -491,6 +492,88 @@ class RelayBridge(DesktopBridge):
     def close(self): pass
 
 
+RELAY_REMEDY = ("restart the Desktop relay from the appointed Manager chat: run "
+                "'powershell -File scripts/start_codex_office.ps1 -RelayOnly' (it replaces an unhealthy relay and works while "
+                "Office is running); see docs/operations/team-room.md, 'Restart the Desktop relay'")
+RECHECKS = 3
+RECHECK_GAP = 5.0
+
+
+def sustained_failure(check, checks=RECHECKS, gap=RECHECK_GAP, sleep=time.sleep):
+    """True only when every one of several checks, spread over about (checks - 1) * gap seconds, fails.
+
+    A single failed health check can be a transient error (a busy relay, a slow Desktop answer); only a sustained
+    failure justifies stopping a live relay."""
+    for number in range(checks):
+        if number: sleep(gap)
+        try:
+            check(); return False
+        except (OSError, ValueError, Uncertain):
+            continue
+    return True
+WATCHDOG_SECONDS = 5.0
+GIVE_UP_SECONDS = 120.0
+
+
+def watch(bridge, stop, say=print, interval=WATCHDOG_SECONDS, give_up=GIVE_UP_SECONDS, clock=time.monotonic):
+    """Keep the relay answering while Desktop restarts.
+
+    The MCP server process behind the relay dies or loses its pipe when Codex Desktop's app-server restarts. Every
+    interval the bridge is probed; a dead or unanswering bridge is restarted in place. If Desktop does not accept it
+    again for give_up seconds the relay stops so that nothing keeps a registration that cannot work. Returns True
+    when stopped by the flag and False when it gave up."""
+    down_since = None
+    while not stop():
+        time.sleep(interval)
+        if stop(): return True
+        try:
+            if not bridge.alive(): raise Uncertain('Desktop bridge process exited')
+            bridge.call('list_threads', {'limit': 1})
+            if down_since is not None: say('Desktop relay recovered.', flush=True)
+            down_since = None
+            continue
+        except Exception as error:
+            down_since = down_since if down_since is not None else clock()
+            say('Desktop bridge not answering (%s); restarting it.' % safe_error(str(error))[:80], flush=True)
+        try:
+            bridge.reconnect(); bridge.call('list_threads', {'limit': 1})
+            say('Desktop relay recovered.', flush=True); down_since = None
+        except Exception as error:
+            say('Desktop bridge restart failed (%s).' % safe_error(str(error))[:80], flush=True)
+            if clock() - down_since >= give_up:
+                say('Desktop relay stopping: Desktop did not accept it again. Remedy: ' + RELAY_REMEDY, flush=True)
+                return False
+    return True
+
+
+def replace_unhealthy(root, say=print, wait=15.0):
+    """Stop a registered relay that is alive but no longer answers, so a new one can be registered."""
+    try: pid = json.loads((root / 'relay.json').read_text(encoding='utf-8')).get('pid')
+    except (OSError, ValueError): pid = None
+    flag = root / 'shutdown.flag'
+    if isinstance(pid, int) and pid != os.getpid() and _pid_alive(pid):
+        say('Stopping the unhealthy relay process %d.' % pid, flush=True)
+        flag.write_text('shutdown', encoding='utf-8')
+        deadline = time.monotonic() + wait
+        while _pid_alive(pid) and time.monotonic() < deadline: time.sleep(.3)
+        if _pid_alive(pid): raise SystemExit('The unhealthy relay process %d did not stop; end it manually, then retry.' % pid)
+    flag.unlink(missing_ok=True)
+    (root / 'relay.json').unlink(missing_ok=True)
+
+
+def _pid_alive(pid):
+    if os.name == 'nt':
+        import ctypes
+        handle = ctypes.windll.kernel32.OpenProcess(0x1000, False, pid)
+        if not handle: return False
+        code = ctypes.c_ulong()
+        ctypes.windll.kernel32.GetExitCodeProcess(handle, ctypes.byref(code)); ctypes.windll.kernel32.CloseHandle(handle)
+        return code.value == 259
+    try: os.kill(pid, 0)
+    except OSError: return False
+    return True
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--codex-path', type=Path)
@@ -505,8 +588,11 @@ def main():
         RelayBridge(root).health()
         print('Registered Desktop relay is already available.'); return
     except (OSError, ValueError, Uncertain):
-        if args.probe: parser.exit(1, 'Desktop relay is unavailable.\n')
+        if args.probe: parser.exit(1, 'Desktop relay is unavailable. Remedy: ' + RELAY_REMEDY + '\n')
+        if not sustained_failure(lambda: RelayBridge(root).health(), RECHECKS, RECHECK_GAP):
+            print('Registered Desktop relay answered again; keeping it.'); return
     if not args.codex_path: parser.error('--codex-path is required to register a relay')
+    replace_unhealthy(root)
     resources = args.codex_path.resolve(strict=True).parent
     bridge = DesktopBridge(resources / 'cua_node/bin/node.exe', resources / 'plugins/openai-bundled/plugins/codex-app-tools/server.mjs')
     try:
@@ -516,8 +602,11 @@ def main():
         worker = threading.Thread(target=server.serve_forever, daemon=True)
         worker.start()
         stop = root / 'shutdown.flag'; stop.unlink(missing_ok=True)
-        while not stop.exists(): threading.Event().wait(.5)
+        finished = watch(bridge, stop.exists)
         server.shutdown(); server.server_close(); worker.join()
+        if not finished:
+            (root / 'relay.json').unlink(missing_ok=True)
+            raise SystemExit(3)
     finally: bridge.close()
 
 

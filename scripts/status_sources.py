@@ -355,6 +355,8 @@ MAX_NOT_STARTED_PER_PROJECT = 10   # request_not_started findings listed per pro
 MAX_NOT_STARTED_TOTAL = 40         # ... and per run; the rest is counted in one request_not_started_overflow per project
 REQUEST_START_BUDGET_SECONDS = 90  # wall time for all relay reads of one run
 REQUEST_START_MAX_READS = 30       # distinct recipient threads read per run (each thread is read once and cached)
+RELAY_REMEDY = ("restart the Desktop relay from the appointed Manager chat: 'powershell -File scripts/start_codex_office.ps1 "
+                "-RelayOnly' (works while Office runs; docs/operations/team-room.md, 'Restart the Desktop relay')")
 REQUEST_START_MAX_CONSECUTIVE_ERRORS = 3  # transport failures in a row before the relay is left alone for this run
 RELAY_TIMEOUT_SECONDS = 8          # one metadata read; the dispatch default of 15 s is too slow for a poll over many threads
 
@@ -480,7 +482,7 @@ def request_start_findings(open_requests, now, relay=None, *, budget_seconds=Non
                     cache[thread_id] = ("state", read_thread_state(lambda name, arguments, roots=roots: relay_result(roots, name, arguments), thread_id))
                     errors = 0
                 except tc.PreconnectConfigurationError as error:
-                    relay_cause = f"Desktop Relay unavailable ({str(error)[:60]})"
+                    relay_cause = f"Desktop Relay unavailable ({str(error)[:60]}); remedy: {RELAY_REMEDY}"
                     problem(relay_cause, item["id"])
                     continue
                 except (ValueError, OSError, RuntimeError) as error:
@@ -493,7 +495,7 @@ def request_start_findings(open_requests, now, relay=None, *, budget_seconds=Non
                         cache[thread_id] = ("error", f"thread of {bot} could not be read ({type(error).__name__}: {str(error)[:60]})")
                         errors = 0 if isinstance(error, ValueError) else errors + 1
                     if errors >= REQUEST_START_MAX_CONSECUTIVE_ERRORS:
-                        halted = f"deferred, relay failed {errors} reads in a row"
+                        halted = f"deferred, relay failed {errors} reads in a row; remedy: {RELAY_REMEDY}"
             kind, value = cache[thread_id]
             if kind == "error":
                 problem(value, item["id"])
