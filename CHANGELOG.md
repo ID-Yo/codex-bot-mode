@@ -24,6 +24,19 @@ Format: [Keep a Changelog](https://keepachangelog.com/). Versions follow [SemVer
 - Chief of Staff updates now identify the project, including multi-project, cross-project and personal operations.
 - Installation examples now pass the selected tracking mode or the reviewed answers file.
 
+## [Office 0.1.7] - unreleased
+
+Windows x64 preview of the Codex Office desktop controller (signed with self-signed certificate `CN=Codex Office (ID-Yo)`, thumbprint `2C4510778788894A8CAA3C891FE3BCB899A0C0F0`; compare the published SHA-256).
+
+### Added
+- Agents grid with avatars in the Office UI.
+
+### Fixed
+- Office Start no longer grows `owned-threads.json`: entries that no current participant, language binding, delivery or work step references are pruned at Start and logged to `owned-threads-pruned.log`; the map is read and validated before memory is touched. No Desktop thread is deleted.
+
+### Notes
+- Installer `Codex Office_0.1.7_x64-setup.exe`: 17,620,760 bytes, SHA-256 `7D107EDCC37787DF61164E49F9B77F23308CEA2C34BD05EFBA7A9449A17C3F41`.
+
 ## [Office 0.1.6] - 2026-10-25
 
 Release: https://github.com/ID-Yo/codex-bot-mode/releases/tag/office-v0.1.6

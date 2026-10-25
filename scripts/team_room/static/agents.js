@@ -103,7 +103,8 @@
     dialog.replaceChildren();
     const head=el('div','agent-detail-head');
     const title=el('h2',null,a.name||a.bot_id);title.id='agent-detail-title';
-    const close=el('button','secondary',officeI18n.t('Close'));close.type='button';close.onclick=closeDetail;head.append(title,close);dialog.append(head);
+    const who=el('div','agent-detail-who'),face=el('span','avatar');officeAvatars.fill(face,{key:a.bot_key,projectId:a.project_id,botId:a.bot_id,name:a.name||a.bot_id});who.append(face,title);
+    const close=el('button','secondary',officeI18n.t('Close'));close.type='button';close.onclick=closeDetail;head.append(who,close);dialog.append(head);
     const e=effective(a);
     dialog.append(badge(officeI18n.t('Execution')+': '+(officeI18n.t(labels[e.state]||officeI18n.t('Unknown'))),e.state),badge(officeI18n.t('Task')+': '+(officeI18n.state(a.task?.workflow))+(a.task&&!e.taskFresh?' (historical / unknown)':''),'workflow'));
     for(const reason of e.reasons)dialog.append(badge(officeI18n.t(attentionLabels[reason]),'attention'));
@@ -157,7 +158,7 @@
       const e=effective(a),card=el('article','agent-card');
       const button=el('button','agent-card-open');button.type='button';button.dataset.agentKey=a.bot_key;
       button.setAttribute('aria-label',officeI18n.t('View evidence for {name}',{name:a.name||a.bot_id}));button.onclick=()=>{focusCard=a.bot_key;showDetail(a.bot_key);};
-      const head=el('span','agent-card-heading'),avatar=el('span','avatar');avatar.textContent=(a.name||a.bot_id).split(/\s+/).map(x=>x[0]).slice(0,2).join('');avatar.setAttribute('aria-hidden','true');
+      const head=el('span','agent-card-heading'),avatar=el('span','avatar');officeAvatars.fill(avatar,{key:a.bot_key,projectId:a.project_id,botId:a.bot_id,name:a.name||a.bot_id});
       const name=el('span');name.append(el('strong',null,a.name||a.bot_id),el('small',null,officeI18n.t(a.role||a.bot_id)));head.append(avatar,name);button.append(head);
       button.append(el('span','agent-scope',a.project_name+' · '+(a.team_name||officeI18n.t('No team'))));
       const states=el('span','agent-states');states.append(badge(officeI18n.t('Execution')+': '+officeI18n.t(labels[e.state]||'Unknown'),e.state),badge(officeI18n.t('Task')+': '+(officeI18n.state(a.task?.workflow))+(a.task&&!e.taskFresh?' (historical / unknown)':''),'workflow'));button.append(states);

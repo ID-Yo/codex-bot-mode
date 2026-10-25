@@ -462,6 +462,8 @@ def create_server(controller, port=0, *, ipv6=False, token=None, desktop_lifecyc
                      '/updates.js': ('updates.js','text/javascript'),
                      '/updates.css': ('updates.css','text/css'),
                      '/agents.css': ('agents.css','text/css'),
+                     '/avatars.js': ('avatars.js','text/javascript'),
+                     '/avatars.css': ('avatars.css','text/css'),
                      '/newproject.js': ('newproject.js','text/javascript'),
                      '/newproject.css': ('newproject.css','text/css'),
                      '/crossrooms.js': ('crossrooms.js','text/javascript'),
