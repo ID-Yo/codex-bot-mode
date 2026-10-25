@@ -24,7 +24,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/). Versions follow [SemVer
 - Chief of Staff updates now identify the project, including multi-project, cross-project and personal operations.
 - Installation examples now pass the selected tracking mode or the reviewed answers file.
 
-## [Office 0.1.7] - unreleased
+## [Office 0.1.7] - 2026-10-25
+
+Release: https://github.com/ID-Yo/codex-bot-mode/releases/tag/office-v0.1.7
 
 Windows x64 preview of the Codex Office desktop controller (signed with self-signed certificate `CN=Codex Office (ID-Yo)`, thumbprint `2C4510778788894A8CAA3C891FE3BCB899A0C0F0`; compare the published SHA-256).
 
