@@ -55,7 +55,7 @@ Windows x64 preview of the Codex Office desktop controller (signed with self-sig
 
 ### Notes
 - Executables are signed with self-signed certificate `desktop/Codex-Office-ID-Yo.cer` (`2C4510778788894A8CAA3C891FE3BCB899A0C0F0`). Import the certificate into Trusted Root / Trusted Publisher to trust it.
-- Installer `Codex Office_0.1.6_x64-setup.exe`: 17,613,464 bytes, SHA-256 `552BA08291BA11AF164698ECAC258B57AB9694C4EDB65F2AF61AAA14040CE549`.
+- Installer `Codex Office_0.1.6_x64-setup.exe`: 17,612,992 bytes, SHA-256 `D2B370F7F1CD59FEC42A01A502A21972BB967545C7988602A8A55D10C93FECBC`.
 
 ## [0.1.0] - 2026-10-13
 
