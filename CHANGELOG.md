@@ -30,7 +30,7 @@ Windows x64 preview of the Codex Office desktop controller (signed with self-sig
 
 ### Added
 - Avatar picker: customize an agent's avatar directly from their card using the pencil button, with an accessible palette, keyboard navigation, and persistent selection across page reloads.
-- Multi-project profile viewing and editing: view and edit agent Profile, Soul, and validated Memory across all registered projects in the Office UI.
+- Multi-project profiles: view and edit agent Profile and Soul, and view validated Memory across all registered projects in the Office UI.
 
 ### Fixed
 - Multi-project profiles security: strict pre-validation of memory helper paths and parents against registered project roots, rejecting symlinks and junctions before import or execution.

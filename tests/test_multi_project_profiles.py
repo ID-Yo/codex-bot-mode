@@ -280,6 +280,15 @@ class MultiProjectWebAPITests(unittest.TestCase):
         (self.proj_a / "agents/project-manager").mkdir(parents=True)
         (self.proj_a / "agents/project-manager" / "SOUL.md").write_text("Soul A", encoding="utf-8")
         (self.proj_a / "agents/project-manager" / "PROFILE.md").write_text("- Bot ID: `project-manager`\nRole: Mgr A\n", encoding="utf-8")
+        (self.proj_a / "agents/project-manager/memory").mkdir(parents=True, exist_ok=True)
+        (self.proj_a / "agents/project-manager/memory/README.md").write_text("Memory Contract", encoding="utf-8")
+        (self.proj_a / "scripts").mkdir(parents=True, exist_ok=True)
+        (self.proj_a / "scripts" / "bot_mode.py").write_text(chr(10).join([
+            "def load_profile(bot_id):",
+            "    return {'memory/README.md': 'Contract'}",
+            "def recall(p, b):",
+            "    return []"
+        ]), encoding="utf-8")
 
         (self.proj_b / ".bot-mode").mkdir(parents=True)
         roster_b = {"schema": 1, "project": {"id": "routeport", "name": "RoutePort"}, "teams": [{"name": "T2"}], "participants": [
@@ -297,7 +306,7 @@ class MultiProjectWebAPITests(unittest.TestCase):
         ]}
         self.reg_file.write_text(json.dumps(reg_data), encoding="utf-8")
 
-        self.c = Controller(str(self.proj_a), transport=FakeTransport(), start_worker=False)
+        self.c = Controller(str(self.base / "runtime"), bots=["manager"], profile_project=self.proj_a, transport=FakeTransport(), start_worker=False)
         self.c.registry_file = self.reg_file
         self.server = create_server(self.c)
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
