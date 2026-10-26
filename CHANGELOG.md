@@ -24,6 +24,21 @@ Format: [Keep a Changelog](https://keepachangelog.com/). Versions follow [SemVer
 - Chief of Staff updates now identify the project, including multi-project, cross-project and personal operations.
 - Installation examples now pass the selected tracking mode or the reviewed answers file.
 
+## [Office 0.1.8] - unreleased
+
+Windows x64 preview of the Codex Office desktop controller (signed with self-signed certificate `CN=Codex Office (ID-Yo)`, thumbprint `2C4510778788894A8CAA3C891FE3BCB899A0C0F0`; compare the published SHA-256).
+
+### Added
+- Avatar picker: customize an agent's avatar directly from their card using the pencil button, with an accessible palette, keyboard navigation, and persistent selection across page reloads.
+- Multi-project profile viewing and editing: view and edit agent Profile, Soul, and validated Memory across all registered projects in the Office UI.
+
+### Fixed
+- Multi-project profiles security: strict pre-validation of memory helper paths and parents against registered project roots, rejecting symlinks and junctions before import or execution.
+- Disambiguation and consistency: reject contradictory qualified bot keys and explicit project selectors with an explicit error, and report unavailable memory helpers instead of masking them as empty memory.
+
+### Notes
+- Installer `Codex Office_0.1.8_x64-setup.exe`: 17,630,480 bytes, SHA-256 `E44192858AEAEF85E3F8EF60AFD49B65DCDA8CB05FAAB0FD95176761D9E0152B`.
+
 ## [Office 0.1.7] - 2026-10-25
 
 Release: https://github.com/ID-Yo/codex-bot-mode/releases/tag/office-v0.1.7

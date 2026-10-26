@@ -3,7 +3,7 @@
   const $=id=>document.getElementById(id);
   const el=(tag,cls,value)=>{const n=document.createElement(tag);if(cls)n.className=cls;if(value!=null)n.textContent=value;return n;};
   const labels={working:'Working',waiting:'Waiting',paused:'Paused',failed:'Failed',unknown:'Unknown'};
-  let data=null,loading=false,failed=false,selected=null,focusCard=null;
+  let data=null,loading=false,failed=false,selected=null,focusCard=null,pickerOpen=false;
   const filters={project:'',team:'',mode:'all',query:''};
   const profileDrafts=new Map(),profileSelection=new Map();
   const date=v=>v&&Number.isFinite(Date.parse(v))?new Date(v).toLocaleString():officeI18n.t('Unknown');
@@ -49,31 +49,44 @@
       parent.append(row);
     }
   }
-  function currentProfile(a){return !failed&&a.is_current&&data?.agents?.some(row=>row.bot_key===a.bot_key&&row.bot_id===a.bot_id&&row.thread_id===a.thread_id&&row.is_current);}
   function profilePanel(a){
     const panel=el('section','agent-profile-settings');panel.append(el('h3',null,officeI18n.t('Profile and validated memory')));
     panel.append(el('p','agent-note',officeI18n.t('Profile identity, learned memory and runtime permissions are separate. Editing a profile does not change runtime permissions.')));
-    if(!currentProfile(a)){panel.append(el('p','agent-note',officeI18n.t('Profile settings require current evidence from the agent’s own project host.')));return panel;}
-    const file=profileSelection.get(a.bot_key)||'PROFILE.md';
-    const key=a.bot_key+':'+a.thread_id+':'+file;
+    const targetKey=a.bot_key||a.bot_id;
+    const file=profileSelection.get(targetKey)||'PROFILE.md';
+    const key=targetKey+':'+file;
     let draft=profileDrafts.get(key);
     if(!draft){draft={content:null,text:'',loading:false,busy:false,error:''};profileDrafts.set(key,draft);}
     const tabs=el('div','agent-profile-tabs');
     for(const [id,label] of [['PROFILE.md','Profile'],['SOUL.md','Soul'],['memory','Memory']]){
       const button=el('button','secondary',officeI18n.t(label));button.type='button';button.dataset.profileFile=id;button.setAttribute('aria-pressed',String(file===id));
-      button.onclick=()=>{profileSelection.set(a.bot_key,id);showDetail(a.bot_key,false);};tabs.append(button);
+      button.onclick=()=>{profileSelection.set(targetKey,id);showDetail(a.bot_key,false);};tabs.append(button);
     }
     panel.append(tabs);
     const status=el('p','agent-note',draft.error||officeI18n.t(draft.loading?'Loading…':draft.content===null?'Select a profile section to load it.':'Drafts are kept separately for each agent and file.'));status.setAttribute('role','status');panel.append(status);
     const paint=()=>{if(selected===a.bot_key&&!$('agent-detail').hidden)showDetail(a.bot_key,false);};
+    function matchBot(row){
+      if(!row||typeof row!=='object')return false;
+      if(row.bot===targetKey||row.bot===a.bot_key)return true;
+      if(row.bot===a.bot_id){
+        if(row.project_id){
+          return row.project_id===a.project_id||(Boolean(a.is_current)&&row.project_id==='current');
+        }
+        return Boolean(a.is_current);
+      }
+      return false;
+    }
     async function read(){
-      if(draft.loading||draft.busy||!currentProfile(a))return;draft.loading=true;draft.error='';paint();
+      if(draft.loading||draft.busy)return;draft.loading=true;draft.error='';paint();
       try{
-        const row=await api('/api/settings/bots/'+encodeURIComponent(a.bot_id)+'?file='+encodeURIComponent(file));
-        if(row.bot!==a.bot_id||row.file!==file||typeof row.content!=='string'||!row.version)throw Error(officeI18n.t('Profile response did not match the selected agent and file.'));
+        const row=await api('/api/settings/bots/'+encodeURIComponent(targetKey)+'?file='+encodeURIComponent(file));
+        if(!matchBot(row)||row.file!==file||typeof row.content!=='string'||!row.version)throw Error(officeI18n.t('Profile response did not match the selected agent and file.'));
         if(file==='memory'&&row.readonly!==true)throw Error(officeI18n.t('Validated memory must remain read-only.'));
         draft.content=row;draft.text=row.content;
-      }catch(error){draft.error=error.message;}finally{draft.loading=false;paint();}
+      }catch(error){
+        const msg=error.message||'';
+        draft.error=/not found|not installed/i.test(msg)?officeI18n.t('Profile folder or files are not installed for this agent.'):msg;
+      }finally{draft.loading=false;paint();}
     }
     const loadButton=el('button','secondary',officeI18n.t(draft.content===null?'Load selected section':'Reload and discard this draft'));loadButton.type='button';loadButton.disabled=draft.loading||draft.busy;loadButton.onclick=read;panel.append(loadButton);
     if(draft.content!==null){
@@ -83,10 +96,10 @@
       if(!input.readOnly){
         const save=el('button',null,officeI18n.t('Save changes'));save.type='button';save.disabled=draft.busy;
         save.onclick=async()=>{
-          if(draft.busy||!currentProfile(a))return;draft.busy=true;draft.error='';paint();
+          if(draft.busy)return;draft.busy=true;draft.error='';paint();
           try{
-            const row=await api('/api/settings/bots/'+encodeURIComponent(a.bot_id),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({file,content:draft.text,version:draft.content.version})});
-            if(row.bot!==a.bot_id||row.file!==file||typeof row.content!=='string'||!row.version)throw Error(officeI18n.t('Profile response did not match the selected agent and file.'));
+            const row=await api('/api/settings/bots/'+encodeURIComponent(targetKey),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({file,content:draft.text,version:draft.content.version})});
+            if(!matchBot(row)||row.file!==file||typeof row.content!=='string'||!row.version)throw Error(officeI18n.t('Profile response did not match the selected agent and file.'));
             draft.content=row;draft.text=row.content;draft.error=officeI18n.t('Saved. Applies to subsequent Office turns.');
           }catch(error){draft.error=error.message;}finally{draft.busy=false;paint();}
         };panel.append(save);
@@ -95,7 +108,7 @@
     return panel;
   }
 
-  function showDetail(key,takeFocus=true){
+  function showDetail(key,focusTarget=true){
     const a=data?.agents?.find(x=>x.bot_key===key);if(!a)return;
     selected=key;
     const dialog=$('agent-detail');
@@ -103,8 +116,72 @@
     dialog.replaceChildren();
     const head=el('div','agent-detail-head');
     const title=el('h2',null,a.name||a.bot_id);title.id='agent-detail-title';
-    const who=el('div','agent-detail-who'),face=el('span','avatar');officeAvatars.fill(face,{key:a.bot_key,projectId:a.project_id,botId:a.bot_id,name:a.name||a.bot_id});who.append(face,title);
+    const who=el('div','agent-detail-who');
+    const wrap=el('span','avatar-edit-wrap');
+    const face=el('span','avatar');
+    officeAvatars.fill(face,{key:a.bot_key,projectId:a.project_id,botId:a.bot_id,name:a.name||a.bot_id});
+    const editBtn=el('button','avatar-edit-btn');
+    editBtn.type='button';
+    editBtn.id='avatar-edit-button';
+    editBtn.setAttribute('aria-label',officeI18n.t('Change avatar'));
+    editBtn.title=officeI18n.t('Change avatar');
+    editBtn.setAttribute('aria-expanded',String(pickerOpen));
+    editBtn.setAttribute('aria-controls','avatar-picker-panel');
+    editBtn.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"/></svg>';
+    wrap.append(face,editBtn);
+    who.append(wrap,title);
     const close=el('button','secondary',officeI18n.t('Close'));close.type='button';close.onclick=closeDetail;head.append(who,close);dialog.append(head);
+    editBtn.onclick=()=>{
+      pickerOpen=!pickerOpen;
+      showDetail(key,pickerOpen?'picker-first':'pencil');
+    };
+    if(pickerOpen){
+      const picker=el('section','avatar-picker-panel');
+      picker.id='avatar-picker-panel';
+      picker.setAttribute('aria-label',officeI18n.t('Choose an avatar'));
+      const pHead=el('div','avatar-picker-head');
+      pHead.append(el('h3',null,officeI18n.t('Choose an avatar')));
+      const pActions=el('div','avatar-picker-actions');
+      const resetBtn=el('button','secondary',officeI18n.t('Reset to default'));
+      resetBtn.type='button';
+      resetBtn.onclick=()=>{
+        officeAvatars.clearCustom(a.bot_key);
+        pickerOpen=false;
+        window.dispatchEvent(new CustomEvent('office-avatar-changed',{detail:{botKey:a.bot_key}}));
+        showDetail(key,'pencil');
+      };
+      const pClose=el('button','secondary',officeI18n.t('Close'));
+      pClose.type='button';
+      pClose.onclick=()=>{pickerOpen=false;showDetail(key,'pencil');};
+      pActions.append(resetBtn,pClose);
+      pHead.append(pActions);
+      picker.append(pHead);
+      const grid=el('div','avatar-picker-grid');
+      const currentIdx=officeAvatars.getCustom(a.bot_key);
+      const defaultIdx=officeAvatars.index(a.project_id,a.bot_id);
+      const effectiveIdx=currentIdx!=null?currentIdx:defaultIdx;
+      for(let i=0;i<officeAvatars.count;i++){
+        const opt=el('button','avatar-picker-option');
+        opt.type='button';
+        opt.setAttribute('aria-label',officeI18n.t('Avatar {number}',{number:i+1}));
+        const isCurrent=i===effectiveIdx;
+        opt.setAttribute('aria-pressed',String(isCurrent));
+        if(isCurrent)opt.classList.add('selected');
+        const optAvatar=el('span','avatar avatar-art');
+        optAvatar.dataset.avatar=String(i);
+        optAvatar.innerHTML=officeAvatars.svg(i);
+        opt.append(optAvatar);
+        opt.onclick=()=>{
+          officeAvatars.setCustom(a.bot_key,i);
+          pickerOpen=false;
+          window.dispatchEvent(new CustomEvent('office-avatar-changed',{detail:{botKey:a.bot_key,avatarIndex:i}}));
+          showDetail(key,'pencil');
+        };
+        grid.append(opt);
+      }
+      picker.append(grid);
+      dialog.append(picker);
+    }
     const e=effective(a);
     dialog.append(badge(officeI18n.t('Execution')+': '+(officeI18n.t(labels[e.state]||officeI18n.t('Unknown'))),e.state),badge(officeI18n.t('Task')+': '+(officeI18n.state(a.task?.workflow))+(a.task&&!e.taskFresh?' (historical / unknown)':''),'workflow'));
     for(const reason of e.reasons)dialog.append(badge(officeI18n.t(attentionLabels[reason]),'attention'));
@@ -138,7 +215,13 @@
     if(!events.children.length)events.append(el('li',null,officeI18n.t('Unknown — no scoped transition timestamps recorded.')));
     dialog.append(events);
     window.officeShell?.activate('agent',a.name||a.bot_id,()=>showDetail(key));dialog.hidden=false;
-    if(takeFocus)close.focus();else if(oldFocus>=0)dialog.querySelectorAll('button,a')[oldFocus]?.focus();
+    if(focusTarget==='pencil'||focusTarget==='edit')editBtn.focus();
+    else if(focusTarget==='picker-first'){
+      const firstOpt=dialog.querySelector('.avatar-picker-option.selected')||dialog.querySelector('.avatar-picker-option');
+      if(firstOpt)firstOpt.focus();else editBtn.focus();
+    }
+    else if(focusTarget===true||focusTarget==='close')close.focus();
+    else if(oldFocus>=0)dialog.querySelectorAll('button,a')[oldFocus]?.focus();
   }
   function renderCards(){
     const grid=$('agent-grid');if(!grid)return;
@@ -220,13 +303,17 @@
   }
   const dialog=el('section','agent-detail');dialog.hidden=true;dialog.id='agent-detail';dialog.setAttribute('aria-labelledby','agent-detail-title');
   document.querySelector('.workspace').append(dialog);
-  function closeDetail(){selected=null;open();const b=[...document.querySelectorAll('[data-agent-key]')].find(x=>x.dataset.agentKey===focusCard);if(b)b.focus();}
+  function closeDetail(){pickerOpen=false;selected=null;open();const b=[...document.querySelectorAll('[data-agent-key]')].find(x=>x.dataset.agentKey===focusCard);if(b)b.focus();}
   window.officeAgents={open,refresh(){shell();},async show(key){
     if(!data?.agents?.some(a=>a.bot_key===key))await load();
     if(data?.agents?.some(a=>a.bot_key===key)){focusCard=key;showDetail(key);}
     else{open();$('agent-view-status').textContent=officeI18n.t('Agent evidence is unavailable for this roster binding.');}
   }};
   window.addEventListener('office-language-changed',()=>{shell();if(selected&&!dialog.hidden)showDetail(selected,false);});
+  window.addEventListener('office-avatar-changed',()=>{
+    renderCards();
+    if(selected&&!dialog.hidden)showDetail(selected,false);
+  });
   // Re-evaluate freshness while visible; never fetch, infer stalls or run agents.
   setInterval(()=>{if(!$('agents-view').hidden){const key=document.activeElement?.dataset.agentKey;renderCards();if(!dialog.hidden&&selected)showDetail(selected,false);else if(key)[...document.querySelectorAll('[data-agent-key]')].find(x=>x.dataset.agentKey===key)?.focus();}},30000);
 })();

@@ -63,17 +63,61 @@
     h^=h>>>16;h=Math.imul(h,0x85ebca6b);h^=h>>>13;h=Math.imul(h,0xc2b2ae35);h^=h>>>16;
     return h>>>0;
   }
+  const STORAGE_KEY='cbm_agent_avatars';
+  function readCustomStore(){
+    try{
+      if(typeof localStorage==='undefined')return {};
+      const raw=localStorage.getItem(STORAGE_KEY);
+      if(!raw)return {};
+      const parsed=JSON.parse(raw);
+      return (parsed&&typeof parsed==='object'&&!Array.isArray(parsed))?parsed:{};
+    }catch(_){return {};}
+  }
+  function writeCustomStore(map){
+    try{
+      if(typeof localStorage==='undefined')return;
+      if(!map||!Object.keys(map).length)localStorage.removeItem(STORAGE_KEY);
+      else localStorage.setItem(STORAGE_KEY,JSON.stringify(map));
+    }catch(_){}
+  }
+  function getCustom(botKey){
+    if(!botKey)return null;
+    const store=readCustomStore();
+    const val=store[String(botKey)];
+    if(typeof val!=='number'&&typeof val!=='string')return null;
+    const n=Number(val);
+    if(!Number.isInteger(n))return null;
+    return ((n%COUNT)+COUNT)%COUNT;
+  }
+  function setCustom(botKey,idx){
+    if(!botKey)return;
+    const store=readCustomStore();
+    const n=((Number(idx)||0)%COUNT+COUNT)%COUNT;
+    store[String(botKey)]=n;
+    writeCustomStore(store);
+  }
+  function clearCustom(botKey){
+    if(!botKey)return;
+    const store=readCustomStore();
+    if(Object.prototype.hasOwnProperty.call(store,String(botKey))){
+      delete store[String(botKey)];
+      writeCustomStore(store);
+    }
+  }
+
   const seedOf=(projectId,botId)=>String(projectId==null?'':projectId)+':'+String(botId==null?'':botId);
   const index=(projectId,botId)=>hash(seedOf(projectId,botId))%COUNT;
   const initials=name=>String(name||'').split(/\s+/).filter(Boolean).map(x=>Array.from(x)[0]).slice(0,2).join('')||'?';
   // Put the agent's avatar into an existing element. key is the registry bot_key (project id + ':' + bot id), the same
   // seed as index(projectId, botId); initials remain when neither is known.
+  // Custom avatar overrides stored under cbm_agent_avatars take precedence over the default deterministic hash.
   function fill(node,{key,projectId,botId,name}){
     if(!node)return node;
     node.setAttribute('aria-hidden','true');
     const seed=key?String(key):(botId==null||botId===''?'':seedOf(projectId,botId));
     if(!seed){node.textContent=initials(name);return node;}
-    const n=hash(seed)%COUNT;
+    const custom=getCustom(seed);
+    const n=custom!=null?custom:(hash(seed)%COUNT);
     node.classList.add('avatar-art');node.dataset.avatar=String(n);
     node.innerHTML=svg(n);
     return node;
@@ -85,7 +129,7 @@
     if(typeof key!=='string')return null;
     return ((overview&&overview.bots)||[]).find(b=>b.bot_key===key&&b.project_id===projectId)||null;
   }
-  const api={count:COUNT,index,svg,seed:seedOf,fill,initials,managerOf,traits:i=>spec(((Number(i)||0)%COUNT+COUNT)%COUNT)};
+  const api={count:COUNT,index,svg,seed:seedOf,fill,initials,managerOf,traits:i=>spec(((Number(i)||0)%COUNT+COUNT)%COUNT),getCustom,setCustom,clearCustom};
   if(typeof window!=='undefined')window.officeAvatars=api;
   if(typeof module!=='undefined'&&module.exports)module.exports=api;
 })();

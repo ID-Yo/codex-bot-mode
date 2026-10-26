@@ -55,7 +55,9 @@ STATUS_NATIVE_CACHE_SECONDS = 10
 def create_server(controller, port=0, *, ipv6=False, token=None, desktop_lifecycle=None):
     token = token or secrets.token_urlsafe(32)
     from .settings import BotSettings, OfficeSettings
-    settings = BotSettings(controller.profile_project)
+    from . import registry
+    reg_file = getattr(controller, 'registry_file', None) or registry.registry_path(controller.profile_project)
+    settings = BotSettings(controller.profile_project, registry_file=reg_file)
     office_settings = OfficeSettings(controller.store.root)
     settings_controller = controller
     if not hasattr(controller, 'project_managers'):
@@ -170,7 +172,13 @@ def create_server(controller, port=0, *, ipv6=False, token=None, desktop_lifecyc
                     url = urlsplit(self.path); parts = url.path.split('/')
                     if len(parts) != 5: raise ValueError('Unknown settings')
                     if parts[3:] == ['office','general']: return self.reply(200, office_settings.read())
-                    if parts[3] == 'bots': return self.reply(200, settings.read(parts[4], parse_qs(url.query).get('file',['SOUL.md'])[0]))
+                    if parts[3] == 'bots':
+                        from urllib.parse import unquote
+                        query = parse_qs(url.query)
+                        file_arg = query.get('file', ['SOUL.md'])[0]
+                        proj_arg = query.get('project', [None])[0]
+                        bot_name = unquote(parts[4])
+                        return self.reply(200, settings.read(bot_name, file_arg, project=proj_arg))
                     if parts[3] == 'rooms': return self.reply(200, settings_controller.rooms.settings(parts[4]))
                     raise ValueError('Unknown settings')
                 except (ValueError, OSError) as error: return self.reply(400, {'error':str(error)})
@@ -618,10 +626,16 @@ def create_server(controller, port=0, *, ipv6=False, token=None, desktop_lifecyc
                     from .updates import dispatch
                     result = dispatch(getattr(controller, 'updates', None), self.path, data)
                 elif self.path.startswith('/api/settings/'):
-                    parts = self.path.split('/')
+                    from urllib.parse import unquote
+                    url = urlsplit(self.path)
+                    parts = url.path.split('/')
                     if len(parts) != 5: raise ValueError('Unknown settings')
                     if parts[3:] == ['office','general']: result = office_settings.save(data.get('name'),data.get('version'))
-                    elif parts[3] == 'bots': result = settings.save(parts[4],data.get('file'),data.get('content'),data.get('version'))
+                    elif parts[3] == 'bots':
+                        query = parse_qs(url.query)
+                        proj_arg = data.get('project') or query.get('project', [None])[0]
+                        bot_name = unquote(parts[4])
+                        result = settings.save(bot_name, data.get('file'), data.get('content'), data.get('version'), project=proj_arg)
                     elif parts[3] == 'rooms': result = controller.rooms.update(parts[4],data.get('name'),data.get('instructions'),data.get('version'))
                     else: raise ValueError('Unknown settings')
                 elif self.path == '/api/rooms':

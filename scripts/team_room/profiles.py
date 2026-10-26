@@ -19,11 +19,18 @@ def _helper(path, name):
 
 
 def _profile(bot, project=None, snapshot=None):
-    if bot not in BOTS:
-        raise ValueError('Unknown agent.')
     from . import project as served
     root = Path(project).resolve(strict=True) if project else served.PROJECT
+    if bot not in BOTS and not served.participant(bot, root):
+        raise ValueError('Unknown agent.')
     profile, helper_path, memory_project, bot_id, _ = served.profile_location(bot, root)
+    from . import registry
+    if any(p.is_symlink() or p.is_junction() for p in [helper_path, *helper_path.parents] if p != root and p.is_relative_to(root)):
+        raise ValueError('Linked helper paths cannot be executed')
+    if not helper_path.exists():
+        raise ValueError(f"Memory helper not found for agent '{bot}'")
+    if not registry._is_safe_contained(helper_path, root):
+        raise ValueError('Helper path escapes project root')
     helper = _helper(helper_path, 'office_' + bot.replace('-', '_') + '_memory')
     legacy = memory_project == root and profile != memory_project / 'agent'
     loaded = helper.load_profile(bot_id) if legacy else helper.load_profile(memory_project, bot_id)
