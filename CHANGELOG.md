@@ -35,9 +35,11 @@ Windows x64 preview of the Codex Office desktop controller (signed with self-sig
 ### Fixed
 - Multi-project profiles security: strict pre-validation of memory helper paths and parents against registered project roots, rejecting symlinks and junctions before import or execution.
 - Disambiguation and consistency: reject contradictory qualified bot keys and explicit project selectors with an explicit error, and report unavailable memory helpers instead of masking them as empty memory.
+- Profile contrast: Office profile text meets readable contrast in the atelier theme.
+- Agent Monitor: overdue tasks are re-escalated on later runs instead of being reported once.
 
 ### Notes
-- Installer `Codex Office_0.1.8_x64-setup.exe`: 17,630,480 bytes, SHA-256 `E44192858AEAEF85E3F8EF60AFD49B65DCDA8CB05FAAB0FD95176761D9E0152B`.
+- Installer `Codex Office_0.1.8_x64-setup.exe`: 17,632,968 bytes, SHA-256 `01D768E9E91351E178D5632AEEA7EC0A5E5C27BAAB80CCDA2B3858E34B17F3E1`.
 
 ## [Office 0.1.7] - 2026-10-25
 

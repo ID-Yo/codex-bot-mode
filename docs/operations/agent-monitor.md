@@ -39,6 +39,7 @@ The Monitor evaluates task follow-through per canonical policy ([Task Ownership 
 - **Elapsed time alone is not a stall**: An agent waiting on an external review, dependency, or scheduled run is not stalled.
 - **Canonical Pause**: If the project or agent is in a paused state, the Monitor respects the pause and suppresses stall alerts.
 - **Deduplication**: The Monitor emits exactly one evidence-backed alert per event using its `agent/STATE.md` fingerprint ledger.
+- **Overdue reminders**: An unresolved overdue finding (a task, blocker, runtime or reconciliation deadline that has passed) is not silenced for good after its first confirmed delivery. The ledger keeps `alerted_at` per fingerprint, and the finding is reported again once the last report is six hours old, marked as a reminder with the date it was first seen. Reminders repeat every six hours until the finding is resolved, which clears it. A reminder never reopens the delivery: if its delivery is unknown it is not retried before the next interval. Only the four deadline findings (task, blocker, runtime and reconciliation overdue) repeat; every other code, including metadata findings, hygiene notes and the Manager signal codes, keeps its report-once behaviour even when its task deadline has expired, and paused tasks raise no overdue finding. A ledger time that is missing, unreadable or without a timezone counts as due instead of stopping the run. Reminders go to the Chief of Staff report only; the project Manager still receives `stage_finished` and the request signals.
 
 ## Request Not Started
 

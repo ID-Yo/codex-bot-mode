@@ -39,3 +39,4 @@ body[data-mode=dark] .pc-proj-checklist{background:var(--paper);border-color:var
 #auto-read[aria-pressed=true]{background:#e5f1e9;border-color:#b6d3c2;color:#1d4a37}body[data-mode=dark] #auto-read[aria-pressed=true]{background:#1f4a38;border-color:#5f9c80;color:#e6f4ec}
 /* Dark hover: polish.css pinned a dark hover foreground (1.13:1 on the Dark fill). */
 body[data-mode=dark] .secondary:hover:not(:disabled){color:var(--ink);border-color:var(--accent)}body[data-mode=dark] .stop:hover:not(:disabled){color:var(--hot);border-color:var(--hot)}
+.agent-note{color:#5f6862}body[data-mode=dark] .agent-note{color:var(--muted)}
