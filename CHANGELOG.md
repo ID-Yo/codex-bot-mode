@@ -24,6 +24,36 @@ Format: [Keep a Changelog](https://keepachangelog.com/). Versions follow [SemVer
 - Chief of Staff updates now identify the project, including multi-project, cross-project and personal operations.
 - Installation examples now pass the selected tracking mode or the reviewed answers file.
 
+## [Office 0.1.9] - unreleased
+
+Windows x64 preview of the Codex Office desktop controller (signed with self-signed certificate `CN=Codex Office (ID-Yo)`, thumbprint `2C4510778788894A8CAA3C891FE3BCB899A0C0F0`; compare the published SHA-256). Includes everything in 0.1.8.
+
+### Fixed
+- Office status polling no longer waits on a slow or cold Codex Desktop: it answers at once with an explicit unknown ("still checking") while one background check runs. A stale safe result is never reported, and stopping still reads live state.
+- The Agents view answers promptly while Desktop evidence loads, shows the valid roster cards with execution Unknown and a "Loading Desktop evidence" note, and refreshes itself, including an open agent detail with its focused profile editor and unsaved draft.
+- Retained agent records after a failed refresh read stale/Unknown instead of working, and no exception text is shown.
+
+### Notes
+- Installer `Codex Office_0.1.9_x64-setup.exe`: 17,637,776 bytes, SHA-256 `1FD00561667CDE28A8F1F227ED4AEC96DEF69FA5C6EBA97ACB15E831DB1A87F7`.
+- Office 0.1.8 was not published; its installer (17,632,968 bytes, SHA-256 `01D768E9E91351E178D5632AEEA7EC0A5E5C27BAAB80CCDA2B3858E34B17F3E1`) was a frozen candidate installed for acceptance and is superseded by 0.1.9.
+
+## [Office 0.1.8] - unreleased
+
+Windows x64 preview of the Codex Office desktop controller (signed with self-signed certificate `CN=Codex Office (ID-Yo)`, thumbprint `2C4510778788894A8CAA3C891FE3BCB899A0C0F0`; compare the published SHA-256).
+
+### Added
+- Avatar picker: customize an agent's avatar directly from their card using the pencil button, with an accessible palette, keyboard navigation, and persistent selection across page reloads.
+- Multi-project profiles: view and edit agent Profile and Soul, and view validated Memory across all registered projects in the Office UI.
+
+### Fixed
+- Multi-project profiles security: strict pre-validation of memory helper paths and parents against registered project roots, rejecting symlinks and junctions before import or execution.
+- Disambiguation and consistency: reject contradictory qualified bot keys and explicit project selectors with an explicit error, and report unavailable memory helpers instead of masking them as empty memory.
+- Profile contrast: Office profile text meets readable contrast in the atelier theme.
+- Agent Monitor: overdue tasks are re-escalated on later runs instead of being reported once.
+
+### Notes
+- Installer `Codex Office_0.1.8_x64-setup.exe`: 17,632,968 bytes, SHA-256 `01D768E9E91351E178D5632AEEA7EC0A5E5C27BAAB80CCDA2B3858E34B17F3E1`.
+
 ## [Office 0.1.7] - 2026-10-25
 
 Release: https://github.com/ID-Yo/codex-bot-mode/releases/tag/office-v0.1.7

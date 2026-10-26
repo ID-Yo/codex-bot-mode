@@ -7,6 +7,8 @@ from datetime import datetime, timezone
 import json
 from pathlib import Path
 import re
+import threading
+import time
 
 from . import desktop_relay, project_status, registry, requests, roster
 
@@ -293,3 +295,76 @@ def build(project_root, bridge=None, now=None):
             'source_warnings': [t['project_name'] + ': ' + t['status'] for t in overview.get('teams', [])
                                 if t['status'] in ('source_unavailable', 'roster_error')],
             'coverage': 'Registry identities, explicit task headers and request lifecycle only. Runtime metadata may be partial; standalone runtime unsupported.'}
+
+
+_BUILDS = {}
+_BUILDS_LOCK = threading.Lock()
+BUILD_WAIT = 1.0
+BUILD_STALE_SECONDS = 60.0
+
+
+def _as_stale(value):
+    """Retained records must not claim a live state: execution becomes Unknown (paused stays, it is owner-set)
+    and runtime and execution freshness read stale. Task and identity records are kept as they were."""
+    out = json.loads(json.dumps(value))
+    for card in out.get('agents', []):
+        execution = card.get('execution')
+        if isinstance(execution, dict):
+            if execution.get('state') != 'paused':
+                execution.update(state='unknown', state_since=None, certainty='unknown')
+            execution['freshness'] = 'stale'
+        if isinstance(card.get('runtime'), dict):
+            card['runtime']['freshness'] = 'stale'
+        card['uncertain'] = True
+    return out
+
+
+def build_nonblocking(project_root, bridge=None, wait=BUILD_WAIT, stale_after=BUILD_STALE_SECONDS):
+    """build() for HTTP polling (#329). Per-project Desktop reads can take tens of seconds, so a request never
+    waits for them: one background build per project runs at a time and a request waits at most wait seconds.
+
+    The answer says what it is in 'enrichment': 'fresh' (a finished build younger than stale_after), 'stale' (the
+    last finished build while a refresh runs), 'pending' (no build finished yet: roster identities only, no Desktop
+    evidence, so execution stays Unknown) or 'failed' (the last build raised; the reason is in source_warnings)."""
+    key = str(project_root)
+    now = time.monotonic()
+    with _BUILDS_LOCK:
+        entry = _BUILDS.setdefault(key, {'value': None, 'at': 0.0, 'worker': None, 'error': None, 'bridge': id(bridge)})
+        if entry['bridge'] != id(bridge):
+            # A replacement bridge is a different Desktop connection: nothing observed through the old one is reused.
+            entry.update(value=None, at=0.0, error=None, bridge=id(bridge))
+        worker = entry['worker']
+        if (worker is None or not worker.is_alive()) and (entry['value'] is None or now - entry['at'] >= stale_after / 2
+                                                          or entry['error']):
+            def run():
+                try:
+                    value, error = build(project_root, bridge), None
+                except Exception as exc:
+                    value, error = None, type(exc).__name__  # never echo exception text to the UI
+                with _BUILDS_LOCK:
+                    if value is not None:
+                        entry['value'], entry['at'] = value, time.monotonic()
+                    entry['error'] = error
+            worker = threading.Thread(target=run, daemon=True, name='agent-visibility')
+            entry['worker'] = worker
+            worker.start()
+    worker.join(wait if entry['value'] is None else 0)
+    with _BUILDS_LOCK:
+        value, at, error = entry['value'], entry['at'], entry['error']
+    if value is not None:
+        age = time.monotonic() - at
+        if age < stale_after and not error:
+            return dict(value, enrichment='fresh')
+        out = dict(_as_stale(value), enrichment='stale')
+        if error:
+            out['source_warnings'] = list(value.get('source_warnings', [])) + ['Agent evidence refresh failed (' + error + '); showing the last known records.']
+        return out
+    # Nothing finished yet: valid roster cards without Desktop evidence, labelled as such.
+    try:
+        out = dict(build(project_root, None), enrichment='failed' if error else 'pending')
+    except Exception as exc:
+        return {'status': 'unknown', 'agents': [], 'enrichment': 'failed',
+                'source_warnings': ['Agent evidence unavailable (' + type(exc).__name__ + ').']}
+    note = ('Agent evidence refresh failed (' + error + ').') if error else 'Desktop evidence is still loading; execution is Unknown until it arrives.'
+    out['source_warnings'] = list(out.get('source_warnings', [])) + [note]
+    return out

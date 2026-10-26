@@ -221,7 +221,28 @@ def unique_object(pairs):
 
 
 
-def update_monitor_state(state_file_path, findings, snapshot=None, now=None, *, complete=True, run_id=None):
+OVERDUE_REMINDER_INTERVAL = timedelta(hours=6)  # unresolved overdue findings are re-reported at most this often
+LEDGER_KEYS = ("first_seen", "status", "escalated", "reported", "alerted_at")
+
+
+# Only these deadline findings are repeated. Everything else (metadata findings, hygiene notes, Manager signal codes
+# such as stage_finished, request signals) keeps its report-once behaviour, and findings of paused tasks never exist.
+REMINDER_CODES = frozenset({"task_overdue", "reconciliation_overdue", "blocker_overdue", "runtime_overdue"})
+
+
+def reminder_due(entry, now, interval):
+    """True when the last report is at least interval old. A missing, unparsable or timezone-less time counts as due."""
+    try:
+        last = datetime.fromisoformat(str(entry.get("alerted_at") or entry.get("first_seen")).replace("Z", "+00:00"))
+        if last.tzinfo is None:
+            return True
+        return now - last >= interval
+    except (ValueError, TypeError, OverflowError):
+        return True
+
+
+def update_monitor_state(state_file_path, findings, snapshot=None, now=None, *, complete=True, run_id=None,
+                         reminder_interval=OVERDUE_REMINDER_INTERVAL):
     now = now or datetime.now(timezone.utc)
     now_str = now.strftime("%Y-%m-%dT%H:%M:%SZ")
     state_path = Path(state_file_path).resolve()
@@ -303,13 +324,14 @@ def update_monitor_state(state_file_path, findings, snapshot=None, now=None, *, 
                 "status": "escalated" if is_overdue else "new",
                 "escalated": is_overdue,
                 "reported": False,
+                "alerted_at": now_str,
             }
             new_alerts.append(f)
         elif run_id and existing_ledger[fp].get("reported") is not True:
             # Monitor runs only: seen before but never confirmed as delivered (a repeated invocation, a failed or
             # unknown delivery, or a ledger from before this flag): still a new signal for the recipient.
             entry = existing_ledger[fp]
-            entry.update(last_seen=now_str, detail=f.get("detail"), status="new", reported=False)
+            entry.update(last_seen=now_str, detail=f.get("detail"), status="new", reported=False, alerted_at=now_str)
             new_alerts.append(f)
         else:
             entry = existing_ledger[fp]
@@ -318,6 +340,11 @@ def update_monitor_state(state_file_path, findings, snapshot=None, now=None, *, 
             if is_overdue:
                 entry["status"] = "re_escalated"
                 entry["escalated"] = True
+                if run_id and code in REMINDER_CODES and entry.get("reported") is True and reminder_due(entry, now, reminder_interval):
+                    # A delivered, still unresolved overdue finding is reported again once per interval. The entry stays
+                    # delivered, so a reminder whose delivery is unknown is not retried before the next interval.
+                    entry["alerted_at"] = now_str
+                    new_alerts.append({**f, "detail": f"{f.get('detail')} (reminder: unresolved since {entry.get('first_seen')})"})
             else:
                 entry["status"] = "deduplicated"
 
@@ -330,7 +357,7 @@ def update_monitor_state(state_file_path, findings, snapshot=None, now=None, *, 
     if state_path.suffix.lower() == ".md":
         from monitor_checkpoint import save_checkpoint
         # The bounded block keeps fingerprints and timing only; details live in the report and snapshot.
-        slim = {fp: {k: v for k, v in entry.items() if k in ("first_seen", "status", "escalated", "reported")}
+        slim = {fp: {k: v for k, v in entry.items() if k in LEDGER_KEYS}
                 for fp, entry in state["alert_ledger"].items()}
         save_checkpoint(state_path, {**state, "alert_ledger": slim})
         return state, new_alerts

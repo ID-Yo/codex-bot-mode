@@ -14,3 +14,30 @@
 .pc-manager-line{display:flex;align-items:center;gap:8px}
 .pc-manager-line .avatar{width:24px;height:24px}
 .pc-h2 .avatar{display:inline-flex;vertical-align:middle;width:28px;height:28px;margin-right:8px}
+
+/* Avatar Picker and Edit Button */
+.agent-detail-who{position:relative}
+.avatar-edit-wrap{position:relative;display:inline-flex;align-items:center;justify-content:center;flex-shrink:0}
+.avatar-edit-btn{position:absolute;right:-4px;bottom:-4px;width:22px;height:22px;border-radius:50%;background:var(--paper,#fff);color:var(--ink,#20372c);border:1px solid var(--line,#bdcbbf);display:inline-flex;align-items:center;justify-content:center;padding:0;cursor:pointer;box-shadow:0 1px 4px rgba(0,0,0,.15);transition:transform .15s ease,background-color .15s ease}
+.avatar-edit-btn:hover{background:var(--soft,#edf1ec);transform:scale(1.1)}
+.avatar-edit-btn:focus-visible{outline:2px solid var(--accent,#215d3a);outline-offset:2px}
+.avatar-edit-btn svg{width:12px;height:12px;display:block;pointer-events:none}
+
+.avatar-picker-panel{margin:16px 0 20px;padding:16px;background:var(--paper,#fff);border:1px solid var(--line,#d5dfd4);border-radius:10px;box-shadow:0 2px 8px rgba(0,0,0,.06);box-sizing:border-box;max-width:100%}
+.avatar-picker-head{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:10px;margin-bottom:12px}
+.avatar-picker-head h3{margin:0;font-size:14px;font-weight:600}
+.avatar-picker-actions{display:flex;flex-wrap:wrap;align-items:center;gap:8px}
+@media(max-width:440px){
+  .avatar-picker-panel{padding:12px 10px}
+  .avatar-picker-head{flex-direction:column;align-items:flex-start;gap:8px}
+  .avatar-picker-actions{width:100%;justify-content:flex-start}
+}
+.avatar-picker-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(44px,1fr));gap:8px;max-height:260px;overflow-y:auto;padding:4px}
+.avatar-picker-option{padding:0;background:transparent;border:2px solid transparent;border-radius:50%;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;width:44px;height:44px;transition:transform .12s ease,border-color .12s ease}
+.avatar-picker-option .avatar{width:38px;height:38px;margin:0}
+.avatar-picker-option:hover{transform:scale(1.12)}
+.avatar-picker-option:focus-visible{outline:2px solid var(--accent,#215d3a);outline-offset:2px}
+.avatar-picker-option.selected{border-color:var(--accent,#215d3a);box-shadow:0 0 0 2px rgba(33,93,58,.25)}
+body[data-mode=dark] .avatar-picker-panel{background:var(--paper,#1d2420);border-color:var(--line,#2c3830)}
+body[data-mode=dark] .avatar-edit-btn{background:var(--paper,#26302a);border-color:var(--line,#3a493f);color:var(--ink,#e3eae5)}
+body[data-mode=dark] .avatar-edit-btn:hover{background:var(--soft,#324037)}

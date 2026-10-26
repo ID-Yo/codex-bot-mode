@@ -49,10 +49,11 @@ def participant(bot, project=None):
     return next((p for p in participants(project) if p['bot'] == bot), None)
 
 
-def label(bot):
-    p = participant(bot)
+def label(bot, project=None):
+    root = Path(project or PROJECT).resolve()
+    p = participant(bot, root)
     if p and p.get('workspace'):
-        meta = Path(PROJECT, p['workspace'], 'agent', 'agent.yaml')
+        meta = Path(root, p['workspace'], 'agent', 'agent.yaml')
         if meta.exists():
             from . import manifest
             try:

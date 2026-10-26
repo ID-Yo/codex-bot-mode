@@ -269,7 +269,7 @@ def manager_signals(config, new_alerts):
 
 
 CHECKPOINT_FINDING_STEPS = (150, 60, 20)  # findings kept when the checkpoint block would exceed its size bound
-LEDGER_KEYS = ("first_seen", "status", "escalated", "reported")
+LEDGER_KEYS = tc.LEDGER_KEYS
 
 
 def is_size_error(error):

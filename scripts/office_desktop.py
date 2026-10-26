@@ -326,6 +326,55 @@ def inspect_shutdown(controller, personal=None, rooms=None, managers=None, nativ
             'reason': ' '.join(['Waiting for owned work to reach a safe boundary.'] + notes) if busy else ''}
 
 
+STATUS_FRESH_SECONDS = 10.0
+STATUS_WAIT_SECONDS = 1.0
+_STATUS = {'value': None, 'at': 0.0, 'worker': None, 'context': None}
+_STATUS_LOCK = threading.Lock()
+STATUS_PENDING = {'safety': 'unknown', 'busy_count': 0, 'pending_count': 0,
+                  'reason': 'Office is still checking its Codex Desktop chats; stopping stays unavailable until that finishes.'}
+
+
+def inspect_status(controller, personal=None, rooms=None, managers=None, native_cache_ttl=10,
+                   fresh=STATUS_FRESH_SECONDS, wait=STATUS_WAIT_SECONDS):
+    """Status for polling: never blocks on a slow Desktop. One background check runs at a time.
+
+    A result younger than fresh seconds is returned as is. Otherwise the check is started once (coalesced) and
+    waited for at most wait seconds. Without a fresh result the answer is the last result only when it was not safe,
+    else an explicit unknown. A stale answer is never reported as safe. Stop and shutdown keep calling
+    inspect_shutdown directly with live reads.
+    """
+    context = (id(controller), id(personal), id(rooms), id(managers),
+               id(getattr(personal, 'native_bridge', None)))
+    with _STATUS_LOCK:
+        if _STATUS['context'] != context:
+            # Another controller or Desktop connection: a result observed for the old one says nothing about this one.
+            _STATUS.update(value=None, at=0.0, worker=None, context=context)
+        value, at, worker = _STATUS['value'], _STATUS['at'], _STATUS['worker']
+        if value is not None and time.monotonic() - at < fresh:
+            return dict(value)
+        if worker is None or not worker.is_alive():
+            def run():
+                try:
+                    result = inspect_shutdown(controller, personal, rooms, managers, native_cache_ttl=native_cache_ttl)
+                except Exception as error:
+                    result = {'safety': 'unknown', 'busy_count': 0, 'pending_count': 0,
+                              'reason': 'The status check failed (' + type(error).__name__ + '); stopping stays unavailable.'}
+                with _STATUS_LOCK:
+                    if _STATUS['context'] == context:
+                        _STATUS['value'], _STATUS['at'] = result, time.monotonic()
+            worker = threading.Thread(target=run, daemon=True, name='office-status-check')
+            _STATUS['worker'] = worker
+            worker.start()
+    worker.join(wait)
+    with _STATUS_LOCK:
+        value, at = _STATUS['value'], _STATUS['at']
+    if value is not None and time.monotonic() - at < fresh:
+        return dict(value)
+    if value is not None and value.get('safety') != 'safe':
+        return dict(value)
+    return dict(STATUS_PENDING)
+
+
 def set_draining(controller, personal=None, rooms=None, managers=None, value=True):
     """Stop internal schedulers from accepting another queued operation."""
     owned = [controller]

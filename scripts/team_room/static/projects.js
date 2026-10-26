@@ -204,8 +204,10 @@
     paintRows();if(inboxData)body.append(el('p','pc-muted',officeI18n.t(inboxData.coverage)));
   }
 
+  let retryCount=0,retryHandle=null;
   async function load(){
     if(loading)return;loading=true;
+    let needsRetry=false;
     registryFailed=true;agentFailed=true;
     try{
       const [rProjects,rOverview,rAgents]=await Promise.allSettled([
@@ -230,11 +232,13 @@
       }
       if(rAgents.status==='fulfilled'&&rAgents.value.ok){
         agentData=await rAgents.value.json();agentFailed=!Array.isArray(agentData.agents);
+        if(agentData.enrichment==='pending'||agentData.enrichment==='stale')needsRetry=true;
       }
     }catch(e){
       if(data?.available)problem=e.message;
       else{data={available:false,error:e.message};problem=null;}
     }finally{loading=false;}
+    if(needsRetry&&retryCount<20){retryCount++;clearTimeout(retryHandle);retryHandle=setTimeout(()=>{if(!document.getElementById('projects-view').hidden)load();},3000);}else if(!needsRetry)retryCount=0;
     renderList();
     if(!document.getElementById('projects-view').hidden&&view!=='inbox'){
       if(view!=='overview'&&view!=='inbox'&&view!=='dashboard'&&document.getElementById('pm-chat-container')){
@@ -1438,6 +1442,7 @@
   function open(key,itemId=null){if(window.officeShell&&!window.officeShell.canNavigate())return;inboxSelected=key==='inbox'?itemId:null;window.officeShell?.activate(key==='dashboard'?'dashboard':key==='inbox'?(itemId?'owner-decision':'waiting'):key==='overview'?'projects':'project',itemId?inboxData?.items.find(item=>item.id===itemId)?.title:!['dashboard','inbox','overview'].includes(key)?allProjects().find(p=>p.id===key)?.name:undefined,()=>open(key,itemId));view=key;officeMedia.stop();officeSpeech.stop();officeView='projects';selectMenu('projects');for(const id of ['room-view','personal-view','session-detail'])document.getElementById(id).hidden=true;document.getElementById('projects-view').hidden=false;
     const title=key==='overview'?officeI18n.t('Projects'):key==='inbox'?officeI18n.t('Waiting for you'):(projects().find(p=>p.id===key)?.name||officeI18n.t('Project'));if(!['dashboard','overview','inbox'].includes(key))addConversation('project',key,title);render();renderList();load();if(key==='dashboard'||key==='inbox')loadInbox();if(key!=='overview'&&key!=='inbox'&&key!=='dashboard'){loadProjectChat(key);loadProjectActivity(key);}}
   window.officeProjects={open,load,loadInbox,refresh:render,hide(){document.getElementById('projects-view').hidden=true;renderList();},isProjectVisible,getVisibleProjectIds,setVisibleProjectIds,allKnownProjects};
+  window.addEventListener('office-avatar-changed',()=>{if(!document.getElementById('projects-view').hidden){if(view!=='overview'&&view!=='inbox'&&view!=='dashboard'){updateProjectLeftCol(view);updateChatPane(view);}else render();}});
   window.addEventListener('office-language-changed',()=>{renderList();if(!document.getElementById('projects-view').hidden){if(view!=='overview'&&view!=='inbox'&&view!=='dashboard'){updateProjectLeftCol(view);updateChatPane(view);}else render();}});
   setInterval(()=>{
     if(document.getElementById('projects-view').hidden) return;

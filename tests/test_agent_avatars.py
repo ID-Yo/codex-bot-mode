@@ -47,6 +47,34 @@ out.substring = A.managerOf({bots: [bot('p', 'manager-helper', 'Developer'), bot
 out.staleKey = A.managerOf({bots: [bot('p', 'manager', 'Manager')], managers: {p: 'p:gone'}}, 'p');
 out.otherProject = A.managerOf({bots: [bot('q', 'manager', 'Manager')], managers: {p: 'q:manager'}}, 'p');
 out.nothing = [A.managerOf(null, 'p'), A.managerOf({}, 'p'), A.managerOf({managers: {p: 5}, bots: []}, 'p')];
+
+// Custom avatar overrides via mock localStorage
+let mockStore = {};
+global.localStorage = {
+  getItem: (k) => mockStore[k] || null,
+  setItem: (k, v) => { mockStore[k] = String(v); },
+  removeItem: (k) => { delete mockStore[k]; }
+};
+
+out.customInitial = A.getCustom('p:agent1'); // null initially
+
+A.setCustom('p:agent1', 7);
+out.customSet = A.getCustom('p:agent1'); // 7
+out.storePersisted = mockStore['cbm_agent_avatars'] === JSON.stringify({'p:agent1': 7});
+
+n = node();
+A.fill(n, {key: 'p:agent1', name: 'Agent 1'});
+out.customFill = n.dataset.avatar === '7';
+
+// Clear / reset custom avatar
+A.clearCustom('p:agent1');
+out.customCleared = A.getCustom('p:agent1'); // null
+out.storeCleared = !mockStore['cbm_agent_avatars'];
+
+n = node();
+A.fill(n, {key: 'p:agent1', name: 'Agent 1'});
+out.customResetFill = n.dataset.avatar === String(A.index('p', 'agent1')); // returns to default hash
+
 console.log(JSON.stringify(out));
 '''
 
@@ -107,6 +135,34 @@ class AvatarTests(unittest.TestCase):
         source = (STATIC / 'projects.js').read_text(encoding='utf-8')
         self.assertIn('officeAvatars.managerOf(registryData,pid)', source)
         self.assertNotIn('/manager/i.test', source)
+
+    def test_custom_avatar_persistence_and_reset(self):
+        r = self.result
+        self.assertIsNone(r['customInitial'])
+        self.assertEqual(r['customSet'], 7)
+        self.assertTrue(r['storePersisted'])
+        self.assertTrue(r['customFill'])
+        self.assertIsNone(r['customCleared'])
+        self.assertTrue(r['storeCleared'])
+        self.assertTrue(r['customResetFill'])
+
+    def test_avatar_picker_accessibility_and_focus_contract(self):
+        agents_js = (STATIC / 'agents.js').read_text(encoding='utf-8')
+        avatars_css = (STATIC / 'avatars.css').read_text(encoding='utf-8')
+        # Edit button has aria-expanded, aria-controls, and id
+        self.assertIn("editBtn.id='avatar-edit-button'", agents_js)
+        self.assertIn("editBtn.setAttribute('aria-expanded',String(pickerOpen))", agents_js)
+        self.assertIn("editBtn.setAttribute('aria-controls','avatar-picker-panel')", agents_js)
+        # Picker panel has id and accessible label
+        self.assertIn("picker.id='avatar-picker-panel'", agents_js)
+        # Picker options expose pressed state via aria-pressed
+        self.assertIn("opt.setAttribute('aria-pressed',String(isCurrent))", agents_js)
+        # Focus targets explicitly return to pencil edit button or first option
+        self.assertIn("showDetail(key,'pencil')", agents_js)
+        self.assertIn("focusTarget==='pencil'", agents_js)
+        # Responsive wrapping for narrow screens
+        self.assertIn("@media(max-width:440px)", avatars_css)
+        self.assertIn("flex-wrap:wrap", avatars_css)
 
     def test_office_serves_and_loads_the_library(self):
         web = (ROOT / 'scripts/team_room/web.py').read_text(encoding='utf-8')
