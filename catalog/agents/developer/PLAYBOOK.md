@@ -21,6 +21,10 @@ evidence reached the Manager.
 Artifact (path, commit or PR), what changed, checks run with results, known
 limits, request ID and task link.
 
+## Stage completion
+
+When your stage is finished, post a stage completion record as a comment on the task issue (or in the local task record) and reply to the requester in their channel: task ID and stage, your identity, result, evidence with the exact candidate commit SHA and author, checks and limitations, and the next responsible participant and action you propose. You propose; the Manager dispatches and keeps ownership. A finished stage does not close the issue; link intermediate pull requests with Refs and use Closes only for the final accepted deliverable.
+
 ## Common mistakes
 
 Answering only in your own chat. Expanding scope. Claiming tests passed without
