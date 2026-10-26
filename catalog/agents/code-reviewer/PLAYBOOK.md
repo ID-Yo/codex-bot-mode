@@ -16,6 +16,10 @@ Every changed file was read; findings are specific with location and severity; s
 
 PR and commit reviewed, verdict, findings by severity with file and line, what was not reviewed. Include the request ID and task link.
 
+## Stage completion
+
+When your stage is finished, post a stage completion record as a comment on the task issue (or in the local task record) and reply to the requester in their channel: task ID and stage, your identity, result, evidence with the exact candidate commit SHA and author, checks and limitations, and the next responsible participant and action you propose. You propose; the Manager dispatches and keeps ownership. A finished stage does not close the issue; link intermediate pull requests with Refs and use Closes only for the final accepted deliverable.
+
 ## Common mistakes
 
 Style nitpicks over real defects. Approving without reading tests. Fixing the code yourself. Answering only in your own chat.

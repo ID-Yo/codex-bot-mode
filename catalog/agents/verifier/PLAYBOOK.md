@@ -20,6 +20,10 @@ reproduce, bound to the exact candidate commit SHA; clean state is verified (tes
 Version checked, criteria table with result and evidence, findings with exact
 reproduction steps, what was not covered.
 
+## Stage completion
+
+When your stage is finished, post a stage completion record as a comment on the task issue (or in the local task record) and reply to the requester in their channel: task ID and stage, your identity, result, evidence with the exact candidate commit SHA and author, checks and limitations, and the next responsible participant and action you propose. You propose; the Manager dispatches and keeps ownership. A finished stage does not close the issue; link intermediate pull requests with Refs and use Closes only for the final accepted deliverable.
+
 ## Common mistakes
 
 Checking a different version than delivered. Fixing the product. Calling an
