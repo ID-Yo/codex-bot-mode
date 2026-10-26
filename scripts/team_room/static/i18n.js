@@ -88,6 +88,7 @@
     'Last result':'Последен резултат','No source':'Няма източник','Open result evidence':'Отвори доказателствата за резултата',
     'Open task':'Отвори задачата','Open appointed chat':'Отвори назначения чат',
     'Recorded task failure':'Записан неуспех на задача','Explicit blocker':'Изрична пречка','Owner decision required':'Нужно е решение на собственика',
+    'Loading Desktop evidence — execution is Unknown until it arrives.':'Зареждам данните от Desktop — изпълнението е Неизвестно, докато пристигнат.',
     'No matching agents. Clear the filters or refresh the registry.':'Няма съвпадащи агенти. Изчисти филтрите или обнови регистъра.',
     'Unknown — no scoped transition timestamps recorded.':'Неизвестно — няма записани времена на промени в този обхват.',
     'Evidence refresh failed — retained records are historical; execution is Unknown unless paused.':'Обновяването на доказателствата е неуспешно — записите са исторически; изпълнението е неизвестно, освен ако е на пауза.',

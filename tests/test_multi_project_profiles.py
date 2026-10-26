@@ -319,6 +319,33 @@ class MultiProjectWebAPITests(unittest.TestCase):
         if hasattr(self.c, "rooms"): self.c.rooms.close()
         self.c.close(); self.temp.cleanup()
 
+    def test_cold_agents_request_answers_before_a_slow_desktop_bridge(self):
+        """#329: HTTP -> handler -> agent_visibility with a slow per-project Desktop read."""
+        import time, types
+        from unittest import mock
+        from scripts.team_room import agent_visibility
+        real = agent_visibility.build
+
+        def slow(project_root, bridge=None, now=None):
+            if bridge is not None:
+                time.sleep(2.5)
+            return real(project_root, bridge, now)
+
+        agent_visibility._BUILDS.clear()
+        self.c.project_managers = types.SimpleNamespace(bridge=object(), close=lambda: None)
+        with mock.patch.object(agent_visibility, 'build', slow):
+            started = time.monotonic()
+            status, body = self.request("GET", "/api/registry/agents")
+            self.assertEqual(status, 200)
+            self.assertLess(time.monotonic() - started, 2.0)
+            cold = json.loads(body)
+            self.assertEqual(cold["enrichment"], "pending")
+            self.assertIsInstance(cold["agents"], list)
+            self.assertTrue(any("Unknown" in w for w in cold["source_warnings"]))
+            for entry in list(agent_visibility._BUILDS.values()):
+                entry["worker"].join(6)
+            self.assertEqual(json.loads(self.request("GET", "/api/registry/agents")[1])["enrichment"], "fresh")
+
     def request(self, method, path, data=None, headers=None):
         conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
         body = json.dumps(data) if data is not None else None

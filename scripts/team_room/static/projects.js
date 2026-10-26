@@ -204,8 +204,10 @@
     paintRows();if(inboxData)body.append(el('p','pc-muted',officeI18n.t(inboxData.coverage)));
   }
 
+  let retryCount=0,retryHandle=null;
   async function load(){
     if(loading)return;loading=true;
+    let needsRetry=false;
     registryFailed=true;agentFailed=true;
     try{
       const [rProjects,rOverview,rAgents]=await Promise.allSettled([
@@ -230,11 +232,13 @@
       }
       if(rAgents.status==='fulfilled'&&rAgents.value.ok){
         agentData=await rAgents.value.json();agentFailed=!Array.isArray(agentData.agents);
+        if(agentData.enrichment==='pending'||agentData.enrichment==='stale')needsRetry=true;
       }
     }catch(e){
       if(data?.available)problem=e.message;
       else{data={available:false,error:e.message};problem=null;}
     }finally{loading=false;}
+    if(needsRetry&&retryCount<20){retryCount++;clearTimeout(retryHandle);retryHandle=setTimeout(()=>{if(!document.getElementById('projects-view').hidden)load();},3000);}else if(!needsRetry)retryCount=0;
     renderList();
     if(!document.getElementById('projects-view').hidden&&view!=='inbox'){
       if(view!=='overview'&&view!=='inbox'&&view!=='dashboard'&&document.getElementById('pm-chat-container')){

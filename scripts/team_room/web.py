@@ -14,7 +14,7 @@ from .cross_rooms import CrossRoomError
 from .store import BOTS
 from .work import WorkConflict
 from .images import Images, MAX_BYTES
-from scripts.office_desktop import LifecycleBusy, inspect_shutdown, set_draining
+from scripts.office_desktop import LifecycleBusy, inspect_shutdown, inspect_status, set_draining
 
 
 STATIC = Path(__file__).parent / 'static'
@@ -148,7 +148,7 @@ def create_server(controller, port=0, *, ipv6=False, token=None, desktop_lifecyc
                 if url.path == '/desktop/health':
                     return self.reply(200, desktop_lifecycle.health())
                 if url.path == '/desktop/status':
-                    state = inspect_shutdown(controller, getattr(controller, 'personal', None),
+                    state = inspect_status(controller, getattr(controller, 'personal', None),
                         getattr(controller, 'rooms', None), getattr(controller, 'project_managers', None),
                         native_cache_ttl=STATUS_NATIVE_CACHE_SECONDS)
                     return self.reply(200, {**desktop_lifecycle.health(), **state,
@@ -270,7 +270,7 @@ def create_server(controller, port=0, *, ipv6=False, token=None, desktop_lifecyc
                 if not bridge and controller.work:
                     bridge = controller.work.bridge
                 try:
-                    return self.reply(200, agent_visibility.build(served.PROJECT, bridge))
+                    return self.reply(200, agent_visibility.build_nonblocking(served.PROJECT, bridge))
                 except (ValueError, OSError):
                     return self.reply(200, {'status':'unknown', 'agents':[], 'source_warnings':['Agent evidence unavailable']})
             if url.path == '/api/registry/overview':

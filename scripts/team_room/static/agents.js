@@ -113,6 +113,8 @@
     selected=key;
     const dialog=$('agent-detail');
     const oldFocus=[...dialog.querySelectorAll('button,a')].indexOf(document.activeElement);
+    // A passive refresh rebuilds the panel; keep the focused profile editor, caret, selection and scroll (the draft text lives in the draft map).
+    const active=document.activeElement,editor=focusTarget===false&&active?.classList?.contains('agent-profile-content')&&dialog.contains(active)?{start:active.selectionStart,end:active.selectionEnd,direction:active.selectionDirection,top:active.scrollTop}:null;
     dialog.replaceChildren();
     const head=el('div','agent-detail-head');
     const title=el('h2',null,a.name||a.bot_id);title.id='agent-detail-title';
@@ -221,6 +223,7 @@
       if(firstOpt)firstOpt.focus();else editBtn.focus();
     }
     else if(focusTarget===true||focusTarget==='close')close.focus();
+    else if(editor){const field=dialog.querySelector('.agent-profile-content');if(field&&!field.disabled){field.focus({preventScroll:true});field.setSelectionRange(editor.start,editor.end,editor.direction||'none');field.scrollTop=editor.top;}}
     else if(oldFocus>=0)dialog.querySelectorAll('button,a')[oldFocus]?.focus();
   }
   function renderCards(){
@@ -283,8 +286,9 @@
     const count=el('p','agent-note');count.id='agent-count';count.setAttribute('role','status');view.append(count);
     const grid=el('div','agent-grid');grid.id='agent-grid';view.append(grid);
     renderCards();
-    status.textContent=failed?officeI18n.t('Evidence refresh failed — retained records are historical; execution is Unknown unless paused.'):(data?.source_warnings||[]).join('; ')||data?.coverage||'';
+    status.textContent=failed?officeI18n.t('Evidence refresh failed — retained records are historical; execution is Unknown unless paused.'):(data?.enrichment==='pending'?officeI18n.t('Loading Desktop evidence — execution is Unknown until it arrives.')+' ':'')+((data?.source_warnings||[]).join('; ')||data?.coverage||'');
   }
+  let retries=0,retryTimer=null;
   async function load(){
     if(loading)return;loading=true;
     if($('agents-refresh'))$('agents-refresh').disabled=true;
@@ -293,6 +297,7 @@
       if(!r.ok)throw Error(officeI18n.t('Evidence unavailable'));
       const next=await r.json();if(!Array.isArray(next.agents))throw Error(officeI18n.t('Invalid agent evidence'));
       data=next;failed=false;
+      if((next.enrichment==='pending'||next.enrichment==='stale')&&retries<20){retries++;clearTimeout(retryTimer);retryTimer=setTimeout(()=>{if(!$('agents-view').hidden||(selected&&!$('agent-detail').hidden))load();},3000);}else if(next.enrichment!=='pending'&&next.enrichment!=='stale')retries=0;
     }catch(_){failed=true;}
     finally{loading=false;const refreshFocused=document.activeElement?.id==='agents-refresh';shell();if(refreshFocused)$('agents-refresh')?.focus();if(selected&&!$('agent-detail').hidden){if(data?.agents?.some(a=>a.bot_key===selected))showDetail(selected,false);else closeDetail();}}
   }

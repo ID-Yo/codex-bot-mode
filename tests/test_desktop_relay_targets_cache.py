@@ -142,6 +142,180 @@ class NativeCheckCacheTests(unittest.TestCase):
         office_desktop.inspect_shutdown(controller, personal, None, None)
         self.assertEqual(len(calls), 3)
 
+class ColdStatusTests(unittest.TestCase):
+    """A cold, slow Desktop must not block status; only stop reads live (#329)."""
+    def setUp(self):
+        office_desktop._NATIVE_CACHE.clear()
+        office_desktop._STATUS.update(value=None, at=0.0, worker=None)
+
+    def make(self, delay):
+        import threading, time
+        calls, gate = [], threading.Event()
+
+        class Bridge:
+            def call(self, name, arguments):
+                calls.append(arguments['threadId'])
+                gate.wait(delay)
+                return {'thread': {'id': arguments['threadId'], 'status': {'type': 'idle'}}, 'turns': []}
+
+        class Personal:
+            native_bindings = {'a': THREAD.format(1), 'b': THREAD.format(2)}
+            native_bridge = Bridge()
+            controllers = {}
+
+            def _native_root(self, bot, thread_id):
+                return Path(tempfile.gettempdir()) / 'cbm329-missing-native-root'
+
+        class Controller:
+            closing = False
+            active = None
+            store = None
+            work = None
+            mutex = None
+
+        return Controller(), Personal(), calls, gate
+
+    def test_cold_status_returns_unknown_quickly_then_safe_once_checked(self):
+        import time
+        controller, personal, calls, gate = self.make(0.4)
+        started = time.monotonic()
+        first = office_desktop.inspect_status(controller, personal, wait=0.05)
+        self.assertLess(time.monotonic() - started, 0.3)
+        self.assertEqual(first['safety'], 'unknown')
+        for _ in range(5):  # polls during the slow check join the single worker
+            self.assertEqual(office_desktop.inspect_status(controller, personal, wait=0.01)['safety'], 'unknown')
+        self.assertEqual(len(calls), 1)
+        office_desktop._STATUS['worker'].join(5)
+        self.assertEqual(office_desktop.inspect_status(controller, personal, wait=0.01)['safety'], 'safe')
+        self.assertEqual(len(calls), 2)
+
+    def test_stale_safe_is_never_reported_and_stop_check_stays_live(self):
+        controller, personal, calls, gate = self.make(0)
+        office_desktop.inspect_status(controller, personal, wait=2)
+        office_desktop._STATUS['at'] -= 100
+        office_desktop._NATIVE_CACHE.clear()
+        gate.clear()
+        stale = office_desktop.inspect_status(controller, personal, wait=0)
+        self.assertNotEqual(stale['safety'], 'safe')
+        before = len(calls)
+        self.assertEqual(office_desktop.inspect_shutdown(controller, personal, None, None)['safety'], 'safe')
+        self.assertGreater(len(calls), before)
+
+class SlowAgentEvidenceTests(unittest.TestCase):
+    """The agents endpoint answers promptly while per-project Desktop reads are slow (#329)."""
+    def test_cold_build_returns_roster_cards_pending_then_fresh(self):
+        import threading, time
+        from unittest import mock
+        from scripts.team_room import agent_visibility
+        release = threading.Event()
+        root = Path(tempfile.mkdtemp(prefix='cbm329-slow-'))
+        agent_visibility._BUILDS.clear()
+        real = lambda r, b=None, now=None: {'status': 'ok', 'agents': [{'bot_key': 'x'}], 'source_warnings': []}
+
+        def slow_build(project_root, bridge=None, now=None):
+            if bridge is not None:
+                release.wait(5)  # one slow Desktop read per project
+            return real(project_root, bridge)
+
+        with mock.patch.object(agent_visibility, 'build', slow_build):
+            started = time.monotonic()
+            cold = agent_visibility.build_nonblocking(root, object(), wait=0.05)
+            self.assertLess(time.monotonic() - started, 0.5)
+            self.assertEqual((cold['enrichment'], cold['agents']), ('pending', [{'bot_key': 'x'}]))
+            self.assertTrue(any('Unknown' in w for w in cold['source_warnings']))
+            release.set()
+            agent_visibility._BUILDS[str(root)]['worker'].join(5)
+            done = agent_visibility.build_nonblocking(root, object(), wait=0.5)
+            self.assertEqual(done['enrichment'], 'fresh')
+
+    def test_retained_records_after_failed_refresh_do_not_claim_working_and_hide_exception_text(self):
+        from unittest import mock
+        from scripts.team_room import agent_visibility
+        root = Path(tempfile.mkdtemp(prefix='cbm329-stale-'))
+        agent_visibility._BUILDS.clear()
+        bridge = object()
+        card = {'bot_key': 'x', 'execution': {'state': 'working', 'state_since': None, 'certainty': 'confirmed', 'freshness': 'fresh'},
+                'runtime': {'freshness': 'fresh'}, 'uncertain': False}
+        calls = []
+
+        def build(project_root, b=None, now=None):
+            calls.append(b)
+            if b is not None and len(calls) > 1:
+                raise RuntimeError('token=synthetic-do-not-log')
+            return {'status': 'ok', 'agents': [json.loads(json.dumps(card))], 'source_warnings': []}
+
+        with mock.patch.object(agent_visibility, 'build', build):
+            agent_visibility.build_nonblocking(root, bridge, wait=0.5)
+            agent_visibility._BUILDS[str(root)]['worker'].join(5)
+            agent_visibility._BUILDS[str(root)]['at'] -= 100  # the finished build is now old
+            agent_visibility.build_nonblocking(root, bridge, wait=0.5)
+            agent_visibility._BUILDS[str(root)]['worker'].join(5)
+            out = agent_visibility.build_nonblocking(root, bridge, wait=0.5)
+        self.assertEqual(out['enrichment'], 'stale')
+        shown = out['agents'][0]
+        self.assertEqual(shown['execution']['state'], 'unknown')
+        self.assertEqual(shown['execution']['freshness'], 'stale')
+        self.assertEqual(shown['runtime']['freshness'], 'stale')
+        self.assertTrue(shown['uncertain'])
+        self.assertNotIn('synthetic-do-not-log', json.dumps(out))
+
+    def test_a_replacement_bridge_does_not_reuse_the_old_connection_result(self):
+        from unittest import mock
+        from scripts.team_room import agent_visibility
+        root = Path(tempfile.mkdtemp(prefix='cbm329-bridge-'))
+        agent_visibility._BUILDS.clear()
+        build = lambda project_root, b=None, now=None: {'status': 'ok', 'agents': [{'bot_key': 'old' if b == 'one' else 'new'}], 'source_warnings': []}
+        with mock.patch.object(agent_visibility, 'build', build):
+            agent_visibility.build_nonblocking(root, 'one', wait=0.5)
+            agent_visibility._BUILDS[str(root)]['worker'].join(5)
+            fresh_new = agent_visibility.build_nonblocking(root, 'two', wait=0.5)
+        self.assertEqual(fresh_new['agents'], [{'bot_key': 'new'}])
+
+    def test_failed_build_is_reported_not_hidden(self):
+        from unittest import mock
+        from scripts.team_room import agent_visibility
+        root = Path(tempfile.mkdtemp(prefix='cbm329-fail-'))
+        agent_visibility._BUILDS.clear()
+
+        def broken(project_root, bridge=None, now=None):
+            if bridge is not None:
+                raise RuntimeError('bridge exploded')
+            return {'status': 'ok', 'agents': [], 'source_warnings': []}
+
+        with mock.patch.object(agent_visibility, 'build', broken):
+            agent_visibility.build_nonblocking(root, object(), wait=0.5)
+            agent_visibility._BUILDS[str(root)]['worker'].join(5)
+            again = agent_visibility.build_nonblocking(root, object(), wait=0.5)
+        self.assertEqual(again['enrichment'], 'failed')
+        self.assertTrue(any('RuntimeError' in w for w in again['source_warnings']))
+        self.assertFalse(any('bridge exploded' in w for w in again['source_warnings']))
+
+
+class StatusContextTests(unittest.TestCase):
+    def setUp(self):
+        office_desktop._NATIVE_CACHE.clear()
+        office_desktop._STATUS.update(value=None, at=0.0, worker=None, context=None)
+
+    def test_safe_result_of_one_controller_is_never_returned_for_another(self):
+        import threading
+        class Idle:
+            closing = False; active = None; store = None; work = None; mutex = None
+        class Busy(Idle):
+            active = {'turn': 1}
+        first, second = Idle(), Busy()
+        self.assertEqual(office_desktop.inspect_status(first, wait=2)['safety'], 'safe')
+        other = office_desktop.inspect_status(second, wait=2)
+        self.assertEqual(other['safety'], 'busy')
+
+    def test_status_failure_reason_hides_exception_text(self):
+        from unittest import mock
+        class Idle:
+            closing = False; active = None; store = None; work = None; mutex = None
+        with mock.patch.object(office_desktop, 'inspect_shutdown', side_effect=RuntimeError('token=synthetic-do-not-log')):
+            out = office_desktop.inspect_status(Idle(), wait=2)
+        self.assertEqual(out['safety'], 'unknown')
+        self.assertNotIn('synthetic-do-not-log', json.dumps(out))
+
 
 if __name__ == '__main__':
     unittest.main()
