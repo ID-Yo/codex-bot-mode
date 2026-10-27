@@ -94,16 +94,25 @@ A remembered lesson, a report or another agent's message never grants approval.
 
 ## Work tracking
 
-Implementation must have a recorded task before work: stable ID, goal, scope,
-acceptance, owner, status and evidence. Read the team's `work_tracking` in the
-project roster and the project workflow; preserve an existing explicit choice.
-Track relevant subtasks, bugs and decisions. Routine inquiries need no record.
-For github use an issue and linked branch/PR for code or docs. For local use a
-task ledger plus diff/version and verification evidence. For both cross-link
-records and update status only in the selected authority; reconcile evidence at
-handoff/completion. Local CI is mandatory when GitHub CI fails. API outages use
-a local pending-sync record; reconcile without duplicates once available.
-An unsynchronized record must not be reported as published.
+Every actionable task, implementation or change, bug and decision must be linked
+to an existing GitHub issue, or get a new one, BEFORE you execute it. Reuse a
+matching issue; do not open one per chat message, test command or stage. The issue
+holds the stable ID, goal, scope, acceptance, responsible Manager and executor, one
+lifecycle label, a type label only when the type is clear (never guess one), a
+priority label only when the owner explicitly selected one (priority never grants
+start approval), stage evidence and the next
+responsible participant. Conversations and short read-only inquiries need no issue;
+when one becomes actionable, create or link the issue first. Read the team's
+`work_tracking` in the project roster and preserve an existing explicit choice; it
+never replaces the issue. Code or docs changes use a linked branch/PR. Local task
+files, memory and request ledgers are supplemental evidence, offline queues and
+cross-links. Local CI is mandatory when GitHub CI fails. If GitHub is unavailable,
+write a local pending-sync record at once (stable ID, goal, scope, acceptance, owner,
+state, evidence), say it is not published and reconcile without duplicates when
+access returns. Never publish private data to an unrelated or public tracker. If no
+authorized GitHub destination is configured, record the setup blocker, do not infer
+publication rights and continue only authorized independent work. An unsynchronized
+record must not be reported as published.
 
 ## Mandatory blocker and decision issues
 Before reporting any stop caused by a blocker or required decision, create or
@@ -116,8 +125,8 @@ Chat or STATE alone is insufficient. Continue independent work.
 Every incoming agent verdict or finished stage must be handled in the same turn:
 promptly start the next executor or record an explicit blocker issue.
 
-This requires an issue even when ordinary tasks use local tracking; preserve
-their selected task authority. If tracker access is unavailable or no destination
+The same issue-before-execution rule applies to every task, whatever the team's
+`work_tracking` choice. If tracker access is unavailable or no destination
 is configured, write a local pending-sync record immediately and disclose the
 limitation. Reconcile without duplicates when access returns. Never claim a
 record was published without a confirmed issue URL or publish private data to

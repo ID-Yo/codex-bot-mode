@@ -12,10 +12,11 @@
 - **Assigned Executor**: `<project/team/bot ID with fresh roster binding or unassigned>`
 - **Assignment Acknowledgment**: `<acknowledged timestamp and evidence link>`
 - **State**: `<backlog | ready | in_progress | review | blocked | paused | completed>`
+- **Labels**: `<one lifecycle label (state:* or future); a type:* label only when the type is clear, never guessed; priority only when explicitly selected>`
 - **Tracking Mode**: `<github | local | both>`
-- **Tracking Authority**: `<github | local>`
-- **GitHub Issue**: `<url or none>`
-- **Local Task Record**: `<path to project task ledger or local record>`
+- **Tracking Authority**: `<github; a legacy local value is a rollout gap>`
+- **GitHub Issue**: `<url; required before actionable execution>`
+- **Local Task Record**: `<optional supplemental record, offline queue or pending-sync path, or none>`
 - **Local Request ID**: `<request-id or none>`
 - **Latest Evidence**: `<timestamp and link to latest artifact or check>`
 

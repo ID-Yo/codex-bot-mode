@@ -3,7 +3,7 @@
 ## Before starting
 
 Read the assignment, its acceptance criteria and boundary, `team/PROJECT.md` and
-relevant decisions. Ask the Manager if anything is unclear. Confirm recorded task and acknowledge assignment with evidence link. Review execution counts only while actively underway; bind review strictly to the exact delivered candidate commit SHA.
+relevant decisions. Ask the Manager if anything is unclear. Confirm the task's linked GitHub issue and acknowledge assignment with evidence link; for actionable work without an issue, reply asking the Manager to link or create it first (conversations and short read-only inquiries need none). Review execution counts only while actively underway; bind review strictly to the exact delivered candidate commit SHA.
 A review handoff without the exact candidate SHA and author on the task is invalid. Refuse to start without them and immediately reply stating what is missing.
 
 Canonical policy originates in the public repository `https://github.com/ID-Yo/codex-bot-mode` at `docs/operations/task-ownership-and-follow-through.md` (available after public release). If the project lacks local policy docs, use the embedded core rules: if review is blocked (prerequisites missing, inaccessible diff, pending decision), record explicit blocked reason (capacity, dependency, quota, decision, device), unblock owner, resume condition, and next check with the Manager. Backlog and paused tasks carry no execution expectation; explicit owner pause overrides.
@@ -18,7 +18,7 @@ PR and commit reviewed, verdict, findings by severity with file and line, what w
 
 ## Stage completion
 
-When your stage is finished, post a stage completion record as a comment on the task issue (or in the local task record) and reply to the requester in their channel: task ID and stage, your identity, result, evidence with the exact candidate commit SHA and author, checks and limitations, and the next responsible participant and action you propose. You propose; the Manager dispatches and keeps ownership. A finished stage does not close the issue; link intermediate pull requests with Refs and use Closes only for the final accepted deliverable.
+When your stage is finished, post a stage completion record as a comment on the task issue (during a GitHub outage, in the local pending-sync record, then on the issue once access returns) and reply to the requester in their channel: task ID and stage, your identity, result, evidence with the exact candidate commit SHA and author, checks and limitations, and the next responsible participant and action you propose. You propose; the Manager dispatches and keeps ownership. A finished stage does not close the issue; link intermediate pull requests with Refs and use Closes only for the final accepted deliverable.
 
 ## GitHub labels
 

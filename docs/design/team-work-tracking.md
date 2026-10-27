@@ -7,25 +7,39 @@ Existing teams retain their explicit workflow; unknown choices are recorded as
 rollout gaps rather than guessed. Individual additions inherit their team's
 workflow from its roster entry and project instructions.
 
-Before implementation, create or link a record with a stable ID, goal, scope,
-acceptance criteria, responsible owner, status and evidence. Track relevant
-subtasks, bugs and decisions under it. Routine one-line inquiries need no task.
-Chat alone is not an implementation record.
+Every actionable task, implementation or change, bug and decision must be linked to
+an existing GitHub issue, or receive a new one, before execution. Reuse a matching
+issue; do not open one per chat message, test command or executor stage. The issue
+holds a stable ID, goal, scope, acceptance criteria, the responsible Manager and
+executor, one lifecycle label, a type label only when the type is clear (never
+guess one), a priority label only when explicitly selected (priority never grants
+start approval), status, stage evidence and the next
+responsible participant and action. Track relevant subtasks, bugs and decisions under
+it, or in linked child issues when they need independent ownership or acceptance.
+Conversations and short read-only inquiries need no issue; when one becomes
+actionable, link or create the issue first. Chat alone is not an implementation record.
 
-- `github`: reuse an existing issue or create one with criteria, status and
-  evidence. Code and documentation changes use a branch and PR linked to it.
-- `local`: use the project's task ledger and stable task ID. Record the local
-  change/diff, exact version and verification results; a GitHub PR is not required.
-- `both`: also select `tracking_authority` (`github` or `local`). Cross-link
-  local records, issue and PR. Only the authoritative record owns mutable status;
-  the other contains pointers and dated evidence. The Manager reconciles links
-  and evidence at handoff and completion, without maintaining competing statuses.
+- `github`: the issue is the authoritative record. Code and documentation changes
+  use a branch and PR linked to it.
+- `local`: a GitHub issue is still required before actionable execution. The task
+  ledger and stable task ID are supplemental pointers, offline queue entries and
+  dated evidence (change/diff, exact version, verification results).
+- `both`: `tracking_authority` is `github`. Cross-link local records, issue and PR.
+  The issue owns mutable status; the local record contains pointers and dated
+  evidence. A legacy `tracking_authority: local` is recorded as a rollout gap and
+  is not used for new actionable work. The Manager reconciles links and evidence at
+  handoff and completion, without maintaining competing statuses.
 
 GitHub CI failure does not suspend tracking. Run applicable local CI and record
 commands, results and limitations; no paid service is required. If GitHub API
-is unavailable, use a temporary local pending-sync record, reconcile against
-existing issues when available and add the resulting link. Never call it published
-until the remote record is read back.
+is unavailable, immediately write a local pending-sync record (stable ID, goal,
+scope, acceptance, owner, state, evidence), disclose that it is not published,
+reconcile against existing issues without duplicates when access returns and add
+the resulting link. Never call it published until the remote record is read back.
+A project with no configured authorized GitHub destination records the setup
+blocker and continues only independent work that is already authorized; it never
+infers publication rights or publishes private content to an unrelated or public
+tracker.
 
 CLI example:
 

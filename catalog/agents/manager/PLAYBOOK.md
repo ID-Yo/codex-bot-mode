@@ -3,8 +3,8 @@
 ## Intake
 
 1. Restate the goal and acceptance criteria if unclear; otherwise proceed.
-2. Acknowledge receipt of task instructions; confirm tracking mode (`github`, `local`, or `both`) and record stable task ID.
-3. Before implementation, create or link the task under the selected workflow. Canonical task ownership policy and template originate in the public repository `https://github.com/ID-Yo/codex-bot-mode` at `docs/operations/task-ownership-and-follow-through.md` and `templates/task.md` (available after public release). If the project repository lacks these local files, use the tracker issue or local task record embedded with the mandatory fields:
+2. Acknowledge receipt of task instructions; link a matching existing GitHub issue or create one BEFORE any execution (reuse it; no issue per chat message, test command or stage; conversations and short read-only inquiries need none, and an inquiry that becomes actionable gets its issue first), confirm tracking mode (`github`, `local`, or `both`; it never replaces the issue) and record stable task ID.
+3. Before implementation, link or create the task's GitHub issue. Canonical task ownership policy and template originate in the public repository `https://github.com/ID-Yo/codex-bot-mode` at `docs/operations/task-ownership-and-follow-through.md` and `templates/task.md` (available after public release). If the project repository lacks these local files, use the tracker issue with the embedded mandatory fields:
    - Task ID, Project ID, Team Name
    - Responsible Manager (`project/team/bot ID` with fresh roster binding)
    - Assigned Executor (`project/team/bot ID` with fresh roster binding or unassigned)
@@ -12,10 +12,11 @@
    - State (`backlog`, `ready`, `in_progress`, `review`, `blocked`, `paused`, `completed`)
    - Tracking Mode (`github`, `local`, `both`) and Tracking Authority
    - Goal and Scope, Acceptance Criteria
+   - One lifecycle label (a `state:*` label or `future`), a type label only when the type is clear (never guess one), and a priority label only when explicitly selected; priority never grants start approval
    - Next Action (action and actor)
    - Latest Evidence (timestamp and link to artifact/check)
    - Blockers / Explicit Waits (reason: capacity, dependency, quota, decision, device; unblock owner; resume condition; next check)
-4. Maintain authoritative status and cross-links per the embedded core policy rules. Backlog and paused tasks carry no active execution expectation; explicit owner pause overrides.
+4. Maintain authoritative status and cross-links per the embedded core policy rules. The issue is the authoritative record; local files, memory and request ledgers are supplemental. When GitHub is unavailable write a local pending-sync record at once, say it is not published and reconcile without duplicates; with no authorized destination record the setup blocker, do not infer publication rights and do not publish private content to an unrelated or public tracker. Backlog and paused tasks carry no active execution expectation; explicit owner pause overrides.
 5. Split into the smallest verifiable assignments with explicit request IDs.
 
 ## Assignment
@@ -31,7 +32,7 @@ Every incoming agent verdict must be handled in the same turn: start the next ex
 
 ## Stage handoff and ready work
 
-- Every finished stage arrives as a stage completion record on the task issue (or local record) plus the executor's reply: stage, executor, result, evidence with exact candidate SHA and author, checks and limitations, proposed next responsible and action. In the same turn dispatch the next scoped request and record its request ID, delivery ID and acknowledgment on the task, or record a blocker issue. A stage finish never closes the issue.
+- Every finished stage arrives as a stage completion record on the task issue (a local pending-sync record only during a GitHub outage) plus the executor's reply: stage, executor, result, evidence with exact candidate SHA and author, checks and limitations, proposed next responsible and action. In the same turn dispatch the next scoped request and record its request ID, delivery ID and acknowledgment on the task, or record a blocker issue. A stage finish never closes the issue.
 - Approval to start is a recorded act: start_approved plus who, when and scope (recorded in the issue text with a reference to the owner instruction or standing delegation, never as a label). Backlog or a ready label is not approval. In the same processing turn in which you find approved ready work and an eligible idle executor (appointed for the role and scope, no owner pause or single-writer conflict, activity evidence fresh within one audit interval), dispatch it; otherwise record the reason (capacity, dependency, authorization, quota, device), unblock owner, resume condition and next check. Check this at every completed turn and every Monitor signal. Unknown activity is not idle; owner pause, single writers and permissions override.
 - Intermediate pull requests link the issue with Refs; Closes only on the final accepted deliverable. A request reply with outcome done closes that request, not the issue. Keep every open work issue labelled with exactly one lifecycle label: one of the six `state:*` labels or `future` and a responsible participant named in its text.
 - GitHub labels: only twelve labels exist in any project, on issues and pull requests: `state:ready`, `state:active`, `state:review`, `state:blocked`, `state:needs-owner`, `state:backlog`, `future`, `type:epic`, `type:story`, `type:task`, `priority:high`, `priority:low`. Priority is high, low or none: none means Normal and is never labelled (never create priority:normal); priority only orders work and never overrides approval, state, blockers or an owner pause, and low is not future. Never create, rename or apply any other label (no kind, bot, status, plan or approval labels, no GitHub defaults). If another label seems necessary, ask the owner through the Chief of Staff; do not add it first. Record the responsible participant, approval and decisions in the issue text, not in labels. See docs/operations/task-ownership-and-follow-through.md (GitHub label policy).
