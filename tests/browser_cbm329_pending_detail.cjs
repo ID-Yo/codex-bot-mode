@@ -36,7 +36,6 @@ const base='http://office-fixture.test';
     await page.locator('.agent-card-open').first().click();await page.waitForSelector('#agent-detail:not([hidden])');
     assert.equal(await page.locator('#agents-view').isHidden(),true,'detail hides the Agents view');
     assert.match(await page.locator('#agent-detail').innerText(),/Execution: Unknown/);
-    await page.getByRole('button',{name:'Load selected section',exact:true}).click();
     await page.waitForSelector('.agent-profile-content');
     await page.fill('.agent-profile-content','Unsaved owner draft');
     await page.locator('.agent-profile-content').focus();

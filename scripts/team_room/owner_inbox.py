@@ -12,6 +12,7 @@ import re
 from . import project_status, registry, roster
 
 MAX_BYTES = 256 * 1024
+LEDGER_BYTES = 2 * 1024 * 1024  # request ledgers keep every answered record; 256 KiB rejected a real 340 KiB ledger
 MAX_ITEMS = 500
 MAX_SCOPES = 100
 ISSUE = re.compile(r'https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/issues/[1-9][0-9]*$')
@@ -203,8 +204,11 @@ def build(project_root, *, now=None):
             warnings.append('An owner request ledger is missing')
             continue
         try:
-            if not ledger.resolve(strict=True).is_relative_to(scope) or ledger.stat().st_size > MAX_BYTES:
+            if not ledger.resolve(strict=True).is_relative_to(scope):
                 raise ValueError('Invalid ledger boundary')
+            if ledger.stat().st_size > LEDGER_BYTES:
+                warnings.append('An owner request ledger exceeds the size limit; its owner requests are not counted')
+                continue
             data = json.loads(ledger.read_text(encoding='utf-8'))
             rows = data.get('requests')
             if data.get('schema') != 1 or not isinstance(rows, list) or len(rows) > 2000:

@@ -15,6 +15,7 @@ from . import desktop_relay, project_status, registry, requests, roster
 RUNTIME_SECONDS = 60
 TASK_SECONDS = 48 * 3600
 MAX_BYTES = 256 * 1024
+LEDGER_BYTES = 2 * 1024 * 1024
 TERMINAL = ('done', 'completed', 'cancelled', 'failed')
 OUTCOMES = ('done', 'blocked', 'failed', 'refused', 'partial')
 
@@ -46,8 +47,8 @@ def text(value, limit=600):
     return value.strip()[:limit] if isinstance(value, str) and value.strip() else None
 
 
-def read_json(file, root):
-    if not registry._is_safe_contained(file, root) or file.stat().st_size > MAX_BYTES:
+def read_json(file, root, limit=MAX_BYTES):
+    if not registry._is_safe_contained(file, root) or file.stat().st_size > limit:
         raise ValueError('Source unavailable')
     return json.loads(file.read_text(encoding='utf-8'))
 
@@ -112,7 +113,7 @@ def project_cards(root, bots, activity, now=None, project_pause=False):
     if request_file is not None and not request_file.exists():
         request_file = root / '.bot-mode/requests.json'
     try:
-        raw = read_json(request_file, root) if request_file is not None and request_file.exists() else {'schema': 1, 'requests': []}
+        raw = read_json(request_file, root, LEDGER_BYTES) if request_file is not None and request_file.exists() else {'schema': 1, 'requests': []}
         if raw.get('schema') != 1 or not isinstance(raw.get('requests'), list):
             raise ValueError('Invalid requests')
         reqs = [r for r in raw['requests'] if valid_request(r)]
@@ -141,13 +142,18 @@ def project_cards(root, bots, activity, now=None, project_pause=False):
             notes.append('No exactly assigned task metadata')
         at = activity.get('fetched_at')
         fresh = freshness(at, now, RUNTIME_SECONDS)
-        runtime_failed = bool(activity.get('error') or activity.get('stale') or
-                              (activity.get('project_id') is not None and activity['project_id'] != bot.get('project_id')))
         observations = [o for o in (activity.get('bots') or []) if isinstance(o, dict) and o.get('bot') == bid]
         observation = observations[0] if len(observations) == 1 else {}
         runtime_state = observation.get('status', 'unknown')
+        # A partial-coverage error on the project describes other bots; this bot's own explicit active/idle
+        # observation stays valid. Stale or foreign-project activity never does.
+        runtime_failed = bool(activity.get('stale') or
+                              (activity.get('project_id') is not None and activity['project_id'] != bot.get('project_id')) or
+                              (activity.get('error') and not (activity.get('partial_failure') and runtime_state in ('active', 'idle'))))
         bound = bool(bot.get('thread_id'))
-        execution = 'working' if bound and fresh == 'fresh' and not runtime_failed and runtime_state == 'active' else 'unknown'
+        observed = bound and fresh == 'fresh' and not runtime_failed
+        # Fresh active -> working; fresh explicit non-running -> idle (not proof of no assigned task). Never inferred.
+        execution = 'working' if observed and runtime_state == 'active' else 'idle' if observed and runtime_state == 'idle' else 'unknown'
         source = activity.get('source') or 'none'
         state_since = None  # active/idle metadata contains no execution start timestamp
         task = None
@@ -204,13 +210,13 @@ def project_cards(root, bots, activity, now=None, project_pause=False):
                     attention = target == 'owner'
                     if attention:
                         attention_reasons.append('owner_decision')
-                    if execution == 'unknown':
+                    if execution in ('unknown', 'idle'):
                         execution, source = 'waiting', t['_source']
                         state_since = t.get('waiting since') if stamp(t.get('waiting since')) and stamp(t['waiting since']) <= stamp(now) else None
             if task_fresh == 'fresh' and (workflow in ('failed', 'blocked') or blocker):
                 attention = True
                 attention_reasons.append('failure' if workflow == 'failed' else 'blocker')
-                if execution == 'unknown' and workflow == 'failed':
+                if execution in ('unknown', 'idle') and workflow == 'failed':
                     execution, source, state_since = 'failed', t['_source'], task['state_since']
         else:
             paused_task = False
@@ -219,8 +225,10 @@ def project_cards(root, bots, activity, now=None, project_pause=False):
             state_since = task['state_since'] if paused_task else None
         if not bound:
             notes.append('Missing chat binding; runtime unknown')
-        if not bound or fresh != 'fresh' or runtime_failed or runtime_state != 'active':
+        if not bound or fresh != 'fresh' or runtime_failed or runtime_state not in ('active', 'idle'):
             notes.append('Runtime ' + str(runtime_state) + '; not proof of available, blocked or task completion')
+        elif runtime_state == 'idle':
+            notes.append('Idle: the chat is not running; this is not proof that no task is assigned')
         if activity.get('partial_failure'):
             notes.append('Partial runtime coverage; only this bot observation is used')
         if runtime_failed:

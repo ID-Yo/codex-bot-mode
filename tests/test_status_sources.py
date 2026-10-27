@@ -86,7 +86,7 @@ class StatusSourceTests(unittest.TestCase):
         self.assertEqual(got, {"p/issue-1": "ready", "p/issue-2": "in-progress", "p/issue-3": "review",
                                "p/issue-4": "blocked", "p/issue-5": "backlog", "p/issue-6": "future"})
         self.assertTrue(all(t["evidence"][0].startswith("ref:github:https://github.com/o/r/issues/") for t in tasks))
-        self.assertEqual(summary["total"], 6)
+        self.assertEqual(summary["total"], 7)
 
     def test_project_without_any_status_is_unknown_unless_declared_empty(self):
         _, summary = self.status(self.project("a"))
@@ -356,9 +356,10 @@ class StatusSourceTests(unittest.TestCase):
     def test_correction_review_feedback_request_to_developer_keeps_the_task_open(self):
         self.check_review_named_to_developer("sup-correction-review-feedback-97")
 
-    def test_open_issue_with_only_merged_or_closed_prs_is_finished(self):
+    def test_open_issue_with_only_merged_or_closed_prs_is_not_finished(self):
         tasks = self.linked_case([(98, "MERGED", "a" * 40), (99, "CLOSED", "b" * 40)])
-        self.assertEqual(tasks, [])
+        self.assertEqual(len(tasks), 1)
+        self.assertNotEqual(tasks[0]["status"], "done")
 
     def test_pr_linked_in_request_url_resolves_candidate_head_sha(self):
         head_sha = "ab148d99294c9f0185073dc7c4818c8cb2c9992c"

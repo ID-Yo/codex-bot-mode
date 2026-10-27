@@ -121,16 +121,18 @@ def check(snapshot, now=None):
                 finding("invalid_handoff", scope, "Unique handoff ID, worker and concrete stage required")
             if text(hid):
                 ids.add(hid)
-            previous = None
+            previous = latest_seen = None
             for field in ("requested_at", "acknowledged_at", "started_at", "finished_at"):
                 value = h.get(field)
                 if value is not None:
                     current = timestamp(value, scope, field)
-                    if field != "requested_at" and previous is None:
+                    # A reply time proves the finish; it does not need an observed acknowledgment or start time.
+                    if field not in ("requested_at", "finished_at") and previous is None:
                         finding("handoff_order", scope, "Request, acknowledgment, start and finish must be ordered")
-                    if current and previous and current < previous:
+                    if current and (previous or latest_seen) and current < (previous or latest_seen):
                         finding("handoff_order", scope, "Handoff timestamps out of order")
                     previous = current
+                    latest_seen = current or latest_seen
                 else:
                     previous = None
             if h.get("requested_at") is None:
@@ -152,11 +154,11 @@ def check(snapshot, now=None):
             last = handoffs[-1] if handoffs and isinstance(handoffs[-1], dict) else {}
             if last.get("finished_at"):
                 finding("stage_finished", scope, "Inspect finished turn and verify successor start or record blocker")
-            elif not last.get("started_at"):
+            elif not last.get("started_at") and last.get("start_check") != "relay":
                 finding("worker_not_started", scope, "Dispatch/ack/ready is not actual worker start")
             if not text(task.get("executor")) or last.get("worker") != task.get("executor"):
                 finding("executor_mismatch", scope, "Current executor must match latest handoff worker")
-            if len(running) != 1:
+            if len(running) > 1:  # no observed running start is Unknown, not a conflict
                 finding("active_handoffs", scope, "Use one current stage; reconcile superseded/conflicting handoffs")
             if state == "review" or last.get("stage") == "review":
                 candidate = task.get("candidate")
@@ -222,7 +224,7 @@ def unique_object(pairs):
 
 
 OVERDUE_REMINDER_INTERVAL = timedelta(hours=6)  # unresolved overdue findings are re-reported at most this often
-LEDGER_KEYS = ("first_seen", "status", "escalated", "reported", "alerted_at")
+LEDGER_KEYS = ("first_seen", "status", "escalated", "reported", "alerted_at", "manager")  # manager: delivery of Manager-routed signals
 
 
 # Only these deadline findings are repeated. Everything else (metadata findings, hygiene notes, Manager signal codes
@@ -556,6 +558,15 @@ def get_req_ledger(project_path):
     return mod
 
 
+AUTHORITY_LINE = re.compile(r"^\s*(?:[-*]\s*)?\**(?:authority|tracking)\**\s*:\s*\**\s*(\S+?)\**\s*$", re.I | re.M)
+
+
+def record_authority(txt):
+    """The one explicit Authority/Tracking URL of a task record, or None when absent or when the lines disagree."""
+    found = {m.group(1).rstrip("/") for m in AUTHORITY_LINE.finditer(txt)}
+    return found.pop() if len(found) == 1 else None
+
+
 def parse_markdown_metadata(txt):
     meta = {}
     for line in txt.splitlines():
@@ -723,6 +734,10 @@ def produce_snapshot(project_dir, now=None, explicit_only=False):
 
             raw_approved = meta.get("start approved")
             start_approved = bool(raw_approved and raw_approved.lower() in ("true", "yes", "1"))
+            # Auditable approval source for ready work: who, when, for which scope, on what evidence. start_approved
+            # alone is a flag, not proof.
+            approval_parts = {k: (meta.get("start approval " + k) or "").strip() for k in ("by", "at", "scope", "evidence")}
+            start_approval = dict(approval_parts) if all(approval_parts.values()) else None
 
             next_action = meta.get("action")
             if not next_action:
@@ -877,6 +892,8 @@ def produce_snapshot(project_dir, now=None, explicit_only=False):
                 "executor": executor,
                 "status": status,
                 "start_approved": start_approved,
+                "start_approval": start_approval,
+                "authority": record_authority(txt),
                 "next_action": next_action,
                 "acceptance": acc_list,
                 "evidence": ev_list,
@@ -905,6 +922,11 @@ def produce_snapshot(project_dir, now=None, explicit_only=False):
     return snapshot
 
 
+def ledger_update(ledger, project_path, change):
+    """One locked read-change-write of the request ledger (requests.update)."""
+    return ledger.update(project_path, change)
+
+
 def route_stage(project_dir, apply=False, allowlist=None, delivery_adapter=None, now=None):
     now = now or datetime.now(timezone.utc)
     project_path = Path(project_dir).resolve()
@@ -923,6 +945,11 @@ def route_stage(project_dir, apply=False, allowlist=None, delivery_adapter=None,
             return {"ok": True, "dry_run": not apply, "routed": [], "deduplicated": [], "errors": [], "skipped": ["project_paused"], "plan": []}
 
         req_ledger = get_req_ledger(project_path)
+        if apply and not callable(getattr(req_ledger, "update", None)):
+            # Fail closed before any ledger write or delivery: only the locked update() is safe against concurrent writers.
+            message = "Request helper has no update(); update the project's requests.py helper first, then run route --apply again"
+            return {"ok": False, "dry_run": False, "routed": [], "deduplicated": [], "errors": [{"action": "error", "error": message}],
+                    "skipped": ["unsupported_ledger_helper"], "plan": []}
         snapshot = produce_snapshot(project_path, now=now)
 
         roster_file = project_path / ".bot-mode" / "roster.json"
@@ -1062,21 +1089,22 @@ def route_stage(project_dir, apply=False, allowlist=None, delivery_adapter=None,
         if not apply:
             return {"ok": True, "dry_run": True, "routed": actually_routed, "deduplicated": deduped, "errors": errs, "plan": actions}
 
-        data = req_ledger.load(project_path)
         for act in actually_routed:
-            req_ledger.open_request(
-                data,
-                act["request_id"],
-                act["sender"],
-                act["target"],
-                act["summary"],
-                link=act["link"],
-                at=now
-            )
-            new_r = next(r for r in data["requests"] if r["id"] == act["request_id"])
-            new_r["delivery_status"] = "outbox_queued"
-            exp = req_ledger.version(req_ledger.load(project_path))
-            req_ledger.save(project_path, data, exp)
+            # Each ledger write is one locked read-change-write step; no ledger data is held across delivery.
+            created = []
+
+            def add_request(data, act=act, created=created):
+                if any(r.get("id") == act["request_id"] for r in data["requests"]):
+                    return
+                created.append(True)
+                req_ledger.open_request(data, act["request_id"], act["sender"], act["target"], act["summary"],
+                                        link=act["link"], at=now)
+                next(r for r in data["requests"] if r["id"] == act["request_id"])["delivery_status"] = "outbox_queued"
+            ledger_update(req_ledger, project_path, add_request)
+            if not created:
+                # Already recorded by an earlier run: never deliver it a second time.
+                act["delivery"] = "already_recorded"
+                continue
 
             # Defect 3: Task Markdown state transitions to 'ready' awaiting worker start (NEVER in_progress or review before start)
             t_file = project_path / "work" / "tasks" / f"{act['task_id']}.md"
@@ -1093,8 +1121,8 @@ def route_stage(project_dir, apply=False, allowlist=None, delivery_adapter=None,
                         new_lines.append(l)
                 t_file.write_text(chr(10).join(new_lines) + chr(10), encoding="utf-8")
 
-            # Supported real delivery adapter and strict receipt validation
             adapter_to_call = delivery_adapter if delivery_adapter is not None else default_desktop_relay_adapter
+            fields = {}
             try:
                 receipt = adapter_to_call(project_path, act["target"], act["request_id"], act["summary"])
                 if not isinstance(receipt, dict) or not receipt:
@@ -1106,22 +1134,25 @@ def route_stage(project_dir, apply=False, allowlist=None, delivery_adapter=None,
                 if status not in ("delivered", "sent") or not receipt_id:
                     raise RuntimeError(f"Receipt missing valid delivery confirmation: {receipt}")
 
-                new_r["delivery_status"] = "delivered"
-                new_r["delivered_at"] = now.strftime("%Y-%m-%dT%H:%M:%SZ")
-                new_r["delivery_receipt"] = receipt
+                fields["delivery_status"] = "delivered"
+                fields["delivered_at"] = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+                fields["delivery_receipt"] = receipt
                 act["delivery"] = "delivered"
             except PreconnectConfigurationError as conn_err:
-                new_r["delivery_status"] = "outbox_queued"
-                new_r["delivery_note"] = str(conn_err)
+                fields["delivery_status"] = "outbox_queued"
+                fields["delivery_note"] = str(conn_err)
                 act["delivery"] = "outbox_queued"
             except Exception as err:
-                new_r["delivery_status"] = "delivery_unknown"
-                new_r["delivery_error"] = str(err)
+                fields["delivery_status"] = "delivery_unknown"
+                fields["delivery_error"] = str(err)
                 act["delivery"] = "delivery_unknown"
                 act["delivery_error"] = str(err)
 
-            exp = req_ledger.version(req_ledger.load(project_path))
-            req_ledger.save(project_path, data, exp)
+            def record_delivery(data, act=act, fields=fields):
+                item = next((r for r in data["requests"] if r.get("id") == act["request_id"]), None)
+                if item is not None:
+                    item.update(fields)
+            ledger_update(req_ledger, project_path, record_delivery)
 
         return {"ok": True, "dry_run": False, "routed": actually_routed, "deduplicated": deduped, "errors": errs, "plan": actions}
 

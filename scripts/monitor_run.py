@@ -13,6 +13,7 @@ All output is English.
 """
 import argparse
 import json
+import os
 import re
 import sys
 from datetime import datetime, timedelta, timezone
@@ -102,6 +103,22 @@ def relay_roots(config, project_root):
     return list(dict.fromkeys(roots))
 
 
+def relay_owner_project(config):
+    """Id of the registry project whose root holds the registry file (<root>/.bot-mode/local/<registry>.json): the owner of the
+    Desktop Relay. None when it cannot be determined; the alert then goes to the Chief of Staff report only."""
+    try:
+        registry = Path(config["registry_path"]).resolve(strict=True)  # the physical file, through junctions and links
+        if registry.parent.name != "local" or registry.parent.parent.name != ".bot-mode":
+            return None
+        owner = os.path.normcase(str(registry.parent.parent.parent))
+        matches = {row["id"] for row in json.loads(registry.read_text(encoding="utf-8-sig")).get("projects", [])
+                   if isinstance(row, dict) and isinstance(row.get("id"), str) and isinstance(row.get("root"), str)
+                   and os.path.normcase(str(Path(row["root"]).resolve())) == owner}
+        return matches.pop() if len(matches) == 1 else None  # none or several projects for that root: not a safe recipient
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        return None
+
+
 def project_tasks(project, now, interval=20):
     """(tasks, summary) of one project from GitHub labels, the request ledger and explicit task records."""
     return status_sources.project_status(project, now, interval)
@@ -130,7 +147,7 @@ def build(config, run_id, now, invocations, invocations_available):
              and isinstance(p.get("root"), str) and p["root"]]
     with ThreadPoolExecutor(max_workers=6) as pool:  # GitHub reads dominate the run time; keep a run well under a minute
         results = dict(zip((p["id"] for p in valid), pool.map(one, valid)))
-    hygiene, open_requests = {}, {}
+    hygiene, open_requests, triage = {}, {}, {}
     for index, project in enumerate(rows):
         pid = project.get("id") if isinstance(project, dict) else None
         root = project.get("root") if isinstance(project, dict) else None
@@ -145,7 +162,8 @@ def build(config, run_id, now, invocations, invocations_available):
         found, summary = result
         tasks.extend(found)
         open_requests[pid] = {"root": root, "relay_roots": relay_roots(config, root),
-                              "items": summary.pop("open_requests", [])}
+                              "items": summary.pop("open_requests", []), "ready": summary.pop("ready_work", [])}
+        triage[pid] = summary.pop("triage", {})
         project_status[pid] = summary
         if summary.get("hygiene"):
             hygiene[pid] = summary["hygiene"]
@@ -171,7 +189,8 @@ def build(config, run_id, now, invocations, invocations_available):
             "project_status": project_status, "hygiene": hygiene,
             "evidence": [f"ref:monitor-run:{run_id}", f"ref:registry-projects:{covered_projects}/{len(rows)}"],
             "invocations": [*invocations, {"run_id": run_id, "status": "active", "updated_at": utc(now)}]}}
-    return snapshot, {"projects": len(rows), "projects_covered": covered_projects, "open_requests": open_requests}
+    return snapshot, {"projects": len(rows), "projects_covered": covered_projects, "open_requests": open_requests,
+                          "triage": triage}
 
 
 def report_text(run_id, complete, coverage, unavailable, findings, state_file, next_check):
@@ -211,9 +230,60 @@ SIGNAL_CODES = {
                        "Inspect finished turn and start the next executor or record a blocker in the same turn."),
     "request_not_started": ("request opened but not started", "Requests",
                             "Check that the recipient received it, re-dispatch or reassign it, or record a blocker in the same turn."),
+    "desktop_relay_unavailable": ("Desktop relay unavailable", "Relay",
+                                  "Restart the relay from this chat: run 'powershell -File scripts/start_codex_office.ps1 -RelayOnly' "
+                                  "(it replaces an unhealthy relay and works while Office runs), then check it with "
+                                  "'python -B -m scripts.team_room.desktop_relay --root .bot-mode\\desktop-relay --probe'. Keep the relay's "
+                                  "stdout.log and stderr.log first; the cause of the earlier exits is not established. Do not start another "
+                                  "app-server or a second registrar. Until it is back the Monitor cannot see whether requests were started."),
+    "issue_untriaged": ("open issues without a state label", "Issues",
+                        "Triage them: set a state label or close them. Informational; nothing is dispatched and no label is created."),
+    "stage_done_no_next": ("stage answered done with no successor", "Issues",
+                           "Record the next stage, a state label, or close the issue. Informational; nothing is dispatched."),
+    "ready_approval_unknown": ("ready work without an auditable start approval", "Issues",
+                               "Record the start approval (by, at, scope, evidence) or change the state. Informational; nothing is dispatched."),
+    "ready_not_dispatched": ("approved ready work not dispatched", "Ready work",
+                             "Decide the dispatch to the idle appointed bot or record why it waits. The Monitor sent nothing."),
+    "ready_activity_unknown": ("approved ready work whose bots could not be shown idle", "Ready work",
+                               "Informational: the bot activity could not be read, so Idle is not claimed. No restart and no dispatch is needed."),
     "request_not_started_overflow": ("more requests opened but not started than are listed", "Remaining requests",
                                      "Close, re-dispatch or cancel the old open requests of this project; the oldest are listed separately."),
 }
+
+
+def route_manager_signals(config, state, findings, new_alerts):
+    """(deliveries, findings, extra report items) with a delivery record per signal, separate from the Chief of Staff report.
+
+    A signal is handed to its Manager when it is new for that recipient (no Manager record) or its last delivery is
+    recorded as failed. It is then marked pending. The Monitor records the result per project (set_manager_delivery:
+    sent, failed or delivery_unknown). A signal still pending on the next run had no result recorded: it becomes
+    unknown, is reported once as manager_delivery_unconfirmed and is never resent blindly. A sent or unknown signal is
+    not sent again, also when the COS report raises the same alert again."""
+    ledger = state.get("alert_ledger") if isinstance(state.get("alert_ledger"), dict) else {}
+    current = {f"{f['code']}:{f['scope']}": f for f in findings}
+    fresh = {f"{a['code']}:{a['scope']}" for a in new_alerts}
+    route, unconfirmed, retried = [], [], []
+    for fingerprint, entry in ledger.items():
+        code = fingerprint.partition(":")[0]
+        if code not in SIGNAL_CODES or fingerprint not in current or not isinstance(entry, dict):
+            continue
+        record = entry.get("manager")
+        if record == "pending":
+            entry["manager"] = "unknown"
+            alert = current[fingerprint]
+            unconfirmed.append({"code": "manager_delivery_unconfirmed", "scope": alert["scope"].partition("/")[0],
+                                "detail": (f"The Manager message for {alert['code']} ({alert['scope']}) was handed over but no result was "
+                                           "recorded; it is not resent. Record the real outcome with monitor_checkpoint.py "
+                                           f"--set-manager-delivery {alert['scope'].partition('/')[0]} --manager-result sent or failed")})
+        elif record == "failed" or (record is None and fingerprint in fresh):
+            route.append(current[fingerprint])
+            if fingerprint not in fresh:
+                retried.append(current[fingerprint])  # not new for the report, but its Manager message is owed again
+    deliveries, delivery_findings = manager_signals(config, route)
+    delivered = {d["project_id"] for d in deliveries}
+    for alert in route:
+        ledger[f"{alert['code']}:{alert['scope']}"]["manager"] = "pending" if alert["scope"].partition("/")[0] in delivered else "failed"
+    return deliveries, delivery_findings, [*unconfirmed, *retried]
 
 
 def delivery_finding(project, detail):
@@ -227,7 +297,7 @@ def manager_signals(config, new_alerts):
     without a resolvable Manager each become a manager_delivery_unavailable finding for that project."""
     by_project = {}
     for alert in new_alerts:
-        if alert.get("code") in SIGNAL_CODES and alert.get("scope"):
+        if alert.get("code") in SIGNAL_CODES and alert.get("scope") and alert["scope"] != "monitor":
             project, _, task = alert["scope"].partition("/")
             task = task or "(project)"
             by_project.setdefault(project, {}).setdefault(alert["code"], []).append((task, alert.get("detail")))
@@ -361,10 +431,16 @@ def run(monitor_dir, run_id, now=None):
             findings.extend({"code": "record_not_closed", "scope": f"{pid}/{rid}",
                              "detail": "Ledger record is open but its GitHub issue is closed"} for rid in ids)
         try:
-            findings.extend(status_sources.request_start_findings(stats.get("open_requests", {}), now))
+            findings.extend(status_sources.request_start_findings(stats.get("open_requests", {}), now,
+                                                                      relay_owner=relay_owner_project(config)))
         except Exception as error:
             findings.append({"code": "request_start_unavailable", "scope": "monitor",
                              "detail": f"Request start check failed ({type(error).__name__}); open requests were not verified"})
+        try:
+            findings.extend(status_sources.triage_findings(stats.get("triage", {}), now))
+        except Exception as error:
+            findings.append({"code": "triage_unavailable", "scope": "monitor",
+                             "detail": f"Triage check failed ({type(error).__name__}); untriaged and stage-done items were not verified"})
     else:
         findings = [*extra, {"code": "snapshot_build_failed", "scope": "monitor",
                              "detail": f"Snapshot could not be built ({build_error})"},
@@ -381,8 +457,9 @@ def run(monitor_dir, run_id, now=None):
     if not available and "invocation-metadata" not in unavailable:
         unavailable.append("invocation-metadata")
     coverage = audit.get("coverage", "none")
-    report = (not complete) or bool(new_alerts)
-    manager_deliveries, delivery_findings = manager_signals(config, new_alerts)
+    manager_deliveries, delivery_findings, extra = route_manager_signals(config, state, findings, new_alerts)
+    delivery_findings = [*delivery_findings, *extra]
+    report = (not complete) or bool(new_alerts) or bool(extra) or bool(manager_deliveries)
     findings = [*findings, *delivery_findings]
     state["delivery_status"] = "not_attempted" if report else "not_required"
     save_final_state(state_file, state)

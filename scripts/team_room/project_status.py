@@ -366,6 +366,31 @@ def resolve_approved_source_path(project_root, project_id):
     return None
 
 
+def report_summary(data):
+    """Plain project line from one validated report: its own optional summary (<= 280 characters, cut at a word), else
+    counts of its structured lists. next/active prose is never concatenated into it; unknown counts are left out."""
+    text = data.get('summary')
+    if text is not None:
+        if not isinstance(text, str):
+            raise StatusError('Manager report summary must be text')
+        text = ' '.join(text.split())
+        if text:
+            if len(text) <= 280:
+                return text
+            return text[:279].rsplit(' ', 1)[0].rstrip(' ,;:.') + '…'
+    parts = []
+    for key, label, count in (
+            ('active', 'reported work item', lambda v: len(v)),
+            ('issues', 'open issue', lambda v: len([i for i in v if isinstance(i, dict) and i.get('state') == 'OPEN'])),
+            ('blockers', 'blocker', lambda v: len(v)),
+            ('owner_decisions', 'owner decision', lambda v: len(v))):
+        value = data.get(key)
+        if isinstance(value, list) and count(value):
+            n = count(value)
+            parts.append(f"{n} {label}{'' if n == 1 else 's'}")
+    return 'Manager report: ' + ', '.join(parts) + '.' if parts else 'Manager report received; it lists no counts.'
+
+
 def parse_approved_manager_report(project_id, source_path, expected_project_name=None, expected_repo=None):
     source_path = Path(source_path).resolve()
     if not source_path.exists():
@@ -403,11 +428,9 @@ def parse_approved_manager_report(project_id, source_path, expected_project_name
     active_list = data.get('active') or []
     if not isinstance(active_list, list):
         raise StatusError('Manager report active must be a list')
-    active_first = active_list[0] if active_list else ''
-    summary = (next_step + ' ' + active_first).strip()
-    if not summary:
+    if not next_step and not active_list:
         raise StatusError('Manager report has empty next and active; cannot establish working progress')
-    summary = summary[:280]
+    summary = report_summary(data)
 
     pname = report_proj
     status = 'blocked' if data.get('blockers') else 'working'

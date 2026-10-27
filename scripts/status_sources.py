@@ -29,13 +29,18 @@ except ImportError:  # imported as scripts.status_sources
     from scripts import task_continuity as tc
 
 LEDGER = ".bot-mode/local/requests.json"
-LABEL_STATUS = {"state:needs-owner": "blocked", "state:review": "review", "state:active": "in-progress",
+LABEL_STATUS = {"state:needs-owner": "blocked", "state:blocked": "blocked", "state:review": "review", "state:active": "in-progress",
                 "state:ready": "ready", "state:backlog": "backlog", "backlog": "backlog",
                 "state:future": "future", "future": "future"}
 LABEL_ORDER = list(LABEL_STATUS)
 LEDGER_STATUS = {"open": "in-progress", "in-progress": "in-progress", "review": "review", "blocked": "blocked",
                  "backlog": "backlog", "ready": "ready", "paused": "paused", "future": "future"}
 NO_HANDOFF = {"backlog", "ready", "paused", "future"}
+# Derived, never a label: an open issue without a state label is untriaged (not ready, not approved); an open issue
+# whose last request stage is answered done, with no successor, label or closing record, awaits its next stage.
+TRIAGE_STATUSES = ("untriaged", "awaiting-next-stage")
+READY_GRACE = timedelta(minutes=30)
+MAX_READY_FINDINGS = 10
 STARTED = {"in-progress", "review", "blocked", "done"}
 STALE_DAYS = 3  # an unfinished outcome without GitHub state older than this is history, not a live stall
 WORK_URL = re.compile(r"https://github\.com/([^/]+/[^/]+)/(issues|pull)/(\d+)")
@@ -67,18 +72,41 @@ def repository(project):
     return match.group(1) if match else None
 
 
+OPEN_LIMIT = 1000
+GH_RETRY_SECONDS = 2
+
+
+def gh_run(args):
+    """One gh call; a single retry after a short pause when GitHub answers with an HTTP 5xx, so one external hiccup
+    does not make the whole project and audit partial. Other failures are not retried."""
+    for attempt in (0, 1):
+        done = subprocess.run(args, capture_output=True, text=True, encoding="utf-8", timeout=90)
+        if done.returncode == 0 or attempt or not re.search(r"HTTP 5\d\d", done.stderr or ""):
+            return done
+        time.sleep(GH_RETRY_SECONDS)
+
+
 def github_fetch(repo):
     """Issues and pull requests of one repository through gh; raises when gh or the network fails."""
     gh = shutil.which("gh")
     if not gh:
         raise RuntimeError("gh not installed")
-    rows = {}
+    rows = {"truncated": []}
     for kind, fields in (("issue", "number,state,labels,updatedAt,url,title"), ("pr", "number,state,updatedAt,url,title,headRefOid")):
-        done = subprocess.run([gh, kind, "list", "-R", repo, "--state", "all", "--limit", "500", "--json", fields],
-                              capture_output=True, text=True, encoding="utf-8", timeout=90)
+        done = gh_run([gh, kind, "list", "-R", repo, "--state", "all", "--limit", "500", "--json", fields])
         if done.returncode != 0:
             raise RuntimeError(f"gh {kind} list failed")
         rows[kind] = json.loads(done.stdout)
+    # The newest 500 of all states can hide older OPEN issues; OPEN issues are enumerated on their own, bounded.
+    done = gh_run([gh, "issue", "list", "-R", repo, "--state", "open", "--limit", str(OPEN_LIMIT), "--json",
+                   "number,state,labels,updatedAt,url,title"])
+    if done.returncode != 0:
+        raise RuntimeError("gh issue list (open) failed")
+    opened = json.loads(done.stdout)
+    known = {row["number"] for row in rows["issue"]}
+    rows["issue"] += [row for row in opened if row["number"] not in known]
+    if len(opened) >= OPEN_LIMIT:
+        rows["truncated"].append(f"open issues capped at {OPEN_LIMIT}")
     return rows
 
 
@@ -129,6 +157,12 @@ def ledger_requests(root, problems):
         return [], path
 
 
+def label_name(labels):
+    """The state label that decides the status (same precedence as status_label)."""
+    names = {label.get("name") for label in labels or [] if isinstance(label, dict)}
+    return next((name for name in LABEL_ORDER if name in names), None)
+
+
 def status_label(labels):
     names = {label.get("name") for label in labels or [] if isinstance(label, dict)}
     for name in LABEL_ORDER:
@@ -153,13 +187,15 @@ def make_task(key, requests, github, ledger_path, now, interval, project_request
     if github and github.get("state") in ("CLOSED", "MERGED"):
         return "done", None
     pulls = linked_pulls(github["number"]) if github and github.get("number") and "/pull/" not in str(github.get("url")) else []
-    # Review stage only: issue labelled state:review, no live implementation or correction request, and every
-    # linked PR merged or closed. An active issue or a live implementation request stays in progress.
-    if (pulls and not any(p.get("state") == "OPEN" for p in pulls)
-            and status_label(github.get("labels")) == "review"
-            and all(is_review_work(r) for r in live)):
-        return "done", None
+    # An open issue is complete only through its own closure. A merged intermediate pull request or an answered
+    # stage never completes it.
+    issue_open = bool(github) and github.get("state") == "OPEN" and "/pull/" not in str(github.get("url"))
     label = status_label(github.get("labels")) if github else None
+    if issue_open and not label and not live:
+        if not requests:
+            return "untriaged", None
+        if latest.get("outcome") == "done":
+            return "awaiting-next-stage", None
     if label:
         status = label
     elif live:
@@ -187,7 +223,10 @@ def make_task(key, requests, github, ledger_path, now, interval, project_request
         opened = stamp(when(latest.get("opened")) or now)
         answered = when(latest.get("answered")) if latest.get("state") == "answered" else None
         handoffs = [{"id": latest["id"], "worker": latest.get("to") or "unknown", "stage": stage_of(latest),
-                     "requested_at": opened, "acknowledged_at": opened, "started_at": opened,
+                     "requested_at": opened,
+                     # Never invented: an acknowledgment or start time exists only when it was observed. The reply time
+                     # finishes the stage; the start of an open request is checked by request_not_started (relay read).
+                     "acknowledged_at": None, "started_at": None, "start_check": "relay",
                      "finished_at": stamp(answered) if answered else None,
                      "evidence": [latest.get("link") or f"ref:ledger:{ledger_path}#{latest['id']}"]}]
         # Candidate and author resolution:
@@ -248,9 +287,12 @@ def make_task(key, requests, github, ledger_path, now, interval, project_request
             candidate = {"id": sha, "author": author}
     blocker = None
     if status == "blocked":
-        reason = current.get("blocker") or (label and "label state:needs-owner")
-        owner = current.get("unblock_owner") or (label and "owner")
-        resume = current.get("resume_condition") or (label and "owner decision recorded on the issue")
+        name = label_name(github.get("labels")) if github and label == "blocked" else None
+        reason = current.get("blocker") or (label and ("label " + (name or "state:needs-owner")))
+        # state:blocked is a technical blocker (not an owner decision); only needs-owner names the owner.
+        owner = current.get("unblock_owner") or (label and ("manager" if name == "state:blocked" else "owner"))
+        resume = current.get("resume_condition") or (label and ("blocker resolved and recorded on the issue" if name == "state:blocked"
+                                                                else "owner decision recorded on the issue"))
         if reason and owner and resume:
             blocker = {"reason": str(reason), "owner": str(owner), "resume_condition": str(resume),
                        "next_check_at": stamp(when(current.get("next_check")) or now + timedelta(minutes=interval)),
@@ -271,6 +313,121 @@ def make_task(key, requests, github, ledger_path, now, interval, project_request
         "next_check_at": next_check, "handoffs": handoffs, "blocker": blocker,
         "candidate": candidate, "review": None, "accepted": None,
         "source": "github+ledger" if github and requests else ("github" if github else "ledger")}
+
+
+def valid_approval(approval, now):
+    """The auditable start approval of ready work, or None: who, when (timezone aware, not future), scope, evidence.
+
+    start_approved or a state label alone is an index, not proof."""
+    if not isinstance(approval, dict):
+        return None
+    clean = {k: str(approval.get(k) or "").strip() for k in ("by", "at", "scope", "evidence")}
+    at = when(clean["at"])
+    try:
+        aware = datetime.fromisoformat(clean["at"].replace("Z", "+00:00")).tzinfo is not None
+    except ValueError:
+        aware = False
+    if not all(clean.values()) or at is None or not aware or at > now:
+        return None
+    return clean
+
+
+def active_bots(root):
+    try:
+        rows = json.loads((Path(root) / ".bot-mode" / "roster.json").read_text(encoding="utf-8")).get("participants", [])
+    except (OSError, ValueError, AttributeError):
+        return []
+    return [{"bot": r["bot"], "role": str(r.get("role") or "")} for r in rows
+            if isinstance(r, dict) and r.get("bot") and r.get("status", "active") == "active"]
+
+
+def approved_bots(scope, bots):
+    """Appointed bots of this project that the approval scope names: 'bot:<id>' or 'role:<Role>' entries, comma separated.
+
+    A bare or global bot id is never matched without the project's own roster."""
+    chosen = []
+    for part in str(scope).split(","):
+        kind, _, value = part.strip().partition(":")
+        value = value.strip().casefold()
+        for row in bots:
+            if (kind.strip().casefold() == "bot" and row["bot"].casefold() == value) or                (kind.strip().casefold() == "role" and row["role"].casefold() == value):
+                if row["bot"] not in chosen:
+                    chosen.append(row["bot"])
+    return chosen
+
+
+def associate_ready_records(tasks, issues, repo, now):
+    """Copy a local start approval onto the GitHub task of the same issue and set the duplicate record aside.
+
+    A record matches only through its explicit Authority/Tracking URL: same owner/repo as this project and an issue (not a
+    pull request) number. The GitHub state wins: a closed or not ready issue never revives the record. Only a single
+    valid approval is copied; missing, invalid or conflicting approvals leave the GitHub task unknown."""
+    if not repo:
+        return
+    by_issue = {}
+    for task in tasks:
+        if task.get("source") == "task-record" and task.get("status") == "ready":
+            url = task.get("authority")
+            match = WORK_URL.fullmatch(url) if isinstance(url, str) else None
+            if match and match.group(2) == "issues" and match.group(1).casefold() == repo.casefold():
+                by_issue.setdefault(match.group(3), []).append(task)
+    for number, records in by_issue.items():
+        row = issues.get(("issues", number))
+        if row is None:
+            continue  # not seen on GitHub: nothing authoritative to attach to, the record keeps its own result
+        github = next((t for t in tasks if t.get("source") != "task-record" and str(t.get("id", "")).endswith(f"/issue-{number}")), None)
+        for record in records:
+            record["ready_superseded"] = "github issue " + number
+        if row.get("state") != "OPEN" or github is None or github.get("status") != "ready":
+            continue
+        approvals = [a for a in (valid_approval(r.get("start_approval"), now) for r in records)]
+        if len(approvals) == 1 and approvals[0]:
+            github["start_approval"] = approvals[0]
+
+
+def ready_candidates(root, tasks, requests, triage, now):
+    """Approved ready work with free eligible bots, for the relay idle check. Everything else is Unknown or triage.
+
+    Ready without an auditable approval (including every state:ready issue) goes to triage as ready_approval_unknown,
+    never to an idle finding. A bot with an open request, started work or a paused task is not free (single writer,
+    pause); other busy bots do not excuse a free eligible one."""
+    if (Path(root) / ".bot-mode" / "PAUSED").exists():
+        return []  # an explicit project pause is checked before any eligibility
+    ready = [t for t in tasks if t.get("status") == "ready" and not t.get("ready_superseded")]
+    if not ready:
+        return []
+    bots = active_bots(root)
+    busy = {r.get("to") for r in requests if r.get("state") == "open"}
+    busy |= {t.get("executor") for t in tasks if t.get("status") in ("in-progress", "review", "blocked") and t.get("executor")}
+    paused = {t.get("executor") for t in tasks if t.get("status") == "paused" and t.get("executor")}
+    out = []
+    for task in ready:
+        approval = valid_approval(task.get("start_approval"), now)
+        eligible = approved_bots(approval["scope"], bots) if approval else []
+        if not eligible:
+            triage["ready_approval_unknown"].append({"id": task["id"], "since": task.get("updated_at")})
+            continue
+        free = [b for b in eligible if b not in busy and b not in paused]
+        if free:
+            out.append({"id": task["id"], "approval": approval, "eligible": free, "since": approval["at"]})
+    return out
+
+
+def triage_findings(triage, now):
+    """Manager triage findings from the derived statuses, one per project and kind, after a 30 minute grace. No dispatch."""
+    kinds = (("untriaged", "issue_untriaged", "open issue(s) without a state label; not ready or approved"),
+             ("awaiting-next-stage", "stage_done_no_next",
+              "open issue(s) whose last request stage is answered done with no successor request, label or closing record"),
+             ("ready_approval_unknown", "ready_approval_unknown",
+              "ready work without an auditable start approval (by, at, scope, evidence) naming an appointed bot"))
+    findings = []
+    for pid, entry in sorted(triage.items()):
+        for key, code, text in kinds:
+            due = [i for i in entry.get(key, []) if when(i.get("since")) is None or now - when(i.get("since")) > READY_GRACE]
+            if due:
+                ids = ", ".join(str(i["id"]) for i in due[:5]) + (", ..." if len(due) > 5 else "")
+                findings.append({"code": code, "scope": pid, "detail": f"{len(due)} {text}: {ids}. Manager triage; nothing was dispatched"})
+    return findings
 
 
 def project_status(project, now, interval=20, fetch=None):
@@ -305,6 +462,8 @@ def project_status(project, now, interval=20, fetch=None):
         try:
             data = (fetch or github_fetch)(repo)
             sources.append(f"github:{repo}")
+            for note in data.get("truncated") or []:
+                problems.append(f"github coverage partial: {note}")
             for row in data.get("issue", []):
                 issues[("issues", str(row["number"]))] = row
             for row in data.get("pr", []):
@@ -319,16 +478,24 @@ def project_status(project, now, interval=20, fetch=None):
             linked = groups.pop(key)
             groups.setdefault(match, []).extend(linked)
     for key, row in issues.items():
-        if key[0] == "issues" and row.get("state") == "OPEN" and status_label(row.get("labels")):
+        if key[0] == "issues" and row.get("state") == "OPEN":
             groups.setdefault(key, [])
     if requests:
         sources.append(f"ledger:{len(requests)} requests")
 
     make_task.issues_map = issues
+    triage = {status: [] for status in TRIAGE_STATUSES}
+    triage["ready_approval_unknown"] = []
     for key, items in groups.items():
         name = "req-" + key[1] if key[0] == "request" else ("issue-" if key[0] == "issues" else "pr-") + key[1]
         status, task = make_task(name, items, issues.get(key), ledger_path, now, interval, requests)
         counts[status] += 1
+        if status in TRIAGE_STATUSES:
+            if status == "untriaged":
+                since = (issues.get(key) or {}).get("updatedAt")
+            else:
+                since = max((r.get("answered") or "" for r in items), default=None) or None
+            triage[status].append({"id": f"{project['id']}/{name}", "since": since})
         if status == "done" and any(r.get("state") != "answered" for r in items) and issues.get(key, {}).get("state") in ("CLOSED", "MERGED"):
             hygiene.extend(r["id"] for r in items if r.get("state") != "answered")
         if task:
@@ -338,12 +505,75 @@ def project_status(project, now, interval=20, fetch=None):
         task["id"] = f"{project['id']}/{task['id']}"
         for handoff in task.get("handoffs", []):
             handoff["id"] = f"{project['id']}/{handoff['id']}"
+    associate_ready_records(tasks, issues, repo, now)
+    ready_work = ready_candidates(root, tasks, requests, triage, now)
     declared_none = project.get("tracked_work") == "none"
     state = "known" if counts else ("declared-none" if declared_none else "unknown")
     open_requests = [{"id": r["id"], "to": r.get("to"), "opened": r.get("opened"), "started_at": r.get("started_at")}
                      for r in requests if r.get("state") == "open" and r["id"] not in hygiene]
     return tasks, {"state": state, "total": sum(counts.values()), "by_status": dict(counts),
-                   "sources": sources, "problems": problems, "hygiene": hygiene, "open_requests": open_requests}
+                   "sources": sources, "problems": problems, "hygiene": hygiene, "open_requests": open_requests,
+                   "triage": triage, "ready_work": ready_work}
+
+
+def ready_findings(pid, entry, now, observe):
+    """ready_not_dispatched / ready_activity_unknown for approved ready work with free eligible bots.
+
+    ready_not_dispatched needs, in this run: a thread of an eligible appointed bot read as idle (thread status idle, no
+    turn running, no turn started after the approval) and 30 minutes since the approval. A thread that is notLoaded,
+    completed, running or unreadable is not idle: it only produces the one Unknown finding. Nothing is dispatched."""
+    root = entry.get("root")
+    if root and (Path(root) / ".bot-mode" / "PAUSED").exists():
+        return []
+    roots = entry.get("relay_roots") or [root]
+    idle_items, unknown, cause = [], {}, None
+    for item in entry.get("ready", []):
+        since = when(item.get("since"))
+        if since is None or now - since <= REQUEST_START_GRACE:
+            continue
+        idle, notes = [], []
+        for bot in item.get("eligible", []):
+            if cause:
+                notes.append(f"{bot}: {cause[:60]}")
+                continue
+            try:
+                thread_id = tc.bound_thread(root, bot)
+            except (tc.PreconnectConfigurationError, OSError, ValueError, AttributeError) as error:
+                notes.append(f"{bot}: no bound thread ({type(error).__name__})")
+                continue
+            kind, value = observe(thread_id, roots)
+            if kind == "relay":
+                cause = value
+                notes.append(f"{bot}: {value[:60]}")
+            elif kind == "error":
+                notes.append(f"{bot}: {value[:80]}")
+            elif value["status"] != "idle" or value["in_progress"]:
+                notes.append(f"{bot}: thread {value['status']}{' with a running turn' if value['in_progress'] else ''}, not observed idle")
+            else:
+                try:
+                    if started_after(value, since):
+                        notes.append(f"{bot}: a turn started after the approval")
+                        continue
+                except ValueError:
+                    notes.append(f"{bot}: turn start times unreadable")
+                    continue
+                idle.append(bot)
+        if idle:
+            idle_items.append((item, idle))
+        elif notes:
+            unknown[item["id"]] = notes
+    out = []
+    for item, idle in idle_items[:MAX_READY_FINDINGS]:
+        ap = item["approval"]
+        out.append({"code": "ready_not_dispatched", "scope": item["id"],
+                    "detail": (f"Approved ready work (approved by {ap['by']} at {ap['at']}, scope {ap['scope']}) has waited over 30 minutes; "
+                               f"appointed bot(s) {', '.join(idle)} were observed idle in this run with no turn after the approval and no "
+                               "other assignment or pause. Manager decides the dispatch; nothing was sent")[:600]})
+    if unknown:
+        parts = "; ".join(f"{ident}: {' | '.join(notes)[:150]}" for ident, notes in list(unknown.items())[:3])
+        out.append({"code": "ready_activity_unknown", "scope": pid,
+                    "detail": f"{len(unknown)} approved ready item(s) could not be shown idle (Unknown is not Idle): {parts}"[:900]})
+    return out
 
 
 REQUEST_START_GRACE = timedelta(minutes=30)
@@ -411,7 +641,13 @@ def started_after(state, opened):
     return False
 
 
-def request_start_findings(open_requests, now, relay=None, *, budget_seconds=None, max_reads=None, clock=time.monotonic):
+def refused(error):
+    """True for a refused connection to the relay (raw or wrapped by urllib); other transport errors stay unspecific."""
+    reason = getattr(error, "reason", None) if isinstance(error, urllib.error.URLError) else None
+    return isinstance(error, ConnectionRefusedError) or isinstance(reason, ConnectionRefusedError)
+
+
+def request_start_findings(open_requests, now, relay=None, *, budget_seconds=None, max_reads=None, clock=time.monotonic, relay_owner=None):
     """request_not_started, request_not_started_overflow and request_start_unavailable findings for open ledger requests.
 
     open_requests: {project_id: {"root": path, "relay_roots": [paths], "items": [{"id", "to", "opened", "started_at"}]}}.
@@ -429,6 +665,7 @@ def request_start_findings(open_requests, now, relay=None, *, budget_seconds=Non
     read_cap = REQUEST_START_MAX_READS if max_reads is None else max_reads
     deadline = clock() + budget
     findings, cache, reads, errors, halted, listed = [], {}, 0, 0, None, 0
+    relay_down = None  # first observed relay failure of this run; one desktop_relay_unavailable finding per run
 
     def relay_result(roots, name, arguments):
         missing = None
@@ -442,6 +679,41 @@ def request_start_findings(open_requests, now, relay=None, *, budget_seconds=Non
                 raise RuntimeError("relay returned no result")
             return response["result"]
         raise missing or tc.PreconnectConfigurationError("No Desktop Relay active (relay.json not found)")
+
+    def observe(thread_id, roots):
+        """Cached bounded read of one bound thread: ("state", value), ("error", reason) or ("relay", cause)."""
+        nonlocal reads, errors, halted, relay_down
+        if thread_id in cache:
+            return cache[thread_id]
+        if not halted and reads >= read_cap:
+            halted = f"deferred, read cap of {read_cap} threads per run reached"
+        elif not halted and clock() >= deadline:
+            halted = f"deferred, read budget of {budget} s per run used up"
+        if halted:
+            return ("error", halted)
+        try:
+            reads += 1
+            cache[thread_id] = ("state", read_thread_state(lambda name, arguments: relay_result(roots, name, arguments), thread_id))
+            errors = 0
+        except tc.PreconnectConfigurationError as error:
+            cause = f"Desktop Relay unavailable ({str(error)[:60]}); remedy: {RELAY_REMEDY}"
+            relay_down = relay_down or cause
+            return ("relay", cause)
+        except (ValueError, OSError, RuntimeError) as error:
+            if refused(error):
+                cause = f"Desktop Relay refused the connection ({type(error).__name__}); remedy: {RELAY_REMEDY}"
+                relay_down = relay_down or cause
+                return ("relay", cause)
+            if isinstance(error, urllib.error.HTTPError) and 400 <= error.code < 500:
+                # The relay answered: a per-thread refusal (schema, unsupported or invalid binding), not a transport outage.
+                cache[thread_id] = ("error", f"thread not readable (HTTP {error.code}: the relay refused this read; check the roster binding)")
+                return cache[thread_id]
+            cache[thread_id] = ("error", f"thread could not be read ({type(error).__name__}: {str(error)[:60]})")
+            errors = 0 if isinstance(error, ValueError) else errors + 1
+            if errors >= REQUEST_START_MAX_CONSECUTIVE_ERRORS:
+                halted = f"deferred, relay failed {errors} reads in a row; remedy: {RELAY_REMEDY}"
+                relay_down = relay_down or halted
+        return cache[thread_id]
 
     for pid, entry in sorted(open_requests.items()):
         problems, stale, not_started = {}, [], []
@@ -483,9 +755,16 @@ def request_start_findings(open_requests, now, relay=None, *, budget_seconds=Non
                     errors = 0
                 except tc.PreconnectConfigurationError as error:
                     relay_cause = f"Desktop Relay unavailable ({str(error)[:60]}); remedy: {RELAY_REMEDY}"
+                    relay_down = relay_down or relay_cause
                     problem(relay_cause, item["id"])
                     continue
                 except (ValueError, OSError, RuntimeError) as error:
+                    if refused(error):
+                        # A known connect failure with a descriptor present: the relay process is gone. One request is enough.
+                        relay_cause = f"Desktop Relay refused the connection ({type(error).__name__}); remedy: {RELAY_REMEDY}"
+                        relay_down = relay_down or relay_cause
+                        problem(relay_cause, item["id"])
+                        continue
                     if isinstance(error, urllib.error.HTTPError) and error.code == 400:
                         # The relay answered: this thread is refused or invalid. A per-thread answer, not a transport failure.
                         cache[thread_id] = ("error", f"bot {bot} thread {thread_id} not readable (HTTP 400: the relay refused it, "
@@ -496,6 +775,7 @@ def request_start_findings(open_requests, now, relay=None, *, budget_seconds=Non
                         errors = 0 if isinstance(error, ValueError) else errors + 1
                     if errors >= REQUEST_START_MAX_CONSECUTIVE_ERRORS:
                         halted = f"deferred, relay failed {errors} reads in a row; remedy: {RELAY_REMEDY}"
+                        relay_down = relay_down or halted
             kind, value = cache[thread_id]
             if kind == "error":
                 problem(value, item["id"])
@@ -524,5 +804,9 @@ def request_start_findings(open_requests, now, relay=None, *, budget_seconds=Non
                      for cause, ids in sorted(problems.items())]
             findings.append({"code": "request_start_unavailable", "scope": pid,
                              "detail": ("Start of open requests could not be checked - " + "; ".join(parts))[:1500]})
+        findings.extend(ready_findings(pid, entry, now, observe))
+    if relay_down:
+        # One finding for the relay itself, scoped to the project that owns it so the Monitor can tell that project's Manager.
+        findings.append({"code": "desktop_relay_unavailable", "scope": relay_owner or "monitor", "detail": relay_down[:400]})
     return findings
 

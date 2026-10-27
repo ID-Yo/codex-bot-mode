@@ -303,30 +303,37 @@
     return prom;
   }
 
+  // Bounded labels: at most two names, the rest counted; the full list stays in the tooltip.
+  const nameList=names=>{names=names||[];return names.length<=2?names.join(', '):names.slice(0,2).join(', ')+' +'+(names.length-2);};
+  // A concrete reason for incomplete coverage; the count is only shown when the payload carries it.
+  function coverageText(act){
+    const bots=Array.isArray(act.bots)?act.bots:null;
+    if(bots){const missing=bots.filter(b=>b.status==='unknown').length;if(missing)return officeI18n.t('{missing} of {total} agents not checked',{missing,total:bots.length});}
+    return officeI18n.t('Status check incomplete');
+  }
+  function activeLabel(act){return officeI18n.t('Active')+(act.active_bots?.length?' ('+nameList(act.active_bots)+')':'');}
   function renderActivityPill(p,container){
     const act=projectActivities.get(p.id);
     if(!act)return;
     if(act.status==='active'&&!act.stale){
-      let label=officeI18n.t('Active')+(act.active_bots?.length?' ('+act.active_bots.join(', ')+')':'');
-      if(act.partial_failure) label+=' (partial)';
-      const pill=el('span','pc-activity pc-act-active',label);
-      let titleText='Checked '+when(act.fetched_at)+' via '+(act.source||'relay');
-      if(act.partial_failure) titleText+=' · partial coverage: some bots unknown';
+      const pill=el('span','pc-activity pc-act-active',activeLabel(act));
+      let titleText=officeI18n.t('Active')+': '+(act.active_bots||[]).join(', ')+' · '+officeI18n.t('Checked')+' '+when(act.fetched_at)+' · '+(act.source||'relay');
+      if(act.partial_failure) titleText+=' · '+coverageText(act)+(act.error?' ('+act.error+')':'');
       pill.title=titleText;
       container.append(pill);
       if(act.partial_failure){
-        container.append(el('span','pc-flag pc-warn',officeI18n.t('Partial coverage')));
+        container.append(el('span','pc-flag pc-warn',coverageText(act)));
       }
       if(p.status==='paused'){
         container.append(el('span','pc-flag pc-warn',officeI18n.t('Contradiction: active bot')));
       }
     }else if(act.status==='inactive'&&!act.stale){
-      const pill=el('span','pc-activity pc-act-inactive','Inactive');
+      const pill=el('span','pc-activity pc-act-inactive',officeI18n.t('Idle'));
       if(act.fetched_at) pill.title='Checked '+when(act.fetched_at)+' via '+(act.source||'relay');
       container.append(pill);
     }else{
-      let label='Activity unknown';
-      if(act.stale) label+=' (stale)';
+      let label=officeI18n.t('Activity unknown');
+      if(act.stale) label+=' ('+officeI18n.t('stale')+')';
       const pill=el('span','pc-activity pc-act-unknown',label);
       if(act.fetched_at) pill.title='Last checked '+when(act.fetched_at)+' via '+(act.source||'relay');
       container.append(pill);
@@ -352,35 +359,33 @@
     const act=projectActivities.get(pid);
     if(act){
       if(act.status==='active'&&!act.stale){
-        let label=officeI18n.t('Active')+(act.active_bots?.length?' ('+act.active_bots.join(', ')+')':'');
-        if(act.partial_failure) label+=' (partial)';
-        const pill=el('span','pc-activity pc-act-active',label);
-        let titleText='Checked '+when(act.fetched_at)+' via '+(act.source||'relay');
-        if(act.partial_failure) titleText+=' · partial coverage: some bots unknown';
+        const pill=el('span','pc-activity pc-act-active',activeLabel(act));
+        let titleText=officeI18n.t('Active')+': '+(act.active_bots||[]).join(', ')+' · '+officeI18n.t('Checked')+' '+when(act.fetched_at)+' · '+(act.source||'relay');
+        if(act.partial_failure) titleText+=' · '+coverageText(act)+(act.error?' ('+act.error+')':'');
         pill.title=titleText;
         sub.append(pill);
         if(act.partial_failure){
-          sub.append(el('span','pc-flag pc-warn',officeI18n.t('Partial coverage')));
-          sub.append(el('span','pc-provenance','checked '+when(act.fetched_at)+' via '+(act.source||'relay')+' (partial: some bots unknown)'));
+          sub.append(el('span','pc-flag pc-warn',coverageText(act)));
+          sub.append(el('span','pc-provenance',officeI18n.t('Checked')+' '+when(act.fetched_at)+' · '+(act.source||'relay')));
         }
         if(p.status==='paused'){
           const contra=el('span','pc-contradiction-flag','Paused · Active bot contradiction: '+(act.active_bots?.join(', ')||'bot')+' active in Codex');
           sub.append(contra);
         }
       }else if(act.status==='inactive'&&!act.stale){
-        const pill=el('span','pc-activity pc-act-inactive',officeI18n.t('Inactive (all bots idle)'));
+        const pill=el('span','pc-activity pc-act-inactive',officeI18n.t('Idle (all agents idle)'));
         if(act.fetched_at) pill.title='Checked '+when(act.fetched_at)+' via '+(act.source||'relay');
         sub.append(pill);
       }else{
-        let label='Activity unknown';
-        if(act.stale) label+=' (stale)';
+        let label=officeI18n.t('Activity unknown');
+        if(act.stale) label+=' ('+officeI18n.t('stale')+')';
         const pill=el('span','pc-activity pc-act-unknown',label);
         sub.append(pill);
         if(act.stale&&act.last_active_bots?.length){
           sub.append(el('span','pc-provenance','(last seen: '+act.last_active_bots.join(', ')+')'));
         }
         if(act.fetched_at){
-          sub.append(el('span','pc-provenance','checked '+when(act.fetched_at)+' via '+(act.source||'relay')+(act.partial_failure?' (partial)':'')));
+          sub.append(el('span','pc-provenance',officeI18n.t('Checked')+' '+when(act.fetched_at)+' · '+(act.source||'relay')+(act.partial_failure?' · '+coverageText(act):'')));
         }
       }
     }
@@ -425,6 +430,29 @@
     }
     return li;
   }
+  // The backend writes a count line (report_summary) when a report has no summary of its own. The payload has no flag for it,
+  // so only the exact generated grammar is translated; every other text is authored and is shown verbatim.
+  const SUMMARY_NONE='Manager report received; it lists no counts.';
+  const SUMMARY_ITEMS=[
+    ['reported work item','{count} reported work item','{count} reported work items'],
+    ['open issue','{count} open issue','{count} open issues'],
+    ['blocker','{count} blocker','{count} blockers'],
+    ['owner decision','{count} owner decision','{count} owner decisions']];
+  function summaryText(text){
+    if(typeof text!=='string')return text;
+    if(text===SUMMARY_NONE)return officeI18n.t(SUMMARY_NONE);
+    const whole=/^Manager report: (.+)\.$/.exec(text);
+    if(!whole)return text;
+    let next=0;const parts=[];
+    for(const part of whole[1].split(', ')){
+      const m=/^([1-9][0-9]{0,5}) (reported work item|open issue|blocker|owner decision)(s?)$/.exec(part);
+      if(!m)return text;
+      const n=Number(m[1]),k=SUMMARY_ITEMS.findIndex(item=>item[0]===m[2]);
+      if(k<next||(n===1)!==(m[3]===''))return text;
+      next=k+1;parts.push(officeI18n.t(n===1?SUMMARY_ITEMS[k][1]:SUMMARY_ITEMS[k][2],{count:n}));
+    }
+    return officeI18n.t('Manager report: {items}.',{items:parts.join(', ')});
+  }
   function card(p){
     const c=el('article','pc-card');
     c.id='pc-card-'+p.id;
@@ -455,10 +483,11 @@
       pBox.append(ul);
       c.append(pBox);
     }
-    const sumP=el('p','pc-summary',p.summary);
+    const summary=summaryText(p.summary);
+    const sumP=el('p','pc-summary',summary);
     if(p.summary){
-      sumP.title=p.summary;
-      sumP.setAttribute('aria-label',p.summary);
+      sumP.title=summary;
+      sumP.setAttribute('aria-label',summary);
     }
     c.append(sumP);
     const facts=el('div','pc-muted pc-manager-line');{const mb=managerBot(p.id);if(mb){const face=el('span','avatar');officeAvatars.fill(face,{key:mb.bot_key,projectId:mb.project_id,botId:mb.bot_id,name:mb.name||mb.bot_id});facts.append(face);}facts.append(document.createTextNode(p.manager||(mb&&(mb.name||mb.bot_id))||''));}
@@ -483,6 +512,12 @@
     if(agentFailed)return null;
     const matches=(agentData.agents||[]).filter(a=>a.bot_key===bot.bot_key&&a.bot_id===bot.bot_id&&a.project_id===bot.project_id&&a.thread_id===bot.thread_id);
     return matches.length===1?matches[0]:null;
+  }
+  const BOT_LABEL={working:'Working',idle:'Idle',waiting:'Waiting',paused:'Paused',failed:'Failed',unknown:'Unknown'};
+  function botState(bot){
+    const a=observation(bot);
+    if(!a||!bot.thread_id)return 'unknown';
+    return window.officeAgents?.stateOf?window.officeAgents.stateOf(a):(isWorking(bot)?'working':'unknown');
   }
   function isWorking(bot){
     const a=observation(bot),at=Date.parse(a?.runtime?.source_at);
@@ -521,7 +556,9 @@
         const card=el('article','project-agent-card'),button=el('button','project-agent-open');button.type='button';button.dataset.botKey=bot.bot_key;
         const avatar=el('span','avatar');officeAvatars.fill(avatar,{key:bot.bot_key,projectId:bot.project_id,botId:bot.bot_id,name:bot.display_name||bot.bot_id});
         button.append(avatar,el('strong',null,bot.display_name||bot.bot_id),el('span','pc-muted',officeI18n.t(bot.role||'Unknown')),
-          el('span','pc-status',officeI18n.t(isWorking(bot)?'Working':'Unknown')));
+          el('span','pc-status pc-bot-'+botState(bot),officeI18n.t(BOT_LABEL[botState(bot)])));
+        const waitingOn=botState(bot)==='waiting'?window.officeAgents?.waitingOn?.(observation(bot)):'';
+        if(waitingOn)button.append(el('small','pc-waiting-on',officeI18n.t('Waiting on')+': '+waitingOn));
         button.onclick=()=>window.officeAgents.show(bot.bot_key);card.append(button);
         const a=observation(bot),task=a?.task;
         if(task&&task.updated_at&&Date.now()>=Date.parse(task.updated_at)&&Date.now()-Date.parse(task.updated_at)<=48*3600e3){
@@ -919,7 +956,7 @@
     const p=projects().find(x=>x.id===pid);
     if(!p)return;
     left.replaceChildren();
-    left.append(el('p','pc-summary',p.summary),freshness(p));
+    left.append(el('p','pc-summary',summaryText(p.summary)),freshness(p));
     left.append(projectMetrics(p),projectTeams(p));
     if(p.tracking){
       const t=el('p','pc-muted','Task authority: '+p.tracking.authority+' ');
@@ -1377,10 +1414,12 @@
 
   function render(){const v=document.getElementById('projects-view');v.replaceChildren();const body=el('div','pc-body');const warn=warning();if(warn)body.append(warn);
     if(view==='dashboard'){
-      v.append(header(officeI18n.t('Dashboard'),'',true));
+      // No page title: the topbar and navigation already name the view. Only the project picker and New project remain.
       const layout=el('div','foundation-dashboard'),main=el('section'),attention=el('aside','foundation-attention');
-      main.append(el('h2',null,officeI18n.t('Projects in your dashboard')));
-      const controls=renderVisibilityControls();if(controls){const picker=el('details','dashboard-project-picker');picker.append(el('summary',null,officeI18n.t('Choose projects')),controls);main.append(picker);}
+      const toolbar=el('div','dashboard-toolbar');
+      const controls=renderVisibilityControls();if(controls){const picker=el('details','dashboard-project-picker');picker.append(el('summary',null,officeI18n.t('Choose projects')),controls);toolbar.append(picker);}
+      const add=el('button','secondary new-project-open',officeI18n.t('New project'));add.type='button';add.onclick=()=>window.officeNewProject.open(true);toolbar.append(add);
+      v.append(toolbar);
       const grid=el('div','pc-grid');projects().forEach(p=>grid.append(card(p)));
       if(grid.children.length)main.append(grid);else main.append(empty(officeI18n.t(!data?officeI18n.t('Loading projects…'):!data.available?officeI18n.t('Status unavailable'):officeI18n.t('No projects in the snapshot.'))));
       attention.id='owner-dashboard-attention';paintInboxPreview(attention);

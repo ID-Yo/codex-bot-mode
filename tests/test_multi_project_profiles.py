@@ -15,6 +15,7 @@ from unittest.mock import patch
 import isolation
 isolation.isolate()
 
+from scripts.team_room import project as served
 from scripts.team_room.settings import BotSettings, version
 from scripts.team_room.web import create_server
 from scripts.team_room.controller import Controller
@@ -308,11 +309,18 @@ class MultiProjectWebAPITests(unittest.TestCase):
 
         self.c = Controller(str(self.base / "runtime"), bots=["manager"], profile_project=self.proj_a, transport=FakeTransport(), start_worker=False)
         self.c.registry_file = self.reg_file
+        # The server's read model worker writes under the served project; never under the real repository root.
+        served.configure(self.proj_a)
+        self.addCleanup(served.configure)
         self.server = create_server(self.c)
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
         self.port = self.server.server_port
         self.token = re.search(r'name="room-token" content="([^"]+)"', self.request("GET", "/")[1].decode()).group(1)
+
+    def test_server_never_serves_or_writes_the_real_repository_root(self):
+        self.assertEqual(served.PROJECT, self.proj_a.resolve())
+        self.assertNotEqual(served.PROJECT, ROOT)
 
     def tearDown(self):
         self.server.shutdown(); self.server.server_close(); self.thread.join()

@@ -599,3 +599,12 @@
 @media(max-width:600px){.owner-inbox-filters{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr)}.owner-inbox-filters input[type=search],.owner-inbox-filters select{width:100%;max-width:100%;min-width:0}.owner-inbox-title{font-size:12px}.owner-inbox-detail h2{font-size:18px}}
 .foundation-attention .owner-inbox-row{padding:5px 0}.foundation-attention .owner-inbox-title{font-size:11px;margin-bottom:3px}.foundation-attention .owner-inbox-meta{gap:3px 6px;font-size:8px}.foundation-attention .owner-inbox-meta>span:nth-child(2),.foundation-attention .owner-inbox-meta>span:nth-child(3),.foundation-attention .owner-inbox-meta>span:last-child:not(.pc-tag){display:none}
 .owner-inbox-filters select{max-width:120px}.owner-inbox-filters input[type=search]{max-width:150px}.owner-inbox-row{padding:6px 0}
+/* #352: card header keeps the project name readable; badges wrap under it and stay bounded. */
+.pc-card-head{flex-wrap:wrap;align-items:flex-start}
+.pc-card-head strong{flex:1 1 100%;min-width:0;overflow-wrap:break-word}
+.pc-card-badges{flex:1 1 100%;min-width:0;max-width:100%}
+.pc-card-badges>*{min-width:0;max-width:100%}
+.pc-card-badges .pc-activity,.pc-card-badges .pc-flag,#pm-header-subtitle .pc-activity,#pm-header-subtitle .pc-flag{white-space:normal;overflow-wrap:anywhere;margin-left:0}
+#pm-header-subtitle{display:flex;flex-wrap:wrap;align-items:center;gap:4px 8px;min-width:0}
+.dashboard-toolbar{display:flex;flex-wrap:wrap;align-items:flex-start;justify-content:space-between;gap:6px 12px;margin:8px 0 10px}.dashboard-toolbar .dashboard-project-picker{flex:1 1 220px;min-width:0;margin:0}.dashboard-toolbar .new-project-open{flex:0 0 auto}
+.pc-waiting-on{display:block;color:var(--muted);font-size:10px;line-height:1.35;margin-top:3px;overflow-wrap:anywhere}
