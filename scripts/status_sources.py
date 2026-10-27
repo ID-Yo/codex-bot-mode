@@ -40,6 +40,7 @@ NO_HANDOFF = {"backlog", "ready", "paused", "future"}
 # whose last request stage is answered done, with no successor, label or closing record, awaits its next stage.
 TRIAGE_STATUSES = ("untriaged", "awaiting-next-stage")
 READY_GRACE = timedelta(minutes=30)
+ACTIVE_RECORD_FRESH = timedelta(hours=6)  # a task record names a current executor only while it was updated this recently
 MAX_READY_FINDINGS = 10
 STARTED = {"in-progress", "review", "blocked", "done"}
 STALE_DAYS = 3  # an unfinished outcome without GitHub state older than this is history, not a live stall
@@ -413,13 +414,45 @@ def ready_candidates(root, tasks, requests, triage, now):
     return out
 
 
+def active_without_work(issues, groups, tasks, repo, project_id, root, now):
+    """OPEN issues labelled state:active that show no current work: [{id, since}].
+
+    Current work is a live (not answered) request on the issue, or a task record linked by its Authority URL that
+    names an executor (in-progress or review) with a record update in the last ACTIVE_RECORD_FRESH, or an explicit
+    blocked or paused status. Whether that executor is idle is never decided here. A project pause
+    (.bot-mode/PAUSED) silences the check. Closed, pull request, backlog, ready, review, blocked, needs-owner and
+    future items never match, because only the state:active label with highest precedence is considered."""
+    if (Path(root) / ".bot-mode" / "PAUSED").exists():
+        return []
+    linked = {}
+    for task in tasks:
+        url = task.get("authority") if task.get("source") == "task-record" else None
+        match = WORK_URL.fullmatch(url) if isinstance(url, str) else None
+        if match and match.group(2) == "issues" and repo and match.group(1).casefold() == repo.casefold():
+            linked.setdefault(match.group(3), []).append(task)
+    found = []
+    for (kind, number), row in sorted(issues.items(), key=lambda item: (item[0][0], int(item[0][1]))):
+        if kind != "issues" or row.get("state") != "OPEN" or label_name(row.get("labels")) != "state:active":
+            continue
+        if any(r.get("state") != "answered" for r in groups.get((kind, number), [])):
+            continue
+        if any(t.get("status") in ("blocked", "paused") or (t.get("status") in ("in-progress", "review") and t.get("executor")
+                                                    and (when(t.get("updated_at")) or now - 2 * ACTIVE_RECORD_FRESH) > now - ACTIVE_RECORD_FRESH)
+               for t in linked.get(number, [])):
+            continue
+        found.append({"id": f"{project_id}/issue-{number}", "since": row.get("updatedAt")})
+    return found
+
+
 def triage_findings(triage, now):
     """Manager triage findings from the derived statuses, one per project and kind, after a 30 minute grace. No dispatch."""
     kinds = (("untriaged", "issue_untriaged", "open issue(s) without a state label; not ready or approved"),
              ("awaiting-next-stage", "stage_done_no_next",
               "open issue(s) whose last request stage is answered done with no successor request, label or closing record"),
              ("ready_approval_unknown", "ready_approval_unknown",
-              "ready work without an auditable start approval (by, at, scope, evidence) naming an appointed bot"))
+              "ready work without an auditable start approval (by, at, scope, evidence) naming an appointed bot"),
+             ("active_without_work", "active_without_work",
+              "open issue(s) labelled state:active with no currently assigned work (no live request, handoff or executor with fresh activity evidence); idleness is not claimed"))
     findings = []
     for pid, entry in sorted(triage.items()):
         for key, code, text in kinds:
@@ -486,6 +519,7 @@ def project_status(project, now, interval=20, fetch=None):
     make_task.issues_map = issues
     triage = {status: [] for status in TRIAGE_STATUSES}
     triage["ready_approval_unknown"] = []
+    triage["active_without_work"] = []
     for key, items in groups.items():
         name = "req-" + key[1] if key[0] == "request" else ("issue-" if key[0] == "issues" else "pr-") + key[1]
         status, task = make_task(name, items, issues.get(key), ledger_path, now, interval, requests)
@@ -506,6 +540,7 @@ def project_status(project, now, interval=20, fetch=None):
         for handoff in task.get("handoffs", []):
             handoff["id"] = f"{project['id']}/{handoff['id']}"
     associate_ready_records(tasks, issues, repo, now)
+    triage["active_without_work"] = active_without_work(issues, groups, tasks, repo, project["id"], root, now)
     ready_work = ready_candidates(root, tasks, requests, triage, now)
     declared_none = project.get("tracked_work") == "none"
     state = "known" if counts else ("declared-none" if declared_none else "unknown")
