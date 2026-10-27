@@ -90,6 +90,20 @@ class OwnerInboxTests(unittest.TestCase):
         self.assertEqual(result['items'], [])
         self.assertFalse(result['complete'])
 
+    def test_valid_ledger_above_the_old_limit_is_read_and_oversize_is_named(self):
+        rows = [dict(id=f'r{i}', **{'from': 'developer'}, to='developer', summary='x' * 200, state='answered', opened=NOW)
+                for i in range(1300)]
+        rows.append(dict(id='o1', **{'from': 'developer'}, to='owner', summary='Decide', state='open', opened=NOW))
+        data = json.dumps({'schema': 1, 'requests': rows})
+        self.assertGreater(len(data), owner_inbox.MAX_BYTES)
+        (self.local / 'requests.json').write_text(data, encoding='utf-8')
+        result = self.build({'available': False})
+        self.assertEqual([i['title'] for i in result['items']], ['Decide'])
+        self.assertFalse(any('ledger' in w for w in result['warnings']))
+        (self.local / 'requests.json').write_bytes(b'X' * (owner_inbox.LEDGER_BYTES + 1))
+        result = self.build({'available': False})
+        self.assertTrue(any('exceeds the size limit' in w for w in result['warnings']))
+        self.assertNotIn('X' * 20, json.dumps(result))
     def test_missing_ledger_marks_supported_coverage_incomplete(self):
         result = self.build(self.snapshot([]))
         self.assertFalse(result['complete'])

@@ -71,7 +71,7 @@ class AgentVisibilityTests(unittest.TestCase):
                             delivery_receipt={'transcript': 'PRIVATE'})])
         self.activity['bots'][0]['status'] = 'idle'
         card = self.card()
-        self.assertEqual(card['execution']['state'], 'unknown')
+        self.assertEqual(card['execution']['state'], 'idle')
         self.assertIsNone(card['action'])
         self.assertEqual(card['task']['workflow'], 'ready')
         self.assertNotIn('SECRET', json.dumps(card))
@@ -154,7 +154,7 @@ class AgentVisibilityTests(unittest.TestCase):
         self.activity['bots'][0]['status'] = 'idle'
         card = self.card()
         self.assertFalse(card['attention'])
-        self.assertEqual(card['execution']['state'], 'unknown')
+        self.assertEqual(card['execution']['state'], 'idle')
         self.assertIsNone(card['action'])
         self.assertNotIn('SECRET', json.dumps(card))
 
@@ -164,6 +164,25 @@ class AgentVisibilityTests(unittest.TestCase):
         self.assertIsNone(card['task']['url'])
         self.assertIsNone(card['task']['state_since'])
 
+    def test_fresh_idle_is_idle_even_without_task_evidence_and_partial_error_keeps_it(self):
+        self.activity['bots'][0]['status'] = 'idle'
+        card = self.card()
+        self.assertIsNone(card['task'])
+        self.assertEqual(card['execution']['state'], 'idle')
+        self.assertIn('not proof that no task is assigned', card['coverage'])
+        partial = dict(self.activity, partial_failure=True, error='Metadata partially unavailable')
+        self.assertEqual(av.project_cards(self.root, [self.bot], partial, now=NOW)[0]['execution']['state'], 'idle')
+        partial['bots'][0]['status'] = 'unknown'
+        self.assertEqual(av.project_cards(self.root, [self.bot], partial, now=NOW)[0]['execution']['state'], 'unknown')
+        self.activity['fetched_at'] = '2026-10-20T09:00:00Z'
+        self.assertEqual(self.card()['execution']['state'], 'unknown')
+
+    def test_idle_with_an_explicit_fresh_owner_wait_is_waiting(self):
+        self.activity['bots'][0]['status'] = 'idle'
+        self.task('Waiting on: owner\nCurrent action: Needs decision\n')
+        self.assertEqual(self.card()['execution']['state'], 'waiting')
+        self.activity['bots'][0]['status'] = 'active'
+        self.assertEqual(self.card()['execution']['state'], 'working')
     def test_failed_or_stale_runtime_refresh_cannot_reuse_active(self):
         for flag in ('error', 'stale'):
             activity = dict(self.activity, **{flag: True})
@@ -179,7 +198,7 @@ class AgentVisibilityTests(unittest.TestCase):
         self.requests([dict(id='REQ-A', state='answered', **{'from':'developer','to':'owner'}, answered=NOW)])
         self.activity['bots'][0]['status'] = 'idle'
         card = self.card()
-        self.assertEqual(card['execution']['state'], 'unknown')
+        self.assertEqual(card['execution']['state'], 'idle')
         self.assertFalse(card['attention'])
         self.assertIn('resolved', card['coverage'])
 
@@ -312,7 +331,7 @@ class AgentVisibilityTests(unittest.TestCase):
                 card=self.card()
                 self.assertEqual(card['dependencies'][0]['freshness'],'unknown')
                 self.assertEqual(card['dependencies'][0]['source_at'],NOW)
-                self.assertEqual(card['execution']['state'],'unknown')
+                self.assertEqual(card['execution']['state'],'idle')
                 self.assertFalse(card['attention'])
 
     def test_malformed_request_scalars_are_skipped_without_content_or_endpoint_exception(self):

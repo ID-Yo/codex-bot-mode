@@ -626,6 +626,51 @@ class Phase2EnforcementTests(unittest.TestCase):
         task_txt = (self.tasks_dir / "TASK-1.md").read_text(encoding="utf-8")
         self.assertIn("- **State**: ready", task_txt)
 
+    def test_route_stage_keeps_a_request_written_during_delivery(self):
+        self._write_task("TASK-1", state="review", start_approved="true", local_req_id="req-1")
+        now_str = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        (self.local_dir / "requests.json").write_text(json.dumps({"schema": 1, "requests": [{
+            "id": "req-1", "from": "manager", "to": "developer", "summary": "Implement TASK-1", "link": "work/tasks/TASK-1.md",
+            "opened": now_str, "started_at": now_str, "state": "done",
+            "reply": {"by": "developer", "link": "ref:c", "outcome": "done", "at": now_str}, "escalations": []}]}), encoding="utf-8")
+        ledger = tc.get_req_ledger(self.project_path)
+        calls = []
+
+        def adapter(project, target, request_id, summary):
+            calls.append(request_id)
+            ledger.update(self.project_path, lambda d: ledger.open_request(d, "other-1", "manager", "developer", "Concurrent"))
+            return {"status": "delivered", "receipt_id": "r1"}
+
+        res = tc.route_stage(self.project_path, apply=True, delivery_adapter=adapter)
+        self.assertEqual(res["routed"][0]["delivery"], "delivered")
+        rows = {r["id"]: r for r in json.loads((self.local_dir / "requests.json").read_text(encoding="utf-8"))["requests"]}
+        self.assertIn("other-1", rows)
+        self.assertEqual(rows[calls[0]]["delivery_status"], "delivered")
+        # A second run in the same minute deduplicates against the open request: no second delivery.
+        tc.route_stage(self.project_path, apply=True, delivery_adapter=adapter)
+        self.assertEqual(len(calls), 1)
+    def test_route_stage_apply_refuses_a_helper_without_update(self):
+        self._write_task("TASK-1", state="review", start_approved="true", local_req_id="req-1")
+        now_str = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        before = json.dumps({"schema": 1, "requests": [{
+            "id": "req-1", "from": "manager", "to": "developer", "summary": "Implement TASK-1", "link": "work/tasks/TASK-1.md",
+            "opened": now_str, "started_at": now_str, "state": "done",
+            "reply": {"by": "developer", "link": "ref:c", "outcome": "done", "at": now_str}, "escalations": []}]})
+        (self.local_dir / "requests.json").write_text(before, encoding="utf-8")
+        task_before = (self.tasks_dir / "TASK-1.md").read_text(encoding="utf-8")
+        legacy = type("Legacy", (), {"load": staticmethod(lambda p: json.loads(before)), "version": staticmethod(lambda d: "v"),
+                                     "save": staticmethod(lambda *a: self.fail("legacy save used"))})
+        sent = []
+        original = tc.get_req_ledger
+        tc.get_req_ledger = lambda project: legacy
+        self.addCleanup(setattr, tc, "get_req_ledger", original)
+        res = tc.route_stage(self.project_path, apply=True, delivery_adapter=lambda *a: sent.append(a))
+        self.assertFalse(res["ok"])
+        self.assertIn("update the project's requests.py helper first", res["errors"][0]["error"])
+        self.assertEqual(sent, [])
+        self.assertEqual((self.local_dir / "requests.json").read_text(encoding="utf-8"), before)
+        self.assertEqual((self.tasks_dir / "TASK-1.md").read_text(encoding="utf-8"), task_before)
+        self.assertTrue(tc.route_stage(self.project_path, apply=False)["ok"])
     def test_stage_routing_on_request_changes_opens_corrections_request(self):
         self._write_task("TASK-1", state="review", start_approved="true", local_req_id="req-2", review_verdict="request_changes")
         now_str = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")

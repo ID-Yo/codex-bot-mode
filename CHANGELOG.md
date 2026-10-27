@@ -4,6 +4,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/). Versions follow [SemVer
 
 ## [Unreleased]
 
+### Changed
+- Office 0.1.10 (patch over 0.1.9): truthful agent status (working, idle, waiting from a fresh runtime read; unknown only without one), a concise project summary from the report or its own counts, owner inbox reads request ledgers up to 2 MiB, atomic request ledger writes with a lock and route_stage updates, Monitor triage and ready-work findings with auditable start approval, and one retry on a GitHub HTTP 5xx.
+
 ### Added
 - Chief of Staff playbook limits message bursts to agents: at most 3 messages in a row, mass changes wait at least 20 seconds between messages, and one configuration-level change preferred over many messages.
 - Windows x64 Codex Office controller with tray, external Chrome workflow and bundled service; scoped signed component updates, inventory, preview, recovery and separate activation evidence.

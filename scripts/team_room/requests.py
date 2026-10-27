@@ -6,12 +6,14 @@ with their reply. Overdue requests escalate: reminder to the recipient, then the
 requester's Manager or Director, then the owner. Standalone: stdlib only.
 """
 from datetime import datetime, timedelta, timezone
+from contextlib import contextmanager
 import hashlib
 import json
 import os
 from pathlib import Path
 import re
 import tempfile
+import time
 
 ID = re.compile(r'^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$')
 BOT = re.compile(r'^(owner|[a-z][a-z0-9-]{0,47})$')
@@ -28,7 +30,33 @@ def now():
 
 
 def path(project):
-    return Path(project).resolve() / '.bot-mode' / 'local' / 'requests.json'
+    root = Path(project).resolve()
+    file = root / '.bot-mode' / 'local' / 'requests.json'
+    # .bot-mode/local is untracked: a linked worktree has no ledger of its own and must not start an empty one.
+    if not file.exists() and not (file.parent.parent / 'requests.json').exists():
+        main = _main_checkout(root)
+        if main is not None and ((main / '.bot-mode' / 'local' / 'requests.json').exists()
+                                 or (main / '.bot-mode' / 'requests.json').exists()):
+            return main / '.bot-mode' / 'local' / 'requests.json'  # load() falls back to the main legacy file
+    return file
+
+
+def _main_checkout(root):
+    """Root of the main checkout when root is a linked git worktree, else None (stdlib, no subprocess)."""
+    marker = root / '.git'
+    try:
+        if not marker.is_file():
+            return None
+        line = marker.read_text(encoding='utf-8').strip()
+        if not line.startswith('gitdir:'):
+            return None
+        gitdir = Path(line.split(':', 1)[1].strip())
+        if not gitdir.is_absolute():
+            gitdir = root / gitdir  # relative to the worktree root, not to the process working directory
+        common = (gitdir / (gitdir / 'commondir').read_text(encoding='utf-8').strip()).resolve()
+        return common.parent if common.name == '.git' else None
+    except (OSError, ValueError, IndexError):
+        return None
 
 
 def load(project):
@@ -36,22 +64,88 @@ def load(project):
     legacy = file.parent.parent / 'requests.json'
     if not file.exists() and legacy.exists():
         file = legacy
-    return json.loads(file.read_text(encoding='utf-8')) if file.exists() else {'schema': 1, 'requests': []}
+    for attempt in range(100):
+        try:
+            return json.loads(file.read_text(encoding='utf-8')) if file.exists() else {'schema': 1, 'requests': []}
+        except PermissionError:  # Windows: a writer is replacing the file at this instant
+            if attempt == 99:
+                raise
+            time.sleep(0.02)
 
 
 def version(data):
     return hashlib.sha256(json.dumps(data, sort_keys=True).encode('utf-8')).hexdigest()
 
 
-def save(project, data, expected):
-    if version(load(project)) != expected:
-        raise RequestError('Requests changed since they were read. Reload and try again.')
+LOCK_SECONDS = 15.0
+
+
+@contextmanager
+def locked(project, timeout=LOCK_SECONDS):
+    """Exclusive cross-process lock on the canonical ledger; the OS drops it if the holder dies.
+
+    Hold it only around read, check and write of the file, never across a network call."""
+    lock = path(project).parent / 'requests.lock'
+    lock.parent.mkdir(parents=True, exist_ok=True)
+    deadline = time.monotonic() + timeout
+    with open(lock, 'a+b') as handle:
+        while True:
+            try:
+                if os.name == 'nt':
+                    import msvcrt
+                    handle.seek(0)
+                    msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+                else:
+                    import fcntl
+                    fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except OSError:
+                if time.monotonic() >= deadline:
+                    raise RequestError('The request ledger is busy. Try again.') from None
+                time.sleep(0.05)
+        try:
+            yield
+        finally:
+            if os.name == 'nt':
+                import msvcrt
+                handle.seek(0)
+                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(handle, fcntl.LOCK_UN)
+
+
+def _write(project, data):
     file = path(project)
     file.parent.mkdir(parents=True, exist_ok=True)
     fd, temporary = tempfile.mkstemp(dir=file.parent, prefix='requests-', suffix='.tmp')
     with os.fdopen(fd, 'w', encoding='utf-8', newline='\n') as handle:
         json.dump(data, handle, ensure_ascii=False, indent=2)
-    os.replace(temporary, file)
+    for attempt in range(100):
+        try:
+            os.replace(temporary, file)
+            return
+        except PermissionError:  # Windows: a reader has the file open for a moment
+            if attempt == 99:
+                os.unlink(temporary)
+                raise
+            time.sleep(0.02)
+
+
+def save(project, data, expected):
+    with locked(project):
+        if version(load(project)) != expected:
+            raise RequestError('Requests changed since they were read. Reload and try again.')
+        _write(project, data)
+
+
+def update(project, change):
+    """Read, change and write the ledger as one locked step; change(data) mutates and may raise RequestError."""
+    with locked(project):
+        data = load(project)
+        change(data)
+        _write(project, data)
+        return data
 
 
 def _find(data, key):
@@ -101,6 +195,10 @@ def reply(data, key, by, link=None, outcome='done', at=None, successor=None):
         raise RequestError(f'Only {item["to"]} can reply to {key}')
     if outcome not in ('done', 'blocked', 'failed', 'refused', 'partial'):
         raise RequestError('Outcome must be done, blocked, failed, refused or partial')
+    if item.get('state') == 'answered' and item.get('outcome') == outcome:
+        return data  # repeated reply: keep the recorded one
+    if item.get('state') == 'cancelled':
+        raise RequestError(f'{key} was cancelled; it cannot be answered')
     item.update(state='answered', outcome=outcome, answered=(at or now()).isoformat(), reply_link=link)
     if successor:
         item['successor'] = successor
@@ -128,6 +226,8 @@ def cancel(data, key, by, reason):
     item = _find(data, key)
     if by not in (item['from'], 'owner'):
         raise RequestError('Only the requester or the owner can cancel')
+    if item.get('state') == 'cancelled':
+        return data  # repeated cancel: keep the recorded reason
     item.update(state='cancelled', cancelled_reason=reason)
     return data
 
@@ -208,17 +308,17 @@ def main(argv=None):
             items = [i for i in data['requests'] if i['state'] == 'open' and (not args.to or i['to'] == args.to)]
             print(json.dumps(items, ensure_ascii=False, indent=2))
             return 0
-        expected = version(data)
-        if args.action == 'open':
-            open_request(data, args.id, args.sender, args.to, args.summary, args.link, args.due_minutes,
-                         candidate=args.candidate, author=args.author)
-        elif args.action == 'reply':
-            reply(data, args.id, args.by, args.link, args.outcome, successor=args.successor)
-        elif args.action == 'accept':
-            accept(data, args.id, args.by, args.link)
-        else:
-            cancel(data, args.id, args.by, args.reason)
-        save(args.project, data, expected)
+        def change(data):
+            if args.action == 'open':
+                open_request(data, args.id, args.sender, args.to, args.summary, args.link, args.due_minutes,
+                             candidate=args.candidate, author=args.author)
+            elif args.action == 'reply':
+                reply(data, args.id, args.by, args.link, args.outcome, successor=args.successor)
+            elif args.action == 'accept':
+                accept(data, args.id, args.by, args.link)
+            else:
+                cancel(data, args.id, args.by, args.reason)
+        data = update(args.project, change)
         print(json.dumps(_find(data, args.id), ensure_ascii=False, indent=2))
         return 0
     except (RequestError, ValueError) as error:

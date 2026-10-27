@@ -7,6 +7,7 @@ import tempfile
 
 STATE_READ_LIMIT = 64 * 1024  # real findings across 13 projects exceeded 16 KiB (#259)
 DELIVERY_STATUSES = {"sent", "acknowledged", "unconfirmed", "delivery_unknown", "not_attempted", "not_required"}
+MANAGER_RESULTS = {"sent": "sent", "failed": "failed", "delivery_unknown": "pending"}  # pending: becomes unknown, reported once
 FIELDS = ("version", "run_id", "audit_status", "coverage", "observed_at",
           "next_check_at", "active_alert_count", "delivery_status", "alert_ledger",
           "unavailable_scopes")
@@ -91,6 +92,27 @@ def set_delivery_status(path, status):
     finish_lease(path, data.get("run_id"))
 
 
+def set_manager_delivery(path, project_id, result):
+    """Record the outcome of the Manager message of one project (per recipient, separate from the Chief of Staff report).
+
+    sent: delivered. failed: known not delivered, the signal is sent again on the next run. delivery_unknown: outcome
+    unclear; the next run reports it once as manager_delivery_unconfirmed and never resends it blindly. sent and failed
+    also reconcile a signal that is already unconfirmed; delivery_unknown only applies to signals just handed over."""
+    if result not in MANAGER_RESULTS:
+        raise ValueError("Invalid Manager delivery result")
+    data = load_checkpoint(path)
+    if not data:
+        raise ValueError("Monitor checkpoint is unavailable")
+    changed = 0
+    for fingerprint, entry in (data.get("alert_ledger") or {}).items():
+        if isinstance(entry, dict) and entry.get("manager") in (("pending",) if result == "delivery_unknown" else ("pending", "unknown")) \
+                and fingerprint.partition(":")[2].partition("/")[0] == project_id:
+            entry["manager"] = MANAGER_RESULTS[result]
+            changed += 1
+    save_checkpoint(path, data)
+    return changed
+
+
 def finish_lease(state_path, run_id):
     """The Monitor's own run lease ends once the delivery result is recorded."""
     import datetime
@@ -143,9 +165,16 @@ def main(argv=None):
     parser.add_argument("--state", type=Path, required=True)
     parser.add_argument("--memory", type=Path)
     parser.add_argument("--set-delivery-status", choices=sorted(DELIVERY_STATUSES))
+    parser.add_argument("--set-manager-delivery", metavar="PROJECT_ID")
+    parser.add_argument("--manager-result", choices=sorted(MANAGER_RESULTS))
     args = parser.parse_args(argv)
     try:
-        if args.set_delivery_status:
+        if args.set_manager_delivery:
+            if not args.manager_result:
+                parser.error("--set-manager-delivery needs --manager-result")
+            changed = set_manager_delivery(args.state, args.set_manager_delivery, args.manager_result)
+            print(json.dumps({"manager_delivery": args.manager_result, "project_id": args.set_manager_delivery, "signals": changed}))
+        elif args.set_delivery_status:
             set_delivery_status(args.state, args.set_delivery_status)
             print(json.dumps({"delivery_status": args.set_delivery_status}))
         else:
