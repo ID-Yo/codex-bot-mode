@@ -18,5 +18,10 @@
     "color": "D93F0B",
     "description": "Prioritize ahead of normal work; owner records why.",
     "name": "priority:high"
+  },
+  {
+    "color": "C2E0C6",
+    "description": "Lower scheduling priority; state, approval and dependency rules still apply.",
+    "name": "priority:low"
   }
 ]

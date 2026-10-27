@@ -39,12 +39,12 @@ Several documents and tools use different names for the same state. The canonica
 
 ### GitHub label policy
 
-Only eleven labels may be used in any project, on issues and on pull requests: `state:ready`, `state:active`, `state:review`, `state:blocked`, `state:needs-owner`, `state:backlog`, `future`, `type:epic`, `type:story`, `type:task` and `priority:high`.
+Only twelve labels may be used in any project, on issues and on pull requests: `state:ready`, `state:active`, `state:review`, `state:blocked`, `state:needs-owner`, `state:backlog`, `future`, `type:epic`, `type:story`, `type:task`, `priority:high` and `priority:low`.
 
 - Never create, rename or apply another label: no kind, bot, status, plan or approval labels and no GitHub default labels. When a project seems to need one, the Manager asks the owner through the Chief of Staff and waits for the answer.
-- An open work issue carries exactly one `state:*` label. A `type:*` label is set only when the type is clear; never guess one. `priority:high` is the only priority label. `future` marks work planned for later.
+- An open work issue carries exactly one lifecycle label: one of the six `state:*` labels or `future`: `future` marks work planned for later and stands alone, and no separate state label is created for it. A `type:*` label is set only when the type is clear; never guess one. Priority is `priority:high`, `priority:low` or no label: no label means Normal, `priority:normal` is never created, priority only orders work and never overrides approval, state, blockers or an owner pause, and `priority:low` is not `future` (unscheduled work). Priority labels are applied going forward only; existing items are not reclassified by this policy.
 - The responsible participant, the start approval and decisions are recorded in the issue text and comments (a "Responsible" line, the approval record below), not in labels. A label never approves work.
-- Exact colors and descriptions are in `templates/task-state-labels.json` (the seven state and future labels) and `templates/github-labels.json` (the four type and priority labels). They are copied unchanged from the accepted canonical set, open-dreamdocs commit `685c89c44ced2cc972d812cb5e880dcfee17759c`, and are not restated here or recalled from memory.
+- Exact colors and descriptions are in `templates/task-state-labels.json` (the seven state and future labels) and `templates/github-labels.json` (the five type and priority labels). They are copied unchanged from the accepted canonical set, open-dreamdocs commit `685c89c44ced2cc972d812cb5e880dcfee17759c`, except `priority:low`, which the owner approved in #367 with proposed metadata that the Chief of Staff and DreamDocs confirm. Nothing is restated here or recalled from memory.
 - Labels that already exist are migrated through a reviewed inventory that keeps each item's history and meaning; they are not deleted ad hoc.
 
 `cancelled` (team workflow design) is a closed issue with the cancellation reason. `ready` means criteria are defined; it is not approval to start (section 6). A state name never changes the rule that only the authoritative record owns mutable status.
@@ -96,7 +96,7 @@ A stage is one executor's assigned piece of a task: implementation, review, corr
 - **Intermediate pull requests use Refs**: A pull request that is a stage candidate, a correction, a release preparation or anything else that does not complete the issue links it with `Refs #N`. It never uses `Closes`, `Fixes` or `Resolves`, because merging it would close the issue before the work is accepted.
 - **Terminal Closes only for the final accepted deliverable**: `Closes #N` belongs only in the pull request that is the final deliverable, after independent review and verification passed on its exact candidate and acceptance is recorded with no stage remaining.
 - **Request done is not issue done**: A reply with outcome `done` closes that request, not the issue. An open work issue whose last request is done needs the next stage dispatched, the blocker recorded, or its closure by the Manager under section 4.
-- **Open work issues are visible**: Every open work issue carries one state label (see GitHub label policy) and a responsible participant named in its text. An open issue without them is a recording omission to correct, not a task nobody owns.
+- **Open work issues are visible**: Every open work issue carries one lifecycle label (see GitHub label policy) and a responsible participant named in its text. An open issue without them is a recording omission to correct, not a task nobody owns.
 
 ### Enforcement status of sections 5 to 7
 
