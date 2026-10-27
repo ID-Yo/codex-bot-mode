@@ -38,7 +38,7 @@ class TeamTests(unittest.TestCase):
         self.assertEqual(before['teams'][0]['work_tracking'], {'mode': 'both', 'authority': 'github'})
         teams.install(teams.plan_agent(self.project, 'Development', 'strategist'))
         self.assertEqual(roster.load(self.project)['teams'], before['teams'])
-        self.assertIn('Implementation must have a recorded task',
+        self.assertIn('to an existing GitHub issue, or get a new one, BEFORE',
                       (self.project / 'team/Development/strategist/agent/BASE.md').read_text())
 
     def test_expanded_inventory_installs_every_bundle_and_new_individual(self):
