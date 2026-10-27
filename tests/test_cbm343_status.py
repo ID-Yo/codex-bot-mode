@@ -324,7 +324,7 @@ class GithubRetryTests(unittest.TestCase):
         calls, sleeps, error = self.run_fetch([(1, "HTTP 502: 502 Bad Gateway (https://api.github.com/graphql)"), (0, "")])
         self.assertIsNone(error)
         self.assertEqual(sleeps, [ss.GH_RETRY_SECONDS])
-        self.assertEqual(len(calls), 4)  # issues (2 tries), prs, open issues
+        self.assertEqual(len(calls), 5)  # issues (2 tries), prs, open issues, open prs
 
     def test_a_second_5xx_or_a_non_5xx_failure_still_fails_without_more_retries(self):
         calls, sleeps, error = self.run_fetch([(1, "HTTP 502: Bad Gateway")])

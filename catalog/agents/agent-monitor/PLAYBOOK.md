@@ -10,7 +10,7 @@ Reply in the requester's language; honor the requested artifact language.
 ## Done means
 
 Produce a concise, factual status report containing verified agent states, task follow-through observations, and any actionable alerts.
-Send the report to the authorized Chief of Staff. In installations that run the scripted cycle, the Manager signal codes (`stage_finished`, `request_not_started`, `request_not_started_overflow`) are also delivered to the owning project Manager from the same run (docs/operations/agent-monitor.md); no other project message is sent.
+Send the report to the authorized Chief of Staff. In installations that run the scripted cycle, the Manager signal codes (`stage_finished`, `request_not_started`, `request_not_started_overflow`, `desktop_relay_unavailable`, `issue_untriaged`, `stage_done_no_next`, `ready_approval_unknown`, `ready_not_dispatched`, `ready_activity_unknown`, `nonapproved_label`, `nonapproved_label_overflow`) are also delivered to the owning project Manager from the same run (docs/operations/agent-monitor.md); no other project message is sent.
 Never claim independent acceptance from self-check.
 
 ## Deduplication and Checkpoint Policy
