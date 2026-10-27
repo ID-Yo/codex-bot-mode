@@ -240,6 +240,8 @@ SIGNAL_CODES = {
                         "Triage them: set a state label or close them. Informational; nothing is dispatched and no label is created."),
     "stage_done_no_next": ("stage answered done with no successor", "Issues",
                            "Record the next stage, a state label, or close the issue. Informational; nothing is dispatched."),
+    "active_without_work": ("active issues without current work", "Issues",
+                            "There are open state:active issues with no currently assigned work. Assign the next concrete tasks to executors, or record a blocker or wait with the next check in the issue. The Monitor does not claim any agent is idle (activity was not read), is not reporting an outage, and dispatched nothing."),
     "ready_approval_unknown": ("ready work without an auditable start approval", "Issues",
                                "Record the start approval (by, at, scope, evidence) or change the state. Informational; nothing is dispatched."),
     "ready_not_dispatched": ("approved ready work not dispatched", "Ready work",
