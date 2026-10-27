@@ -105,11 +105,11 @@ const base='http://cbm352-fixture.test';
         await page.click('#agent-detail .agent-detail-head button.secondary:last-child').catch(()=>{});
         await page.click('#office-settings');await page.selectOption('#ui-language','bg');await page.click('#bots-tab');await page.waitForSelector('.agent-card');
         const bg=await page.locator('#agents-view').innerText();
-        assert.match(bg,/Свободен/);assert.match(bg,/Работи/);assert.match(bg,/Изчаква/);assert.match(bg,/Неизвестно/);
+        assert.match(bg,/\u0421\u0432\u043E\u0431\u043E\u0434\u0435\u043D/);assert.match(bg,/\u0420\u0430\u0431\u043E\u0442\u0438/);assert.match(bg,/\u0418\u0437\u0447\u0430\u043A\u0432\u0430/);assert.match(bg,/\u041D\u0435\u0438\u0437\u0432\u0435\u0441\u0442\u043D\u043E/);
         await page.click('#dashboard-tab');await page.waitForSelector('#pc-card-routeport');
-        assert.match(await page.locator('#pc-card-routeport').innerText(),/2 от 8 агенти не са проверени/);
+        assert.match(await page.locator('#pc-card-routeport').innerText(),/2 \u043E\u0442 8 \u0430\u0433\u0435\u043D\u0442\u0438 \u043D\u0435 \u0441\u0430 \u043F\u0440\u043E\u0432\u0435\u0440\u0435\u043D\u0438/);
         await page.click('#pc-card-routeport .pc-card-head');tc=await team();
-        assert.match(tc.Verifier,/Изчаква: Owner approval for the production deploy/,'BG team card names who or what is awaited');
+        assert.match(tc.Verifier,/\u0418\u0437\u0447\u0430\u043A\u0432\u0430: Owner approval for the production deploy/,'BG team card names who or what is awaited');
         await page.click('#dashboard-tab');await page.waitForSelector('#pc-card-routeport');
         await page.screenshot({path:path.join(out,'dashboard-bg.png'),fullPage:true});
         for(const mode of ['dark']){await page.click('[data-appearance="'+mode+'"]');await page.waitForTimeout(500);await page.screenshot({path:path.join(out,'dashboard-dark.png'),fullPage:true});}

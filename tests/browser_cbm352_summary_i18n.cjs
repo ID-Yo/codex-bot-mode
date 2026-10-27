@@ -6,11 +6,11 @@ const root=path.resolve(process.argv[3]||path.resolve(__dirname,'../scripts/team
 const out=path.resolve(process.argv[2]||'output/cbm352-summary');fs.mkdirSync(out,{recursive:true});
 const base='http://cbm352-summary-fixture.test';
 const CASES=[
-  ['p1','Manager report: 1 reported work item, 2 open issues, 1 blocker, 3 owner decisions.','Отчет на Мениджъра: 1 отчетена задача, 2 отворени issue-та, 1 блокер, 3 решения на собственика.'],
-  ['p2','Manager report: 4 reported work items.','Отчет на Мениджъра: 4 отчетени задачи.'],
-  ['p3','Manager report: 1 blocker, 1 owner decision.','Отчет на Мениджъра: 1 блокер, 1 решение на собственика.'],
-  ['p4','Manager report: 1 open issue, 12 owner decisions.','Отчет на Мениджъра: 1 отворен issue, 12 решения на собственика.'],
-  ['p5','Manager report received; it lists no counts.','Получен е отчет на Мениджъра; той не съдържа бройки.'],
+  ['p1','Manager report: 1 reported work item, 2 open issues, 1 blocker, 3 owner decisions.','\u041E\u0442\u0447\u0435\u0442 \u043D\u0430 \u041C\u0435\u043D\u0438\u0434\u0436\u044A\u0440\u0430: 1 \u043E\u0442\u0447\u0435\u0442\u0435\u043D\u0430 \u0437\u0430\u0434\u0430\u0447\u0430, 2 \u043E\u0442\u0432\u043E\u0440\u0435\u043D\u0438 issue-\u0442\u0430, 1 \u0431\u043B\u043E\u043A\u0435\u0440, 3 \u0440\u0435\u0448\u0435\u043D\u0438\u044F \u043D\u0430 \u0441\u043E\u0431\u0441\u0442\u0432\u0435\u043D\u0438\u043A\u0430.'],
+  ['p2','Manager report: 4 reported work items.','\u041E\u0442\u0447\u0435\u0442 \u043D\u0430 \u041C\u0435\u043D\u0438\u0434\u0436\u044A\u0440\u0430: 4 \u043E\u0442\u0447\u0435\u0442\u0435\u043D\u0438 \u0437\u0430\u0434\u0430\u0447\u0438.'],
+  ['p3','Manager report: 1 blocker, 1 owner decision.','\u041E\u0442\u0447\u0435\u0442 \u043D\u0430 \u041C\u0435\u043D\u0438\u0434\u0436\u044A\u0440\u0430: 1 \u0431\u043B\u043E\u043A\u0435\u0440, 1 \u0440\u0435\u0448\u0435\u043D\u0438\u0435 \u043D\u0430 \u0441\u043E\u0431\u0441\u0442\u0432\u0435\u043D\u0438\u043A\u0430.'],
+  ['p4','Manager report: 1 open issue, 12 owner decisions.','\u041E\u0442\u0447\u0435\u0442 \u043D\u0430 \u041C\u0435\u043D\u0438\u0434\u0436\u044A\u0440\u0430: 1 \u043E\u0442\u0432\u043E\u0440\u0435\u043D issue, 12 \u0440\u0435\u0448\u0435\u043D\u0438\u044F \u043D\u0430 \u0441\u043E\u0431\u0441\u0442\u0432\u0435\u043D\u0438\u043A\u0430.'],
+  ['p5','Manager report received; it lists no counts.','\u041F\u043E\u043B\u0443\u0447\u0435\u043D \u0435 \u043E\u0442\u0447\u0435\u0442 \u043D\u0430 \u041C\u0435\u043D\u0438\u0434\u0436\u044A\u0440\u0430; \u0442\u043E\u0439 \u043D\u0435 \u0441\u044A\u0434\u044A\u0440\u0436\u0430 \u0431\u0440\u043E\u0439\u043A\u0438.'],
   ['p6','Release 0.2.0 is waiting for QA; owner decision expected on Friday.',null],
   ['p7','Manager report: 2 blocker.',null],
   ['p8','Manager report: 1 blockers.',null],
