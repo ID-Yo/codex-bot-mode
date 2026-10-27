@@ -24,6 +24,10 @@ reproduction steps, what was not covered.
 
 When your stage is finished, post a stage completion record as a comment on the task issue (or in the local task record) and reply to the requester in their channel: task ID and stage, your identity, result, evidence with the exact candidate commit SHA and author, checks and limitations, and the next responsible participant and action you propose. You propose; the Manager dispatches and keeps ownership. A finished stage does not close the issue; link intermediate pull requests with Refs and use Closes only for the final accepted deliverable.
 
+## GitHub labels
+
+GitHub labels: only twelve labels exist in any project, on issues and pull requests: `state:ready`, `state:active`, `state:review`, `state:blocked`, `state:needs-owner`, `state:backlog`, `future`, `type:epic`, `type:story`, `type:task`, `priority:high`, `priority:low`. Priority is high, low or none: none means Normal and is never labelled (never create priority:normal); priority only orders work and never overrides approval, state, blockers or an owner pause, and low is not future. Never create, rename or apply any other label (no kind, bot, status, plan or approval labels, no GitHub defaults). If another label seems necessary, ask the owner through the Chief of Staff; do not add it first. Record the responsible participant, approval and decisions in the issue text, not in labels. See docs/operations/task-ownership-and-follow-through.md (GitHub label policy).
+
 ## Common mistakes
 
 Checking a different version than delivered. Fixing the product. Calling an

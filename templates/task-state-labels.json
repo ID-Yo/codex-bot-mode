@@ -1,0 +1,37 @@
+[
+  {
+    "color": "BFD4F2",
+    "description": "Start approved and ready; check dependencies before dispatch",
+    "name": "state:ready"
+  },
+  {
+    "color": "0E8A16",
+    "description": "Approved work actually in progress with a started executor",
+    "name": "state:active"
+  },
+  {
+    "color": "FBCA04",
+    "description": "Candidate under independent review or QA",
+    "name": "state:review"
+  },
+  {
+    "color": "B60205",
+    "description": "Blocked on a technical, dependency or capacity condition recorded in the issue",
+    "name": "state:blocked"
+  },
+  {
+    "color": "D93F0B",
+    "description": "Blocked: waits on the owner; reason, resume condition and next check recorded in the issue",
+    "name": "state:needs-owner"
+  },
+  {
+    "color": "EDEDED",
+    "description": "Recorded but not approved or scheduled; no execution expectation",
+    "name": "state:backlog"
+  },
+  {
+    "color": "C5DEF5",
+    "description": "Not scheduled; no execution expectation",
+    "name": "future"
+  }
+]

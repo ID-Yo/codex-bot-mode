@@ -34,7 +34,7 @@
 - **start_approved**: <true | false>
 - **Approved by**: <owner or delegated authority, with identity and a link to the instruction or standing delegation>
 - **Approved on**: <timestamp>
-- **Approved scope**: <what may start; a backlog item or a ready label alone is not approval; a GitHub start:approved label needs the same backing reference>
+- **Approved scope**: <what may start; a backlog item or a ready label alone is not approval; on GitHub the approval is written in the issue text with the same backing reference; no label carries it>
 
 ## Stage Completion Records (one entry per finished stage; the same record is posted as a comment on the authoritative issue)
 - **Stage and executor**: <stage; project/team/bot ID>
