@@ -29,13 +29,23 @@ Several documents and tools use different names for the same state. The canonica
 
 | Canonical | Team workflow design | Task snapshot and Monitor | GitHub label |
 |---|---|---|---|
-| `backlog` | (none) | `backlog`, `future` | `state:backlog`, `backlog`, `state:future` |
+| `backlog` | (none) | `backlog`, `future` | `state:backlog`, `future` |
 | `ready` | `ready` | `ready` | `state:ready` |
 | `in_progress` | `active` | `in-progress` | `state:active` |
 | `review` | `review` | `review` | `state:review` |
 | `blocked` | `needs-owner` (an owner decision is the blocker) | `blocked` | `state:needs-owner` |
 | `paused` | (none) | `paused` | (none) |
 | `completed` | `accepted` | `done` | closed issue with the reason recorded |
+
+### GitHub label policy
+
+Only eleven labels may be used in any project, on issues and on pull requests: `state:ready`, `state:active`, `state:review`, `state:blocked`, `state:needs-owner`, `state:backlog`, `future`, `type:epic`, `type:story`, `type:task` and `priority:high`.
+
+- Never create, rename or apply another label: no kind, bot, status, plan or approval labels and no GitHub default labels. When a project seems to need one, the Manager asks the owner through the Chief of Staff and waits for the answer.
+- An open work issue carries exactly one `state:*` label. A `type:*` label is set only when the type is clear; never guess one. `priority:high` is the only priority label. `future` marks work planned for later.
+- The responsible participant, the start approval and decisions are recorded in the issue text and comments (a "Responsible" line, the approval record below), not in labels. A label never approves work.
+- Exact colors and descriptions are in `templates/task-state-labels.json` (the seven state and future labels) and `templates/github-labels.json` (the four type and priority labels). They are copied unchanged from the accepted canonical set, open-dreamdocs commit `685c89c44ced2cc972d812cb5e880dcfee17759c`, and are not restated here or recalled from memory.
+- Labels that already exist are migrated through a reviewed inventory that keeps each item's history and meaning; they are not deleted ad hoc.
 
 `cancelled` (team workflow design) is a closed issue with the cancellation reason. `ready` means criteria are defined; it is not approval to start (section 6). A state name never changes the rule that only the authoritative record owns mutable status.
 
@@ -76,7 +86,7 @@ A stage is one executor's assigned piece of a task: implementation, review, corr
 
 ## 6. Approved Ready Work and Idle Executors
 
-- **Approval to start is a recorded act**: the task's `start_approved` field is set to true together with evidence of who approved, when, and for which scope. On GitHub-tracked work an additive label `start:approved` may carry the approval only when it is backed by a reference to the owner's instruction or a standing delegation. Approval is never inferred from `ready` or `backlog` alone. Existing labels and local records need no migration.
+- **Approval to start is a recorded act**: the task's `start_approved` field is set to true together with evidence of who approved, when, and for which scope. On GitHub-tracked work the approval is recorded in the issue text with a reference to the owner's instruction or a standing delegation; no label carries it. Approval is never inferred from `ready` or `backlog` alone.
 - **No unrecorded waiting**: Approved ready work must not wait while an eligible appointed executor is idle without a recorded reason. Eligible means: explicitly appointed in the roster for the needed role and task scope, no owner pause, no single-writer conflict, sufficient permissions, and fresh Desktop activity evidence (no older than one audit interval, 20 minutes by default) showing it idle.
 - **Manager duty**: In the same processing turn in which the Manager finds approved ready work and an eligible idle executor, it dispatches the next scoped assignment. Otherwise it records on the task the reason (capacity, dependency, authorization, quota or device), the unblock owner, the resume condition and the next check. It checks this at every completed turn and every Monitor signal.
 - **Unknown is not Idle**: Missing or stale activity evidence is Unknown. Nobody infers an idle executor or a stall from it. Explicit owner pause, single writers, permissions and the ban on busywork stay in force.
@@ -86,7 +96,7 @@ A stage is one executor's assigned piece of a task: implementation, review, corr
 - **Intermediate pull requests use Refs**: A pull request that is a stage candidate, a correction, a release preparation or anything else that does not complete the issue links it with `Refs #N`. It never uses `Closes`, `Fixes` or `Resolves`, because merging it would close the issue before the work is accepted.
 - **Terminal Closes only for the final accepted deliverable**: `Closes #N` belongs only in the pull request that is the final deliverable, after independent review and verification passed on its exact candidate and acceptance is recorded with no stage remaining.
 - **Request done is not issue done**: A reply with outcome `done` closes that request, not the issue. An open work issue whose last request is done needs the next stage dispatched, the blocker recorded, or its closure by the Manager under section 4.
-- **Open work issues are visible**: Every open work issue carries a state label and a responsible participant. An open issue without them is a recording omission to correct, not a task nobody owns.
+- **Open work issues are visible**: Every open work issue carries one state label (see GitHub label policy) and a responsible participant named in its text. An open issue without them is a recording omission to correct, not a task nobody owns.
 
 ### Enforcement status of sections 5 to 7
 

@@ -1,0 +1,22 @@
+[
+  {
+    "color": "5319E7",
+    "description": "Large outcome delivered through linked stories or tasks.",
+    "name": "type:epic"
+  },
+  {
+    "color": "7057FF",
+    "description": "One user or participant outcome with acceptance criteria.",
+    "name": "type:story"
+  },
+  {
+    "color": "BFD4F2",
+    "description": "One actionable deliverable with a clear completion check.",
+    "name": "type:task"
+  },
+  {
+    "color": "D93F0B",
+    "description": "Prioritize ahead of normal work; owner records why.",
+    "name": "priority:high"
+  }
+]
