@@ -75,6 +75,12 @@ def repository(project):
 
 OPEN_LIMIT = 1000
 GH_RETRY_SECONDS = 2
+# The owner's fixed label set (#364, #367): 7 task states, 3 types and 2 priorities. Names only; colors and descriptions live in
+# the canonical template files. Normal priority is implicit (no label); priority:normal is not approved. Any other label on an
+# OPEN issue or pull request is reported to the Manager, never changed.
+APPROVED_LABELS = frozenset({"state:ready", "state:active", "state:review", "state:blocked", "state:needs-owner",
+                             "state:backlog", "future", "type:epic", "type:story", "type:task", "priority:high", "priority:low"})
+MAX_LABEL_FINDINGS = 10
 
 
 def gh_run(args):
@@ -93,7 +99,7 @@ def github_fetch(repo):
     if not gh:
         raise RuntimeError("gh not installed")
     rows = {"truncated": []}
-    for kind, fields in (("issue", "number,state,labels,updatedAt,url,title"), ("pr", "number,state,updatedAt,url,title,headRefOid")):
+    for kind, fields in (("issue", "number,state,labels,updatedAt,url,title"), ("pr", "number,state,labels,updatedAt,url,title,headRefOid")):
         done = gh_run([gh, kind, "list", "-R", repo, "--state", "all", "--limit", "500", "--json", fields])
         if done.returncode != 0:
             raise RuntimeError(f"gh {kind} list failed")
@@ -108,6 +114,16 @@ def github_fetch(repo):
     rows["issue"] += [row for row in opened if row["number"] not in known]
     if len(opened) >= OPEN_LIMIT:
         rows["truncated"].append(f"open issues capped at {OPEN_LIMIT}")
+    # The newest 500 pull requests of all states can hide an older OPEN one: enumerate OPEN pull requests on their own.
+    done = gh_run([gh, "pr", "list", "-R", repo, "--state", "open", "--limit", str(OPEN_LIMIT), "--json",
+                   "number,state,labels,updatedAt,url,title,headRefOid"])
+    if done.returncode != 0:
+        raise RuntimeError("gh pr list (open) failed")
+    open_prs = json.loads(done.stdout)
+    known = {row["number"] for row in rows["pr"]}
+    rows["pr"] += [row for row in open_prs if row["number"] not in known]
+    if len(open_prs) >= OPEN_LIMIT:
+        rows["truncated"].append(f"open pull requests capped at {OPEN_LIMIT}")
     return rows
 
 
@@ -444,6 +460,40 @@ def active_without_work(issues, groups, tasks, repo, project_id, root, now):
     return found
 
 
+def label_violations(issues, repo):
+    """OPEN issues and pull requests that carry any label outside the approved set: [{id, kind, number, url, labels}].
+
+    The approved set is never inferred from other labels. Closed or merged items are outside the alert scope."""
+    found = []
+    for (kind, number), row in sorted(issues.items(), key=lambda item: (item[0][0], int(item[0][1]))):
+        if row.get("state") != "OPEN":
+            continue
+        names = sorted({str(label.get("name")) for label in row.get("labels") or [] if isinstance(label, dict) and label.get("name")})
+        extra = [name for name in names if name not in APPROVED_LABELS]
+        if extra:
+            found.append({"kind": "pr" if kind == "pull" else "issue", "number": number, "url": row.get("url"),
+                          "labels": extra, "repo": repo})
+    return found
+
+
+def label_findings(triage):
+    """One nonapproved_label finding per offending item (own fingerprint, so a new item alerts again), at most
+    MAX_LABEL_FINDINGS per project and one nonapproved_label_overflow finding (true count) for the rest. Evidence: repo, item, labels. No relabeling."""
+    findings = []
+    for pid, entry in sorted(triage.items()):
+        items = entry.get("nonapproved_label", [])
+        for item in items[:MAX_LABEL_FINDINGS]:
+            findings.append({"code": "nonapproved_label", "scope": f"{pid}/{item['kind']}-{item['number']}",
+                             "detail": (f"{item['repo']} {item['kind']} #{item['number']} has non-approved label(s) "
+                                        f"{', '.join(item['labels'][:6])}{' ...' if len(item['labels']) > 6 else ''} ({item.get('url') or 'no url'}). "
+                                        "Manager decides the relabel; nothing was changed")[:500]})
+        if len(items) > MAX_LABEL_FINDINGS:
+            # Its own code, like request_not_started_overflow: the Manager prompt shows it in its own section with the true count.
+            findings.append({"code": "nonapproved_label_overflow", "scope": pid,
+                             "detail": f"{len(items) - MAX_LABEL_FINDINGS} more open item(s) in {items[0]['repo']} carry non-approved labels; only the first {MAX_LABEL_FINDINGS} are listed"})
+    return findings
+
+
 def triage_findings(triage, now):
     """Manager triage findings from the derived statuses, one per project and kind, after a 30 minute grace. No dispatch."""
     kinds = (("untriaged", "issue_untriaged", "open issue(s) without a state label; not ready or approved"),
@@ -520,6 +570,7 @@ def project_status(project, now, interval=20, fetch=None):
     triage = {status: [] for status in TRIAGE_STATUSES}
     triage["ready_approval_unknown"] = []
     triage["active_without_work"] = []
+    triage["nonapproved_label"] = label_violations(issues, repo) if repo and issues else []
     for key, items in groups.items():
         name = "req-" + key[1] if key[0] == "request" else ("issue-" if key[0] == "issues" else "pr-") + key[1]
         status, task = make_task(name, items, issues.get(key), ledger_path, now, interval, requests)

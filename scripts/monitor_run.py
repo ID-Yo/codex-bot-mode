@@ -248,6 +248,10 @@ SIGNAL_CODES = {
                              "Decide the dispatch to the idle appointed bot or record why it waits. The Monitor sent nothing."),
     "ready_activity_unknown": ("approved ready work whose bots could not be shown idle", "Ready work",
                                "Informational: the bot activity could not be read, so Idle is not claimed. No restart and no dispatch is needed."),
+    "nonapproved_label": ("open issue or pull request with a non-approved label", "Items",
+                          "Relabel it to the approved set or ask the owner through the Chief of Staff for a new label. The Monitor changed nothing."),
+    "nonapproved_label_overflow": ("more items with non-approved labels than are listed", "Remaining items",
+                                   "Relabel the remaining open items of this project to the approved set; the first ones are listed separately. The Monitor changed nothing."),
     "request_not_started_overflow": ("more requests opened but not started than are listed", "Remaining requests",
                                      "Close, re-dispatch or cancel the old open requests of this project; the oldest are listed separately."),
 }
@@ -440,6 +444,7 @@ def run(monitor_dir, run_id, now=None):
                              "detail": f"Request start check failed ({type(error).__name__}); open requests were not verified"})
         try:
             findings.extend(status_sources.triage_findings(stats.get("triage", {}), now))
+            findings.extend(status_sources.label_findings(stats.get("triage", {})))
         except Exception as error:
             findings.append({"code": "triage_unavailable", "scope": "monitor",
                              "detail": f"Triage check failed ({type(error).__name__}); untriaged and stage-done items were not verified"})
