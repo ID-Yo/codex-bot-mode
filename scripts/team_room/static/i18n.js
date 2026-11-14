@@ -41,7 +41,7 @@
     'Open in Codex':'Отвори в Codex','Open GitHub issue':'Отвори GitHub задачата',
     'New room':'Нова стая','+ New room':'+ Нова стая','+ New team':'+ Нов екип',
     'Participants':'Участници','Create room':'Създай стая','Team name':'Име на екипа','Template':'Шаблон',
-    'Setup':'Настройка','Use defaults':'Използвай стандартните','Answer questions':'Отговори на въпросите',
+    'Setup':'Настройка','GitHub issue':'GitHub issue','Use defaults':'Използвай стандартните','Answer questions':'Отговори на въпросите',
     'Review plan':'Прегледай плана','Confirm and launch':'Потвърди и стартирай',
     'ROOMS':'СТАИ','TEAMS BY PROJECT':'ЕКИПИ ПО ПРОЕКТ','PROJECTS · READ ONLY':'ПРОЕКТИ · САМО ЗА ЧЕТЕНЕ',
     'APPOINTED BOTS':'НАЗНАЧЕНИ АГЕНТИ','Audio off':'Гласът е изключен','Audio on':'Гласът е включен',
@@ -198,6 +198,8 @@
     '{missing} of {total} agents not checked':'{missing} от {total} агенти не са проверени',
     'Status check incomplete':'Проверката на състоянието е непълна',
     'Checked':'Проверено',
+    'Desktop history readable here ends at {latest}; Desktop reports activity at {updated} that this view cannot read. Newer messages may exist and are not shown.':'Четимата тук история на Desktop свършва в {latest}; Desktop отчита активност в {updated}, която този изглед не може да прочете. Възможно е да има по-нови съобщения, които не се показват.',
+    '{n} answered decisions are recorded in project summaries. They are history; nothing is waiting for you.':'В обобщенията на проектите са записани {n} отговорени решения. Те са история; нищо не чака теб.',
     'Idle (all agents idle)':'Свободни (всички агенти са свободни)',
     'Activity unknown':'Неизвестна активност',
     'stale':'остаряло',
@@ -437,4 +439,12 @@
   const statusLabels={idle:'Idle',working:'Working',waiting:'Waiting',paused:'Paused',failed:'Failed',unknown:'Unknown',in_progress:'In progress',not_started:'Not started',held:'Held',pending:'Pending',accepted:'Accepted',completed:'Completed',cancelled:'Cancelled',interrupted:'Interrupted',review_required:'Review required',queued:'Queued',active:'Active',unavailable:'Unavailable','working in Codex':'Working in Codex'};
   const state=value=>t(statusLabels[value]||value||'Unknown');
   window.officeI18n={t,state,apply,setLanguage,read,save,get language(){return language;}};
+  // Shown above a conversation whose Desktop history is behind Desktop's own activity time (see native.history_freshness).
+  window.officeHistoryNote=history=>{
+    if(!history||history.behind!==true)return null;
+    const at=value=>Number.isFinite(value)?new Date(value*1000).toLocaleString():t('Unknown');
+    const note=document.createElement('p');note.className='history-source-note';note.setAttribute('role','status');
+    note.textContent=t('Desktop history readable here ends at {latest}; Desktop reports activity at {updated} that this view cannot read. Newer messages may exist and are not shown.',{latest:at(history.latest_turn_at),updated:at(history.thread_updated_at)});
+    return note;
+  };
 })();

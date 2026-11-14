@@ -12,11 +12,14 @@ class Bridge:
         self.calls=[]
         self.turns=[]
         self.fail=False
+        self.updated=None
 
     def call(self,name,args):
         self.calls.append((name,args))
         if name=='read_thread':
-            return {'thread':{'id':args['threadId'],'status':{'type':'active' if self.busy else 'idle'}},
+            thread={'id':args['threadId'],'status':{'type':'active' if self.busy else 'idle'}}
+            if self.updated is not None: thread['updatedAt']=self.updated
+            return {'thread':thread,
                     'turns':self.turns,'page':{'hasMore':False}}
         if name=='send_message_to_thread':
             if self.fail: raise Uncertain('unconfirmed')
@@ -113,6 +116,46 @@ class NativeTests(unittest.TestCase):
         self.c.send('later','manager','later')
         self.c.pump()
         self.assertFalse(any(n=='send_message_to_thread' for n,_ in self.bridge.calls))
+
+
+class HistoryFreshnessTests(unittest.TestCase):
+    """Desktop's history projection can stop at an old turn while thread.updatedAt keeps moving (#352)."""
+
+    def freshness(self, updated, turns):
+        from scripts.team_room.native import history_freshness
+        return history_freshness({'thread': {'updatedAt': updated}, 'turns': turns})
+
+    def test_updated_far_after_the_newest_turn_is_reported_as_behind_with_both_times(self):
+        got = self.freshness(1793194347, [{'id': 'a', 'startedAt': 1793125325, 'completedAt': 1793125330}])
+        self.assertTrue(got['behind'])
+        self.assertEqual((got['latest_turn_at'], got['thread_updated_at'], got['lag_seconds']), (1793125330, 1793194347, 69017))
+
+    def test_a_current_or_slightly_newer_history_is_not_behind(self):
+        self.assertFalse(self.freshness(1000, [{'id': 'a', 'startedAt': 990, 'completedAt': 995}])['behind'])
+        self.assertFalse(self.freshness(1500, [{'id': 'a', 'startedAt': 990, 'completedAt': 1000}])['behind'])
+
+    def test_missing_or_invalid_timestamps_never_claim_behind(self):
+        self.assertFalse(self.freshness(None, [{'id': 'a', 'startedAt': 1}])['behind'])
+        self.assertFalse(self.freshness(5000, [])['behind'])
+        self.assertFalse(self.freshness('later', [{'id': 'a', 'startedAt': 1}])['behind'])
+        self.assertFalse(self.freshness(True, [{'id': 'a', 'startedAt': 1}])['behind'])
+
+    def test_an_in_progress_turn_uses_its_start_time(self):
+        self.assertFalse(self.freshness(2000, [{'id': 'a', 'startedAt': 1900, 'completedAt': None}])['behind'])
+
+    def test_state_carries_the_history_freshness_without_changing_the_journal(self):
+        with tempfile.TemporaryDirectory() as temp:
+            bridge = Bridge()
+            bridge.updated = 1793194347
+            bridge.turns = [{'id': 'old', 'status': 'completed', 'startedAt': 1793125325, 'completedAt': 1793125330, 'items': [
+                {'id': 'm', 'type': 'agentMessage', 'text': 'old reply', 'phase': 'final_answer'}]}]
+            session = NativePersonal(Path(temp), 'manager', 'native-manager', bridge, start_worker=False)
+            try:
+                state = session.state()
+            finally:
+                session.close()
+        self.assertTrue(state['history']['behind'])
+        self.assertEqual([m['text'] for m in state['journal']], ['old reply'])
 
 
 if __name__=='__main__': unittest.main()

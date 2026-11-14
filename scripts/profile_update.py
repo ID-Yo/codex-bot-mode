@@ -621,6 +621,16 @@ def _build_plan_frozen(project, envelope, bundle, trust, platform, targets, comp
             owned = project_rel in record['owned_paths']
             raw = _zip_content(bundle, release_id, package_path)
             new = _render(raw, context, project_rel) if expected_kind == 'profile' else raw
+            resolution = resolutions.get(project_rel)
+            additive = isinstance(resolution, dict) and resolution.get('action') == 'append-signed'
+            if additive:
+                if (expected_kind != 'profile' or package_path != 'agent/BASE.md' or old is None
+                        or set(resolution) != {'action', 'expected_sha256', 'blocks'}
+                        or resolution['expected_sha256'] != old_hash
+                        or not isinstance(resolution['blocks'], list)
+                        or any(not isinstance(block, str) for block in resolution['blocks'])):
+                    raise UpdateError(f'{project_rel}: invalid or stale additive decision')
+                new = additive_signed_lines(old, new, [block.encode('utf-8') for block in resolution['blocks']])
             expected_hash = digest(new)
             target_file_hashes[project_rel] = expected_hash
             if legacy:
@@ -629,9 +639,11 @@ def _build_plan_frozen(project, envelope, bundle, trust, platform, targets, comp
                     'baseline': ({'state': 'known', 'sha256': baseline['sha256']}
                                  if baseline and baseline.get('state') == 'known' else {'state': 'unknown'}),
                     'proposed_sha256': expected_hash}
-            resolution = resolutions.get(project_rel)
             classification = None
-            if not owned and old is None:
+            if additive:
+                classification = 'manually-resolved-additive'
+                approved_resolutions[project_rel] = resolution
+            elif not owned and old is None:
                 classification = 'safe-new-file'
             elif baseline and baseline.get('state') == 'known' and old_hash == baseline.get('sha256'):
                 classification = 'unchanged-owned'
@@ -656,7 +668,17 @@ def _build_plan_frozen(project, envelope, bundle, trust, platform, targets, comp
                                    'content': new.decode('utf-8'), 'diff': _file_diff(project_rel, old, new)})
         selected_targets[-1]['files'] = target_file_hashes
         selected_targets[-1]['installed_sha256'] = digest(canonical(target_file_hashes))
+        additive_paths = {path for path in target_file_hashes
+                          if resolutions.get(path, {}).get('action') == 'append-signed'}
+        if additive_paths and len(manifest_component['files']) != len(additive_paths):
+            raise UpdateError('A component cannot mix additive and replacement files')
+        if additive_paths:
+            selected_targets[-1]['version'] = record['version']
         for old_rel in record['owned_paths']:
+            if additive_paths:
+                if delete_paths:
+                    raise UpdateError('Additive updates cannot delete files')
+                continue
             if expected_kind == 'profile':
                 package_rel = _profile_package_path(profile_layout, old_rel)
                 if package_rel is None:
@@ -815,6 +837,32 @@ def _validate_plan(plan):
         raise UpdateError('Plan has unresolved conflicts; resolve them and create a new plan')
 
 
+def additive_signed_lines(current, signed, blocks):
+    """Append only exact consecutive signed lines, preserving installed bytes."""
+    if not isinstance(current, bytes) or not isinstance(signed, bytes) or not isinstance(blocks, list) or not blocks:
+        raise UpdateError('Invalid additive patch')
+    if b'\r' in current.replace(b'\r\n', b'') or b'\r' in signed.replace(b'\r\n', b''):
+        raise UpdateError('Invalid line endings')
+    if b'\r\n' in signed and b'\n' in signed.replace(b'\r\n', b''):
+        raise UpdateError('Mixed signed line endings')
+    last_lf = current.rfind(b'\n')
+    eol = b'\r\n' if last_lf > 0 and current[last_lf - 1:last_lf] == b'\r' else b'\n'
+    source = signed.replace(b'\r\n', b'\n').split(b'\n')
+    existing = current.replace(b'\r\n', b'\n').split(b'\n')
+    result = current
+    for block in blocks:
+        if not isinstance(block, bytes) or not block or b'\r' in block:
+            raise UpdateError('Invalid signed block')
+        lines = block.split(b'\n')
+        if any(not line for line in lines) or not any(source[i:i + len(lines)] == lines for i in range(len(source) - len(lines) + 1)):
+            raise UpdateError('Block is not contiguous whole signed lines')
+        if any(existing[i:i + len(lines)] == lines for i in range(len(existing) - len(lines) + 1)):
+            raise UpdateError('Block already present')
+        result += (eol if result.endswith(eol) else eol + eol) + eol.join(lines) + eol
+        existing.extend(lines)
+    return result
+
+
 def _activation_record(plan, plan_sha256=None):
     pending = json.loads(json.dumps(plan['pending_activation']))
     pending['manifest_sha256'] = plan['release']['manifest_sha256']
@@ -898,11 +946,23 @@ def apply_plan(plan, approved_plan_hash, envelope, bundle, trust, platform, targ
             if component['id'] not in selected_by_id:
                 continue
             target = selected_by_id[component['id']]
-            component['version'] = target['version']
-            component['source_revision'] = plan['release']['source_revision']
-            component['source'] = f"release:{plan['release']['id']}"
-            component['component_schema'] = 1
+            additive_paths = {path for path in target['files']
+                              if plan['resolutions'].get(path, {}).get('action') == 'append-signed'}
+            if additive_paths and len(additive_paths) != len(target['files']):
+                raise UpdateError('A component cannot mix additive and replacement files')
+            if not additive_paths:
+                component['version'] = target['version']
+                component['source_revision'] = plan['release']['source_revision']
+                component['source'] = f"release:{plan['release']['id']}"
+                component['component_schema'] = 1
             for rel, file_hash in target['files'].items():
+                if rel in additive_paths:
+                    baseline = component['baseline'].get(rel, {})
+                    decision = plan['resolutions'][rel]
+                    if (rel in component['owned_paths'] and baseline.get('state') == 'known'
+                            and baseline.get('sha256') == decision['expected_sha256']):
+                        component['baseline'][rel] = {'state': 'known', 'sha256': file_hash}
+                    continue
                 if rel not in component['owned_paths']:
                     component['owned_paths'].append(rel)
                 component['baseline'][rel] = {'state': 'known', 'sha256': file_hash}
@@ -1070,7 +1130,9 @@ def _recover_locked(root, txroot, journal_file):
                 'pending_activation': journal.get('pending_activation')}
     if journal.get('phase') == 'rolling_back':
         return _finish_rollback(root, txroot, journal_file, journal)
-    if current_inventory_hash == journal.get('new_inventory_sha256') and all_new:
+    inventory_changed = journal.get('old_inventory_sha256') != journal.get('new_inventory_sha256')
+    committed = inventory_changed or journal.get('phase') == 'inventory_committed'
+    if committed and current_inventory_hash == journal.get('new_inventory_sha256') and all_new:
         journal['phase'] = 'applied'
         _save_journal(journal_file, journal)
         return {'status': 'applied', 'transaction': journal['transaction_id'],

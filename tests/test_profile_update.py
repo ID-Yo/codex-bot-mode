@@ -127,6 +127,134 @@ class ProfileUpdateTests(unittest.TestCase):
             self.trust, 'windows-x86_64', self.targets,
             installed={RELEASE_ID: '1.0.0'}, now=NOW, **kwargs)
 
+    def test_additive_resolution_preserves_local_base_and_reconstructs_at_apply(self):
+        target = self.workspace / 'agent/BASE.md'
+        before = target.read_bytes()
+        self.envelope = self._release({'agent/BASE.md': b'# Signed\nNew rule.\nAnother rule.\n'})
+        rel = f'{WORKSPACE}/agent/BASE.md'
+        decision = {rel: {'action': 'append-signed', 'expected_sha256': updater.digest(before),
+                          'blocks': ['New rule.\nAnother rule.']}}
+        plan = self.plan(resolutions=decision)
+        self.assertEqual(plan['conflicts'], [])
+        self.assertEqual(plan['resolutions'], decision)
+        self.assertEqual(plan['pending_activation']['targets'][0]['version'], '1.0.0')
+        self.apply(plan)
+        self.assertEqual(target.read_bytes(), before + b'\nNew rule.\nAnother rule.\n')
+        installed = json.loads(self.inventory_file.read_text(encoding='utf-8'))['components'][0]
+        self.assertNotIn(rel, installed['owned_paths'])
+        self.assertNotIn(rel, installed['baseline'])
+        self.assertEqual(installed['source'], 'local:catalog')
+        self.assertEqual(installed['version'], '1.0.0')
+
+    def test_additive_resolution_rejects_unsigned_or_stale_content(self):
+        target = self.workspace / 'agent/BASE.md'
+        self.envelope = self._release({'agent/BASE.md': b'# Signed\nA rule.\n'})
+        rel = f'{WORKSPACE}/agent/BASE.md'
+        for expected, block in [(updater.digest(target.read_bytes()), 'Invented rule.'), ('0' * 64, 'A rule.')]:
+            with self.assertRaises(updater.UpdateError):
+                self.plan(resolutions={rel: {'action': 'append-signed', 'expected_sha256': expected,
+                                             'blocks': [block]}})
+
+    def test_additive_write_interruption_recovers_original_bytes(self):
+        target = self.workspace / 'agent/BASE.md'
+        before = target.read_bytes()
+        self.envelope = self._release({'agent/BASE.md': b'# Signed\nNew rule.\n'})
+        rel = f'{WORKSPACE}/agent/BASE.md'
+        plan = self.plan(resolutions={rel: {'action': 'append-signed',
+                         'expected_sha256': updater.digest(before), 'blocks': ['New rule.']}})
+        def crash(stage):
+            if stage == 'first_write':
+                raise updater.SimulatedCrash(stage)
+        with self.assertRaises(updater.SimulatedCrash):
+            self.apply(plan, failpoint=crash)
+        transaction = next(p for p in (self.root / '.bot-mode/local/profile-updates').iterdir()
+                           if p.is_dir() and (p / 'journal.json').exists())
+        self.assertEqual(updater.recover(self.root, transaction.name)['status'], 'recovered_rollback')
+        self.assertEqual(target.read_bytes(), before)
+
+    def test_additive_crash_with_unchanged_inventory_does_not_report_committed(self):
+        target = self.workspace / 'agent/BASE.md'
+        before = target.read_bytes()
+        self.inventory_file.write_bytes(json.dumps(self.inventory, ensure_ascii=False, indent=2).encode('utf-8') + b'\n')
+        self.envelope = self._release({'agent/BASE.md': b'# Signed\nNew rule.\n'})
+        rel = f'{WORKSPACE}/agent/BASE.md'
+        plan = self.plan(resolutions={rel: {'action': 'append-signed',
+                         'expected_sha256': updater.digest(before), 'blocks': ['New rule.']}})
+        def crash(stage):
+            if stage == 'first_write':
+                raise updater.SimulatedCrash(stage)
+        with self.assertRaises(updater.SimulatedCrash):
+            self.apply(plan, failpoint=crash)
+        transaction = next(p for p in (self.root / '.bot-mode/local/profile-updates').iterdir()
+                           if p.is_dir() and (p / 'journal.json').exists())
+        self.assertEqual(updater.recover(self.root, transaction.name)['status'], 'recovered_rollback')
+        self.assertEqual(target.read_bytes(), before)
+
+    def test_additive_preserves_unknown_or_locally_modified_baselines(self):
+        target = self.workspace / 'agent/BASE.md'
+        rel = f'{WORKSPACE}/agent/BASE.md'
+        for baseline in ({'state': 'unknown', 'reason': 'legacy-original-not-verified'},
+                         {'state': 'known', 'sha256': 'a' * 64}):
+            with self.subTest(baseline=baseline):
+                self.inventory['components'][0]['owned_paths'].append(rel)
+                self.inventory['components'][0]['baseline'][rel] = baseline
+                self._save_inventory()
+                before = target.read_bytes()
+                self.envelope = self._release({'agent/BASE.md': b'# Signed\nNew rule.\n'})
+                plan = self.plan(resolutions={rel: {'action': 'append-signed',
+                                 'expected_sha256': updater.digest(before), 'blocks': ['New rule.']}})
+                result = self.apply(plan)
+                stored = json.loads(self.inventory_file.read_text(encoding='utf-8'))['components'][0]
+                self.assertEqual(stored['baseline'][rel], baseline)
+                updater.rollback(self.root, result['transaction'])
+                self.inventory['components'][0]['owned_paths'].remove(rel)
+                del self.inventory['components'][0]['baseline'][rel]
+
+    def test_additive_advances_only_matching_owned_baseline(self):
+        target = self.workspace / 'agent/BASE.md'
+        rel = f'{WORKSPACE}/agent/BASE.md'
+        before = target.read_bytes()
+        self.inventory['components'][0]['owned_paths'].append(rel)
+        self.inventory['components'][0]['baseline'][rel] = {'state': 'known', 'sha256': updater.digest(before)}
+        self._save_inventory()
+        self.envelope = self._release({'agent/BASE.md': b'# Signed\nNew rule.\n'})
+        plan = self.plan(resolutions={rel: {'action': 'append-signed',
+                         'expected_sha256': updater.digest(before), 'blocks': ['New rule.']}})
+        self.apply(plan)
+        stored = json.loads(self.inventory_file.read_text(encoding='utf-8'))['components'][0]
+        self.assertEqual(stored['baseline'][rel]['sha256'], updater.digest(target.read_bytes()))
+
+    def test_additive_activation_uses_actual_legacy_inventory_version(self):
+        from scripts.component_activation_host import ActivationHost
+        target = self.workspace / 'agent/BASE.md'
+        rel = f'{WORKSPACE}/agent/BASE.md'
+        self.inventory['components'][0]['version'] = 1
+        self._save_inventory()
+        self.envelope = self._release({'agent/BASE.md': b'# Signed\nNew rule.\n'})
+        decision = {rel: {'action': 'append-signed', 'expected_sha256': updater.digest(target.read_bytes()),
+                          'blocks': ['New rule.']}}
+        preview = self.plan(resolutions=decision)
+        mapping = {c['component']: c['resolution_required'] for c in preview['conflicts']
+                   if c['reason'] == 'legacy-version-review-required'}
+        plan = self.plan(resolutions=decision, legacy_version_resolutions=mapping)
+        result = self.apply(plan)
+        activation_target = result['pending_activation']['targets'][0]
+        inventory = json.loads(self.inventory_file.read_text(encoding='utf-8'))['components'][0]
+        self.assertEqual(activation_target['version'], 1)
+        self.assertEqual(ActivationHost(self.root)._target_matches(
+            activation_target, 'manager', activation_target['files'], {INVENTORY_ID: inventory}),
+            (INVENTORY_ID, activation_target['installed_sha256']))
+
+    def test_additive_cannot_mix_replacement_and_leaves_no_transaction(self):
+        target = self.workspace / 'agent/BASE.md'
+        rel = f'{WORKSPACE}/agent/BASE.md'
+        self.envelope = self._release({'agent/BASE.md': b'# Signed\nNew rule.\n',
+                                      'agent/PROFILE.md': b'Replacement\n'})
+        with self.assertRaises(updater.UpdateError):
+            self.plan(resolutions={rel: {'action': 'append-signed',
+                         'expected_sha256': updater.digest(target.read_bytes()), 'blocks': ['New rule.']}})
+        self.assertFalse((self.root / '.bot-mode/local/profile-updates').exists())
+
     def _legacy_profile_fixture(self, workspace, *, flat=False, rostered=True, metadata=True):
         folder = self.root if workspace == '.' else self.root / workspace
         profile_root = folder if flat else folder / 'agent'

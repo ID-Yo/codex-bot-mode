@@ -213,13 +213,22 @@
       dialog.append(picker);
     }
     const e=effective(a);
-    dialog.append(badge(officeI18n.t('Execution')+': '+(officeI18n.t(labels[e.state]||officeI18n.t('Unknown'))),e.state),badge(officeI18n.t('Task')+': '+(officeI18n.state(a.task?.workflow))+(a.task&&!e.taskFresh?' (historical / unknown)':''),'workflow'));
-    for(const reason of e.reasons)dialog.append(badge(officeI18n.t(attentionLabels[reason]),'attention'));
+    const bar=el('div','agent-bar');
+    bar.append(badge(officeI18n.t('Execution')+': '+(officeI18n.t(labels[e.state]||officeI18n.t('Unknown'))),e.state),badge(officeI18n.t('Task')+': '+(officeI18n.state(a.task?.workflow))+(a.task&&!e.taskFresh?' (historical / unknown)':''),'workflow'));
+    for(const reason of e.reasons)bar.append(badge(officeI18n.t(attentionLabels[reason]),'attention'));
+    const nav=el('div','agent-nav');
+    for(const l of [link(a.task?.url,officeI18n.t('Open task')),link(a.link,officeI18n.t('Open appointed chat'))])if(l)nav.append(l);
+    if(a.project_id&&a.project_id!=='current'){
+      const p=el('button','secondary',officeI18n.t('View project'));p.type='button';p.onclick=()=>{dialog.hidden=true;officeProjects.open(a.project_id);};nav.append(p);
+    }
+    if(a.is_current&&a.thread_id){const chat=el('button','secondary',officeI18n.t('Personal conversation'));chat.type='button';chat.onclick=()=>{dialog.hidden=true;openPrivate(a.bot_id);};nav.append(chat);}
+    bar.append(nav);
+    dialog.append(bar);
     const facts=el('dl','agent-summary');const missing=[];
     fact(facts,officeI18n.t('Identity'),a.bot_id+' · '+a.role+' · '+a.project_name+' · '+(a.team_name||officeI18n.t('No team')));
-    fact(facts,officeI18n.t('Certainty'),e.state==='unknown'?officeI18n.t('Unknown'):a.execution?.certainty||officeI18n.t('Unknown'));
+    const certainty=e.state==='unknown'?'':a.execution?.certainty;if(certainty)fact(facts,officeI18n.t('Certainty'),certainty);else missing.push(officeI18n.t('Certainty'));
     if(e.state==='unknown'&&e.reason)fact(facts,officeI18n.t('Why unknown'),officeI18n.t(e.reason));
-    fact(facts,officeI18n.t('Current action'),currentAction(a,e)||officeI18n.t('Unknown'));
+    const action=currentAction(a,e);if(action)fact(facts,officeI18n.t('Current action'),action);else missing.push(officeI18n.t('Current action'));
     if(a.task?.recorded_action&&!currentAction(a,e))fact(facts,officeI18n.t('Historical task action'),a.task.recorded_action);
     if(a.last_result?.text)fact(facts,officeI18n.t('Last recorded result'),[a.last_result.text,a.last_result.at?date(a.last_result.at):'',a.last_result.source].filter(Boolean).join(' · '));
     else missing.push(officeI18n.t('Last recorded result'));
@@ -229,13 +238,6 @@
     if(missing.length)dialog.append(el('p','agent-note agent-missing',officeI18n.t('Unknown or not recorded')+': '+missing.join(', ')));
     const resultLink=link(a.last_result?.url,officeI18n.t('Open result evidence'));if(resultLink)dialog.append(resultLink);
     if((a.dependencies||[]).length)dependencies(dialog,a);
-    const nav=el('div','agent-nav');
-    for(const l of [link(a.task?.url,officeI18n.t('Open task')),link(a.link,officeI18n.t('Open appointed chat'))])if(l)nav.append(l);
-    if(a.project_id&&a.project_id!=='current'){
-      const p=el('button','secondary',officeI18n.t('View project'));p.type='button';p.onclick=()=>{dialog.hidden=true;officeProjects.open(a.project_id);};nav.append(p);
-    }
-    if(a.is_current&&a.thread_id){const chat=el('button','secondary',officeI18n.t('Personal conversation'));chat.type='button';chat.onclick=()=>{dialog.hidden=true;openPrivate(a.bot_id);};nav.append(chat);}
-    dialog.append(nav);
     dialog.append(profilePanel(a));
     const more=el('details','agent-more');more.open=detailsOpen.has(key);more.addEventListener('toggle',()=>{if(more.open)detailsOpen.add(key);else detailsOpen.delete(key);});more.append(el('summary',null,officeI18n.t('Evidence, timestamps and transitions')));
     const evidence=el('section','agent-evidence');evidence.append(el('h3',null,officeI18n.t('Evidence and freshness')));times(evidence,a);

@@ -3,12 +3,14 @@ import copy
 import time
 """Keep naturally inherited Desktop context outside the Office host lifecycle."""
 import argparse
+import atexit
 import hmac
 from http.server import BaseHTTPRequestHandler
 import json
 import os
 from pathlib import Path
 import secrets
+import signal
 import threading
 import time
 from urllib.error import HTTPError, URLError
@@ -512,37 +514,54 @@ def sustained_failure(check, checks=RECHECKS, gap=RECHECK_GAP, sleep=time.sleep)
             continue
     return True
 WATCHDOG_SECONDS = 5.0
-GIVE_UP_SECONDS = 120.0
+GIVE_UP_SECONDS = 120.0  # an outage this long is announced as degraded; the relay stays registered and keeps retrying
+RETRY_CAP_SECONDS = 60.0  # retries back off up to this gap so a struggling Desktop is not hit with a process storm
+ABANDON_SECONDS = 6 * 3600.0  # only an outage this long removes the registration, so a dead Desktop leaves no relay behind
 
 
-def watch(bridge, stop, say=print, interval=WATCHDOG_SECONDS, give_up=GIVE_UP_SECONDS, clock=time.monotonic):
-    """Keep the relay answering while Desktop restarts.
+def watch(bridge, stop, say=print, interval=WATCHDOG_SECONDS, give_up=GIVE_UP_SECONDS, clock=time.monotonic,
+          retry_cap=RETRY_CAP_SECONDS, abandon=ABANDON_SECONDS):
+    """Keep the relay answering while Desktop restarts or stalls.
 
-    The MCP server process behind the relay dies or loses its pipe when Codex Desktop's app-server restarts. Every
-    interval the bridge is probed; a dead or unanswering bridge is restarted in place. If Desktop does not accept it
-    again for give_up seconds the relay stops so that nothing keeps a registration that cannot work. Returns True
-    when stopped by the flag and False when it gave up."""
-    down_since = None
+    The MCP server process behind the relay dies or loses its pipe when Codex Desktop's app-server restarts, and Desktop
+    can also stop answering it for a while without any restart (#315). Every interval the bridge is probed; a dead or
+    unanswering bridge is restarted in place, retrying with a growing gap up to retry_cap. After give_up seconds the
+    outage is announced once and the relay keeps its registration, answering 503 until Desktop accepts it again, so a
+    stall heals without a manual restart. Only after abandon seconds does it stop, so nothing keeps a registration that
+    cannot work. Returns True when stopped by the flag and False when it gave up."""
+    down_since, wait, announced = None, interval, False
     while not stop():
-        time.sleep(interval)
+        remaining = wait
+        while True:  # sleep in slices of one interval so the shutdown flag is honoured during a long retry gap
+            nap = min(interval, remaining); time.sleep(nap); remaining -= nap
+            if remaining <= 0: break
+            if stop(): return True
         if stop(): return True
         try:
-            if not bridge.alive(): raise Uncertain('Desktop bridge process exited')
+            if not bridge.alive(): raise Uncertain('Desktop bridge process exited (%s)' % bridge.diagnosis())
             bridge.call('list_threads', {'limit': 1})
-            if down_since is not None: say('Desktop relay recovered.', flush=True)
-            down_since = None
+            if down_since is not None: say('Desktop relay recovered after %d s.' % (clock() - down_since), flush=True)
+            down_since, wait, announced = None, interval, False
             continue
         except Exception as error:
             down_since = down_since if down_since is not None else clock()
-            say('Desktop bridge not answering (%s); restarting it.' % safe_error(str(error))[:80], flush=True)
+            say('Desktop bridge not answering (%s); restarting it.' % safe_error(str(error))[:300], flush=True)
         try:
             bridge.reconnect(); bridge.call('list_threads', {'limit': 1})
-            say('Desktop relay recovered.', flush=True); down_since = None
+            say('Desktop relay recovered after %d s.' % (clock() - down_since), flush=True)
+            down_since, wait, announced = None, interval, False
+            continue
         except Exception as error:
-            say('Desktop bridge restart failed (%s).' % safe_error(str(error))[:80], flush=True)
-            if clock() - down_since >= give_up:
-                say('Desktop relay stopping: Desktop did not accept it again. Remedy: ' + RELAY_REMEDY, flush=True)
-                return False
+            say('Desktop bridge restart failed (%s).' % safe_error(str(error))[:300], flush=True)
+        outage = clock() - down_since
+        if outage >= abandon:
+            say('Desktop relay stopping: Desktop did not accept it again for %d s. Remedy: %s' % (outage, RELAY_REMEDY), flush=True)
+            return False
+        if outage >= give_up and not announced:
+            announced = True
+            say('Desktop relay degraded: Desktop has not answered for %d s. The relay stays registered, answers 503 and keeps '
+                'retrying every %d s at most. Remedy if it does not recover: %s' % (outage, retry_cap, RELAY_REMEDY), flush=True)
+        wait = min(max(wait * 2, interval), retry_cap)
     return True
 
 
@@ -559,6 +578,24 @@ def replace_unhealthy(root, say=print, wait=15.0):
         if _pid_alive(pid): raise SystemExit('The unhealthy relay process %d did not stop; end it manually, then retry.' % pid)
     flag.unlink(missing_ok=True)
     (root / 'relay.json').unlink(missing_ok=True)
+
+
+def trace_lifecycle(say=print):
+    """Write a start line now and a stop line on any exit Python can see, so the next log shows whether the relay ended
+    cleanly, by a signal, or was killed without a trace (a start line with no stop line: the whole process tree was ended,
+    for example with the Desktop app-server, #388). The previous log is kept by the starter, not overwritten."""
+    def stamp(event):
+        return '%s Desktop relay %s (pid %d, parent %s).' % (datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'), event, os.getpid(), os.getppid())
+    say(stamp('started'), flush=True)
+    atexit.register(lambda: say(stamp('exited'), flush=True))
+    def on_signal(number, frame):
+        say(stamp('received signal %d' % number), flush=True)
+        raise SystemExit(128 + number)
+    for name in ('SIGTERM', 'SIGBREAK'):
+        number = getattr(signal, name, None)
+        if number is not None:
+            try: signal.signal(number, on_signal)
+            except (ValueError, OSError): pass
 
 
 def _pid_alive(pid):
@@ -598,6 +635,7 @@ def main():
     try:
         bridge.call('list_threads', {'limit':1})
         server = create_relay(bridge, root)
+        trace_lifecycle()
         print('Desktop relay ready on 127.0.0.1:24243.', flush=True)
         worker = threading.Thread(target=server.serve_forever, daemon=True)
         worker.start()

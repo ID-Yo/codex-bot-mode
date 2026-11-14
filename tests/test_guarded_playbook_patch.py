@@ -302,6 +302,133 @@ class CommandLine(Disposable):
             self.assertEqual((self.root / k).read_bytes(), v)
 
 
+class ManagerLineReplacements(Disposable):
+    """Two hardcoded whole-line Manager rewrites (#364); everything else stays insert-only."""
+
+    def setUp(self):
+        super().setUp()
+        (o1, n1), (o2, n2) = gp.MANAGER_REPLACEMENTS
+        self.o1, self.n1, self.o2, self.n2 = o1, n1, o2, n2
+        self.old = ['# Playbook manager', '', 'Custom installed line.', o1, o2, '', '## Done means', 'Verified.', '']
+        self.new = ['# Playbook manager', '', 'Custom installed line.', n1, n2] + ADDED + ['', '## Done means', 'Verified.', '']
+        self.signed['manager-profile'] = '\n'.join(['# Catalog', n1, n2] + ADDED + ['end'])
+        self.write(self.old, self.new)
+
+    def write(self, old, new):
+        self.target('manager').write_bytes(enc(old, 'CRLF'))
+        (self.proposed / 'manager.PLAYBOOK.proposed.md').write_bytes(enc(new, 'CRLF'))
+        item = next(t for t in self.plan['targets'] if t['bot'] == 'manager')
+        item['before_sha256'], item['after_sha256'] = sha(enc(old, 'CRLF')), sha(enc(new, 'CRLF'))
+
+    def refused(self, text=''):
+        with self.assertRaises(gp.PatchError) as ctx:
+            gp.preflight(self.root, self.plan, self.proposed, self.signed)
+        self.assertIn(text, str(ctx.exception))
+
+    def test_the_two_listed_pairs_are_accepted(self):
+        checked = gp.preflight(self.root, self.plan, self.proposed, self.signed)
+        self.assertEqual(next(c for c in checked if c['bot'] == 'manager')['added'], len(ADDED))
+
+    def test_apply_and_rollback_round_trip(self):
+        txn = self.apply()
+        self.assertEqual(self.target('manager').read_bytes(), enc(self.new, 'CRLF'))
+        gp.rollback(self.root, txn)
+        self.assertEqual(self.target('manager').read_bytes(), enc(self.old, 'CRLF'))
+
+    def test_an_arbitrary_replacement_is_rejected(self):
+        self.write(self.old, [l if l != 'Custom installed line.' else 'Rewritten line.' for l in self.new])
+        self.signed['manager-profile'] += '\nRewritten line.'
+        self.refused('deletes or rewrites')
+
+    def test_a_listed_old_line_replaced_by_text_not_in_the_signed_source_is_rejected(self):
+        self.signed['manager-profile'] = self.signed['manager-profile'].replace(self.n1, 'other')
+        self.refused('not in the signed public release')
+
+    def test_an_ambiguous_old_line_is_rejected(self):
+        old = self.old + [self.o1]
+        self.write(old, self.new + [self.n1])
+        self.refused('ambiguous')
+
+    def test_a_listed_line_in_a_non_manager_file_is_rejected(self):
+        bot = 'developer'
+        old = ['# Playbook', self.o1, '']
+        new = ['# Playbook', self.n1] + ADDED + ['']
+        self.target(bot).write_bytes(enc(old, 'CRLF'))
+        (self.proposed / (bot + '.PLAYBOOK.proposed.md')).write_bytes(enc(new, 'CRLF'))
+        item = next(t for t in self.plan['targets'] if t['bot'] == bot)
+        item['before_sha256'], item['after_sha256'] = sha(enc(old, 'CRLF')), sha(enc(new, 'CRLF'))
+        self.signed['developer-profile'] = '\n'.join([self.n1] + ADDED)
+        with self.assertRaises(gp.PatchError) as ctx:
+            gp.preflight(self.root, self.plan, self.proposed, self.signed)
+        self.assertIn('developer: the change deletes or rewrites', str(ctx.exception))
+
+    def test_the_pair_list_has_exactly_two_whole_lines(self):
+        self.assertEqual(len(gp.MANAGER_REPLACEMENTS), 2)
+        for old, new in gp.MANAGER_REPLACEMENTS:
+            self.assertNotIn('\n', old + new)
+            self.assertNotEqual(old, new)
+
+
+class InsertedBlockWholeLines(Disposable):
+    """An inserted block must be a contiguous run of whole signed lines, not a fragment of one (#395)."""
+
+    def insert(self, inserted, signed_text, bot='developer'):
+        old = ['# Playbook ' + bot, '', 'Custom installed line.', '']
+        new = old[:3] + inserted + old[3:]
+        eol = EOLS[bot]
+        self.target(bot).write_bytes(enc(old, eol))
+        (self.proposed / (bot + '.PLAYBOOK.proposed.md')).write_bytes(enc(new, eol))
+        item = next(t for t in self.plan['targets'] if t['bot'] == bot)
+        item['before_sha256'], item['after_sha256'] = sha(enc(old, eol)), sha(enc(new, eol))
+        self.signed[gp.ALLOWED[bot][1]] = signed_text
+
+    def passes(self, inserted, signed_text):
+        self.insert(inserted, signed_text)
+        checked = gp.preflight(self.root, self.plan, self.proposed, self.signed)
+        self.assertEqual(next(c for c in checked if c['bot'] == 'developer')['added'], len(inserted))
+
+    def refused(self, inserted, signed_text):
+        self.insert(inserted, signed_text)
+        with self.assertRaises(gp.PatchError) as raised:
+            gp.preflight(self.root, self.plan, self.proposed, self.signed)
+        self.assertIn('developer: an inserted block is not in the signed public release', str(raised.exception))
+
+    def test_a_fragment_of_a_signed_line_is_refused(self):
+        self.refused(['def'], 'abc def')
+        self.refused(['abc'], 'abc def')
+        self.refused(['push to main'], 'Never push to main; open a pull request.')
+
+    def test_a_whole_signed_line_is_accepted(self):
+        self.passes(['def'], 'abc\ndef\nghi')
+        self.passes(['abc def'], '# Catalog\nabc def\nend')
+
+    def test_a_contiguous_run_of_whole_signed_lines_is_accepted(self):
+        self.passes(['b', 'c'], 'a\nb\nc\nd')
+        self.passes(['a', '', 'b'], 'x\na\n\nb\ny')
+
+    def test_empty_separator_lines_at_the_edges_of_a_block_do_not_need_to_border_the_signed_run(self):
+        self.passes(['', 'def'], 'abc\ndef\nghi')
+        self.passes(['def', ''], 'abc\ndef\nghi')
+        self.refused(['', 'de', ''], 'abc\ndef\nghi')
+
+    def test_a_block_that_is_not_one_contiguous_run_is_refused(self):
+        self.refused(['a', 'c'], 'a\nb\nc')
+        self.refused(['c', 'b'], 'a\nb\nc')
+        self.refused(['b', 'c'], 'a\nb\nc d')
+        self.refused(['b', 'x'], 'a\nb\nc')
+
+    def test_a_line_that_only_contains_the_inserted_text_is_refused_in_a_multiline_block(self):
+        self.refused(['abc', 'de'], 'abc\ndef')
+
+    def test_a_fragment_is_refused_by_apply_without_writing(self):
+        self.insert(['def'], 'abc def')
+        self.snapshot = self.files()
+        with self.assertRaises(gp.PatchError):
+            self.apply()
+        self.assertEqual(self.files(), self.snapshot)
+        self.assertFalse((self.root / gp.STATE_DIR).exists())
+
+
 if __name__ == '__main__':
     unittest.main()
 
