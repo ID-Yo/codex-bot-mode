@@ -422,6 +422,7 @@ class DesktopLifecycle:
         self._stop_requested = False
         self._stop_committed = False
         self._stopped = threading.Event()
+        self._shutdown_replies = 0
         self.port = None
 
     @property
@@ -539,6 +540,30 @@ class DesktopLifecycle:
                     (generation is not None and generation != self._drain_generation)):
                 return False
             self._stop_committed = True
+            return True
+
+    @contextmanager
+    def shutdown_reply(self):
+        """Marks a /desktop/shutdown request whose response is not yet fully written (#318)."""
+        with self._condition:
+            self._shutdown_replies += 1
+        try:
+            yield
+        finally:
+            with self._condition:
+                self._shutdown_replies -= 1
+                self._condition.notify_all()
+
+    def wait_for_shutdown_replies(self, timeout=5):
+        """Block until every shutdown response has been written, so the process never exits under a daemon handler
+        thread that is still sending it. Bounded; returns False when a response was still pending at the timeout."""
+        with self._condition:
+            deadline = time.monotonic() + timeout
+            while self._shutdown_replies:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return False
+                self._condition.wait(remaining)
             return True
 
     def mark_running(self, port):

@@ -58,6 +58,25 @@ def project_history(history, bot, img_store=None):
     return rows
 
 
+HISTORY_LAG_SECONDS = 600  # thread.updatedAt this far past the newest readable turn means the readable history is behind
+
+
+def history_freshness(history):
+    """What Desktop's read_thread says about its own history: thread.updatedAt against the newest returned turn.
+
+    updatedAt follows the Desktop rollout file; the turns come from Desktop's separate history projection. When
+    updatedAt is far newer than the newest turn the projection returned, the readable history is behind and the
+    conversation shown is not current. Nothing is guessed: both timestamps are reported as Desktop gave them."""
+    updated = (history.get('thread') or {}).get('updatedAt')
+    stamps = [t.get('completedAt') or t.get('startedAt') for t in history.get('turns', []) if isinstance(t, dict)]
+    stamps = [s for s in stamps if isinstance(s, (int, float)) and not isinstance(s, bool)]
+    latest = max(stamps) if stamps else None
+    updated = updated if isinstance(updated, (int, float)) and not isinstance(updated, bool) else None
+    behind = updated is not None and latest is not None and updated - latest > HISTORY_LAG_SECONDS
+    return {'source': 'desktop read_thread', 'thread_updated_at': updated, 'latest_turn_at': latest,
+            'behind': bool(behind), 'lag_seconds': int(updated - latest) if behind else None}
+
+
 class NativePersonal:
     def __init__(self, root, bot, thread_id, bridge, *, start_worker=True):
         root = Path(root).resolve()
@@ -154,6 +173,7 @@ class NativePersonal:
             'native_thread_status':history.get('thread',{}).get('status',{}).get('type'),
             'journal':project_history(history,self.bot,self.images),
             'history_has_more':bool(history.get('page',{}).get('hasMore')),
+            'history':history_freshness(history),
             'deliveries':[{'id':r['id'],'client_id':r['client_id'],'bot':self.bot,
                 'state':r['state'],'turn_id':r['turn_id'],'error':r['error']} for r in rows],
             'hold':hold,'active':{'bot':self.bot} if busy else None,

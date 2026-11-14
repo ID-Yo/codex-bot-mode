@@ -106,6 +106,16 @@ class StarterRelayTests(unittest.TestCase):
         self.assertEqual(result.returncode, 1)
         self.assertIn('appointed Manager chat', result.stderr)
 
+    def test_a_restart_keeps_the_previous_relay_logs(self):
+        logs = self.root / '.bot-mode' / 'desktop-relay'
+        logs.mkdir(parents=True)
+        (logs / 'stdout.log').write_text('evidence of the last exit')
+        result = self.run_starter('-RelayOnly')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        kept = list(logs.glob('stdout.*.log'))
+        self.assertEqual(len(kept), 1)
+        self.assertEqual(kept[0].read_text(), 'evidence of the last exit')
+
 
 if __name__ == '__main__':
     unittest.main()

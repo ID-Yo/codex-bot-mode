@@ -50,6 +50,17 @@ class OwnerInboxTests(unittest.TestCase):
         decisions[0]['state'] = 'cancelled'
         self.assertEqual(self.build(self.snapshot(decisions))['items'], [])
 
+    def test_recorded_summary_decisions_are_counted_by_state_without_creating_items(self):
+        answered = self.decision(); answered['state'] = 'answered'
+        second = self.decision(); second.update(id='d2', state='answered')
+        cancelled = self.decision(); cancelled.update(id='d3', state='cancelled')
+        result = self.build(self.snapshot([answered, second, cancelled]))
+        self.assertEqual(result['items'], [])
+        self.assertEqual(result['recorded']['decisions'], {'pending': 0, 'answered': 2, 'other': 1})
+        result = self.build(self.snapshot([self.decision()]))
+        self.assertEqual(result['recorded']['decisions'], {'pending': 1, 'answered': 0, 'other': 0})
+        self.assertEqual(len(result['items']), 1)
+
     def test_owner_request_and_decision_share_one_issue_with_all_provenance(self):
         (self.local / 'requests.json').write_text(json.dumps({'schema': 1, 'requests': [{
             'id': 'R1', 'from': 'developer', 'to': 'owner', 'state': 'open',

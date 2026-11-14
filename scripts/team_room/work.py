@@ -1,4 +1,5 @@
 """Host-mediated documentation tasks through the existing Desktop MCP client."""
+import collections
 import hashlib
 import json
 import os
@@ -73,14 +74,18 @@ class DesktopBridge:
         self._start()
 
     def _start(self):
-        self.responses = queue.Queue()
+        responses = self.responses = queue.Queue()
         self.next_id = 0
         self.process = subprocess.Popen(self.command,stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,text=True,encoding='utf-8',
+            stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True,encoding='utf-8',errors='replace',
             creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0)
         self.pid = self.process.pid
-        self.reader = threading.Thread(target=self._read,daemon=True)
+        self.stderr_tail = tail = collections.deque(maxlen=8)  # the last lines say why a bridge stopped answering
+        # Each process gets its own queue and drain: a replaced process can never feed answers or a disconnect marker to its successor.
+        self.reader = threading.Thread(target=self._read,args=(self.process,responses),daemon=True)
         self.reader.start()
+        self.drain = threading.Thread(target=self._drain,args=(self.process,tail),daemon=True)
+        self.drain.start()
         try:
             self._request('initialize',{'protocolVersion':'2024-11-05','capabilities':{},
                 'clientInfo':{'name':'cbm_work_host','version':'0.1.0'}})
@@ -92,11 +97,28 @@ class DesktopBridge:
             self.close()
             raise
 
-    def _read(self):
-        for line in self.process.stdout:
-            try: self.responses.put(json.loads(line))
-            except ValueError: pass
-        self.responses.put(None)
+    def _read(self, process, responses):
+        try:
+            for line in process.stdout:
+                try: responses.put(json.loads(line))
+                except ValueError: pass
+        except (OSError, ValueError): pass
+        responses.put(None)
+
+    @staticmethod
+    def _drain(process, tail):
+        try:
+            for line in process.stderr:
+                if line.strip(): tail.append(line.strip()[:300])
+        except (OSError, ValueError): pass
+
+    def diagnosis(self):
+        """What is known about the bridge process: alive or its exit code, and the last lines it wrote to stderr."""
+        code = self.process.poll()
+        if code is not None: self.drain.join(.5)  # let the last stderr lines arrive
+        text = 'bridge process %s' % ('alive' if code is None else 'exited with code %s' % code)
+        lines = ' | '.join(self.stderr_tail)
+        return text + ('; stderr: ' + safe_error(lines)[:200] if lines else '')
 
     def alive(self):
         return self.process.poll() is None
@@ -124,11 +146,15 @@ class DesktopBridge:
                 deadline = time.monotonic()+timeout
                 while time.monotonic()<deadline:
                     response = self.responses.get(timeout=max(.01,deadline-time.monotonic()))
-                    if response is None: raise Uncertain('Desktop bridge disconnected; do not resend')
+                    if response is None:
+                        try: self.process.wait(1)
+                        except subprocess.TimeoutExpired: pass
+                        raise Uncertain('Desktop bridge disconnected; do not resend (%s)' % self.diagnosis())
                     if response.get('id') == current: break
                 else: raise queue.Empty()
-            except (OSError,queue.Empty):
-                raise Uncertain('Desktop request outcome unconfirmed; do not resend') from None
+            except (OSError,queue.Empty) as error:
+                cause = 'write failed' if isinstance(error,OSError) else 'no answer within %ds' % timeout
+                raise Uncertain('Desktop request outcome unconfirmed; do not resend (%s; %s)' % (cause,self.diagnosis())) from None
             if 'error' in response:
                 raise RuntimeError(safe_error(response['error'].get('message','Desktop tool rejected')))
             return response['result']
@@ -187,7 +213,16 @@ class DesktopBridge:
         return snapshot,matches
 
     def close(self):
-        if not self.process.stdin.closed: self.process.stdin.close()
+        """Close the bridge and end its process; a replaced process must not linger holding a Desktop connection."""
+        process = self.process
+        try:
+            if not process.stdin.closed: process.stdin.close()
+        except OSError: pass
+        try: process.wait(2)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            try: process.wait(5)
+            except subprocess.TimeoutExpired: pass
         try: self.process.wait(timeout=5)
         except subprocess.TimeoutExpired:
             self.process.terminate();self.process.wait(timeout=5)

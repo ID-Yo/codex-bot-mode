@@ -78,7 +78,7 @@
   };
   const projects=()=>view==='dashboard'?allProjects().filter(p=>isProjectVisible(p.id)):allProjects();
 
-  const INBOX_KINDS={decision:'Decision',request:'Request',blocker:'Blocker',setup:'Setup'};
+  const INBOX_KINDS={issue:'GitHub issue',decision:'Decision',request:'Request',blocker:'Blocker',setup:'Setup'};
   const INBOX_ACTIONS={appoint_team:'Appoint the team',record_issue:'Record an issue'};
   const kindLabel=kind=>officeI18n.t(INBOX_KINDS[kind]||'Other');
   const issueDrafts=new Map(),issueErrors=new Map(),issueBusy=new Set(),handoffCopied=new Set();
@@ -104,6 +104,8 @@
     notice.textContent=officeI18n.t(inboxFailed?'Owner inbox unavailable. Retained items are historical.':!inboxData?'Loading owner inbox…':!inboxComplete()?'Owner inbox coverage is incomplete. Unknown is not zero.':'Only recorded open requests and pending decisions are included.');parent.append(notice);
     if(inboxData?.warnings.length){const warnings=el('ul','owner-inbox-warnings');for(const warning of inboxData.warnings)warnings.append(el('li',null,officeI18n.t(warning)));parent.append(warnings);}
     if(inboxData)notice.textContent+=' · '+officeI18n.t('Observed at')+' '+when(inboxData.observed_at);
+    const answered=inboxData?.recorded?.decisions?.answered;
+    if(inboxData&&inboxComplete()&&!inboxData.items.length&&Number.isInteger(answered)&&answered>0)parent.append(el('p','owner-inbox-recorded',officeI18n.t('{n} answered decisions are recorded in project summaries. They are history; nothing is waiting for you.',{n:answered})));
   }
   function inboxRow(item){
     const row=el('li','owner-inbox-row');row.dataset.ownerItemId=item.id;
@@ -528,15 +530,18 @@
     const sourceKnown=p.source?.available===true&&!stale(p)&&!problem;
     const teams=rosterTeams(p.id),teamKnown=teams&&teams.length&&teams.every(t=>['ok','no_teams'].includes(t.status));
     const bots=registryFailed?[]:(registryData.bots||[]).filter(b=>b.project_id===p.id);
-    const runtimeKnown=teamKnown&&!agentFailed&&bots.every(bot=>{
+    const botChecked=bot=>{
       const a=observation(bot),at=Date.parse(a?.runtime?.source_at);
       return bot.thread_id&&a?.runtime?.freshness==='fresh'&&['active','idle'].includes(a.runtime.status)&&Number.isFinite(at)&&Date.now()>=at&&Date.now()-at<=60000;
-    });
+    };
+    const runtimeKnown=teamKnown&&!agentFailed&&bots.every(botChecked);
+    // Partial coverage: agents verified working are counted even when others were not checked; the gap is stated.
+    const verifiedWorking=bots.filter(isWorking).length,unchecked=bots.filter(bot=>!botChecked(bot)).length;
     const fields=[['Open tasks',sourceKnown&&Number.isInteger(p.open_tasks)?p.open_tasks:null],
       ['Recorded completed',!sourceKnown?null:p.work?(p.work.state==='known'&&Number.isInteger(p.work.done)?p.work.done:null):Array.isArray(p.tasks)?p.tasks.filter(task=>task.state==='done').length:null],
       ['Teams',teamKnown?teams.filter(t=>t.status==='ok').length:null],
       ['Owner waits',sourceKnown&&Array.isArray(p.decisions)?pending(p).length:null],
-      ['Verified active agents',runtimeKnown?bots.filter(isWorking).length:null]];
+      ['Verified active agents',runtimeKnown?verifiedWorking:teamKnown&&!agentFailed&&verifiedWorking>0?verifiedWorking+' · '+officeI18n.t('{missing} of {total} agents not checked',{missing:unchecked,total:bots.length}):null]];
     for(const [label,value] of fields){const row=el('div');row.append(el('dt',null,officeI18n.t(label)),el('dd',null,value===null?officeI18n.t('Unknown'):String(value)));metrics.append(row);}
     // An unavailable work source says why, so Unknown is not mistaken for zero.
     if(p.source?.available!==true&&typeof p.source?.error==='string'&&p.source.error){const row=el('div','project-metric-reason');row.append(el('dt',null,officeI18n.t('Why unknown')),el('dd',null,officeI18n.t(p.source.error)));metrics.append(row);}
@@ -1096,6 +1101,7 @@
     if(conv){
       const journal=st.journal||[];
       conv.replaceChildren();
+      const behindNote=window.officeHistoryNote?.(st.history);if(behindNote)conv.append(behindNote);
       if(!journal.length){
         conv.append(empty('No messages yet with '+mgrName+'.'));
       }else{
@@ -1426,7 +1432,7 @@
       const handle=el('div','pane-handle right-pane-handle');handle.tabIndex=0;handle.setAttribute('role','separator');handle.setAttribute('aria-orientation','vertical');handle.setAttribute('aria-label',officeI18n.t('Right pane width'));
       layout.append(main,handle,attention);window.officeShell?.divider(handle,'right');body.append(layout);v.append(body);return;
     }
-    if(view==='inbox'){v.append(header(officeI18n.t('Waiting for me'),''),body);renderInbox(body);return;}
+    if(view==='inbox'){v.append(body);renderInbox(body);return;}
     if(view==='overview'){
       const known=allKnownProjects();
 

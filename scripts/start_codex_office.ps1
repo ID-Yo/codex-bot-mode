@@ -57,6 +57,20 @@ function Ensure-Relay {
     if ($probeExit -eq 0) { return $true }
     Resolve-Codex
     New-Item -ItemType Directory -Path $officeRelayRoot -Force | Out-Null
+    # An unhealthy relay that is still alive keeps its log files open, so the log rotation below failed and the restart
+    # never happened (#401, 2026-11-09). Stop only this root's relay program; the new one registers a fresh descriptor.
+    $staleRelays = Get-CimInstance Win32_Process -Filter "Name='python.exe'" | Where-Object {
+        $_.CommandLine -match 'scripts\.team_room\.desktop_relay' -and $_.CommandLine -notmatch '--probe' -and $_.CommandLine.Replace('/','\') -like ('*' + $officeRelayRoot.Replace('/','\') + '*') }
+    foreach ($stale in $staleRelays) { Stop-Process -Id $stale.ProcessId -Force -ErrorAction SilentlyContinue }
+    if ($staleRelays) { Start-Sleep -Seconds 2 }
+    # Keep the previous relay logs: a restart used to truncate them, which erased the evidence of why the last relay ended (#388).
+    foreach ($logName in 'stdout','stderr') {
+        $logFile = Join-Path $officeRelayRoot "$logName.log"
+        if ((Test-Path $logFile) -and (Get-Item $logFile).Length -gt 0) {
+            Move-Item -LiteralPath $logFile -Destination (Join-Path $officeRelayRoot ("$logName.{0}.log" -f (Get-Date -Format 'yyyyMMddTHHmmss'))) -Force
+        }
+        Get-ChildItem -Path $officeRelayRoot -Filter "$logName.*.log" | Sort-Object LastWriteTime -Descending | Select-Object -Skip 5 | Remove-Item -Force
+    }
     # A registered relay that is alive but silent is replaced by the relay program itself after a sustained failure.
     $relayArgs = '-B -m scripts.team_room.desktop_relay --codex-path "{0}" --root "{1}"' -f $script:officeBinary,$officeRelayRoot
     $relayProcess = Start-Process -FilePath $script:officePython -ArgumentList $relayArgs -WorkingDirectory $officeRoot -WindowStyle Hidden -PassThru `

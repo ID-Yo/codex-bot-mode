@@ -6,6 +6,7 @@ import tempfile
 import time
 import unittest
 import json
+import os
 import subprocess
 from unittest.mock import patch
 
@@ -73,6 +74,12 @@ root=Path(a.runtime_root);root.mkdir(parents=True,exist_ok=True)
 identity=verify_runtime_slot(a.runtime_install_root,a.runtime_slot,a.runtime_release_id,
                             a.runtime_slot_sha256,a.runtime_component_id,Path(__file__))
 lifecycle=DesktopLifecycle(root,version=identity['runtime_version'],runtime_identity=identity)
+import os,time
+_delay=float(os.environ.get('CBM_FIXTURE_REPLY_DELAY','0'))
+if _delay:
+    _health=lifecycle.health
+    # Injected slow response: once the service is stopped the shutdown reply builds its body here, so it is delayed.
+    lifecycle.health=lambda:(time.sleep(_delay) if lifecycle.stopped.is_set() else None) or _health()
 controller=SimpleNamespace(profile_project=Path(a.project),mutex=threading.RLock(),active=None,work=None,
     store=SimpleNamespace(root=root,deliveries=lambda:[]),
     project_managers=SimpleNamespace(close=lambda:None),read_model_worker=SimpleNamespace(stop=lambda:None))
@@ -83,7 +90,7 @@ worker=threading.Thread(target=server.serve_forever,daemon=True);worker.start()
 while not lifecycle.stop_requested:__import__('time').sleep(.01)
 if inspect_shutdown(controller)['safety']=='safe':lifecycle.commit_stop_if_safe()
 server.shutdown();server.server_close();worker.join(2);lifecycle.mark_stopped()
-__import__('time').sleep(.1)
+lifecycle.wait_for_shutdown_replies(5)
 '''
 
 
@@ -173,6 +180,19 @@ class OfficeRuntimeAdapterTests(unittest.TestCase):
         self.assertEqual(adapter.status()['state'],'idle')
         self.assertTrue(adapter.health_check(slot,entry['release_id'],entry['slot_sha256'])['healthy'])
         self.assertTrue(adapter.stop_owned())
+
+    def test_stop_owned_succeeds_when_the_daemon_shutdown_response_is_slow(self):
+        # #318: the host used to exit 100 ms after mark_stopped; a response slower than that was cut off.
+        source=Path(__file__).resolve().parents[1]
+        files={p.relative_to(source).as_posix():p.read_bytes() for p in (source/'scripts').rglob('*.py')}
+        files['scripts/__init__.py']=b''
+        files['scripts/team_room/__main__.py']=REAL_HOST.encode()
+        plan=self.stage_files(files,release_id='slow-response-fixture')
+        with patch.dict(os.environ,{'CBM_FIXTURE_REPLY_DELAY':'0.6'}):
+            adapter=self.make_adapter()
+            self.assertTrue(adapter.start_owned(self.install/plan['components'][0]['slot']))
+            self.assertTrue(adapter.stop_owned())
+        self.assertEqual(adapter.process.returncode,0)
 
     def test_runtime_transaction_uses_same_adapter_across_slot_switch(self):
         adapter=self.make_adapter();self.assertTrue(adapter.start_owned(self.install/self.slot))

@@ -490,6 +490,12 @@ def create_server(controller, port=0, *, ipv6=False, token=None, desktop_lifecyc
             self.reply(200, content, content_type)
 
         def do_POST(self):
+            if desktop_lifecycle is not None and urlsplit(self.path).path == '/desktop/shutdown':
+                with desktop_lifecycle.shutdown_reply():
+                    return self._do_post()
+            return self._do_post()
+
+        def _do_post(self):
             if urlsplit(self.path).path.startswith('/desktop/'):
                 if not self.desktop_authorized():
                     return self.reply(403, {'error': 'Controller identity or origin rejected'})

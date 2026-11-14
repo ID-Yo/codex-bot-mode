@@ -8,6 +8,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/). Versions follow [SemVer
 - Office 0.1.10 (patch over 0.1.9): truthful agent status (working, idle, waiting from a fresh runtime read; unknown only without one), a concise project summary from the report or its own counts, owner inbox reads request ledgers up to 2 MiB, atomic request ledger writes with a lock and route_stage updates, Monitor triage and ready-work findings with auditable start approval, and one retry on a GitHub HTTP 5xx.
 
 ### Added
+- Zero-token handoff outbox: an agent queues its report to the project Manager with one local command and ends its turn; a local pump delivers the reports one at a time, quarantines ambiguous deliveries, expires old rows and reports health with `outbox.py status [--heal]`.
+- Relay watchdog (`scripts/relay_watchdog.py`): zero-token check of the Desktop relay, project outboxes and Office, with optional restart, a health file and a notification when work waits.
+- Owner inbox shows open GitHub issues labelled `state:needs-owner` from a cache refreshed in the background, and `requests.py owner` / `owner-done` let a Manager record and close owner items.
+- Shared BASE rules: end-of-turn pickup of own open requests, Manager assignments through the request ledger, and recording of owner decisions with `state:needs-owner`.
 - Chief of Staff playbook limits message bursts to agents: at most 3 messages in a row, mass changes wait at least 20 seconds between messages, and one configuration-level change preferred over many messages.
 - Windows x64 Codex Office controller with tray, external Chrome workflow and bundled service; scoped signed component updates, inventory, preview, recovery and separate activation evidence.
 - Evidence-aware LinkedIn editorial handbook, drafting/review checklist and post-audit template, discoverable by team and standalone Strategist, Content Writer and Content Reviewer roles.

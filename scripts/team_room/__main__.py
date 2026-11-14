@@ -187,6 +187,8 @@ def main():
                 s.server_close()
             except Exception as error:
                 cleanup_errors.append(f'server close: {safe_error(error)}')
+        if lifecycle and not lifecycle.wait_for_shutdown_replies(5):
+            cleanup_errors.append('shutdown response was still being written after 5 seconds')
         with controller.personal.lock:
             controller.personal.closed = True
             info['personal_child_pids'] = [c.transport.pid

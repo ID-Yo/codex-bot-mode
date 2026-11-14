@@ -1,6 +1,7 @@
 """One-shot guarded patch of six installed PLAYBOOK.md files (#343).
 
-Applies reviewed, insert-only changes to a fixed allowlist of six profile paths.
+Applies reviewed, insert-only changes to a fixed allowlist of six profile paths, plus the two
+hardcoded whole-line Manager rewrites in MANAGER_REPLACEMENTS (#364).
 Nothing is written unless every target passes the preflight: current file hash
 equals the planned before hash, the proposed file equals the planned after hash,
 the change only inserts lines, and every inserted block occurs in the signed
@@ -35,6 +36,17 @@ ALLOWED = {
     'development-code-reviewer': ('team/Development/development-code-reviewer/agent/PLAYBOOK.md', 'development-code-reviewer-profile'),
     'verifier': ('team/Development/verifier/agent/PLAYBOOK.md', 'verifier-profile'),
 }
+# The only two whole-line rewrites allowed, Manager file only (#364): (installed catalog line, signed catalog line).
+MANAGER_REPLACEMENTS = (
+    (
+        '- Approval to start is a recorded act: start_approved plus who, when and scope (a start:approved label only with a reference to the owner instruction or standing delegation). Backlog or a ready label is not approval. In the same processing turn in which you find approved ready work and an eligible idle executor (appointed for the role and scope, no owner pause or single-writer conflict, activity evidence fresh within one audit interval), dispatch it; otherwise record the reason (capacity, dependency, authorization, quota, device), unblock owner, resume condition and next check. Check this at every completed turn and every Monitor signal. Unknown activity is not idle; owner pause, single writers and permissions override.',
+        '- Approval to start is a recorded act: start_approved plus who, when and scope (recorded in the issue text with a reference to the owner instruction or standing delegation, never as a label). Backlog or a ready label is not approval. In the same processing turn in which you find approved ready work and an eligible idle executor (appointed for the role and scope, no owner pause or single-writer conflict, activity evidence fresh within one audit interval), dispatch it; otherwise record the reason (capacity, dependency, authorization, quota, device), unblock owner, resume condition and next check. Check this at every completed turn and every Monitor signal. Unknown activity is not idle; owner pause, single writers and permissions override.',
+    ),
+    (
+        '- Intermediate pull requests link the issue with Refs; Closes only on the final accepted deliverable. A request reply with outcome done closes that request, not the issue. Keep every open work issue labelled with its state and a responsible participant.',
+        '- Intermediate pull requests link the issue with Refs; Closes only on the final accepted deliverable. A request reply with outcome done closes that request, not the issue. Keep every open work issue labelled with exactly one lifecycle label: one of the six `state:*` labels or `future` and a responsible participant named in its text.',
+    ),
+)
 REPLACE = os.replace  # target replacement only; tests can inject a failure here
 HASH = re.compile(r'[0-9a-f]{64}')
 
@@ -102,6 +114,20 @@ def target_path(root, rel):
     return path
 
 
+def contiguous_lines(block, source_lines):
+    """True when block (a list of lines) is a run of whole, consecutive lines of source_lines.
+
+    Empty lines at the two edges of the block are separators that the diff may attach to either side of an
+    insertion; they carry no content and are not required to border the run in the signed text (#395).
+    """
+    while block and block[0] == '':
+        block = block[1:]
+    while block and block[-1] == '':
+        block = block[:-1]
+    size = len(block)
+    return any(source_lines[i:i + size] == block for i in range(len(source_lines) - size + 1))
+
+
 def preflight(root, plan, proposed_dir, signed):
     """Return the checked targets or raise PatchError listing every problem. Writes nothing."""
     problems, checked = [], []
@@ -130,6 +156,18 @@ def preflight(root, plan, proposed_dir, signed):
             continue
         added, bad = 0, False
         source = signed.get(ALLOWED[bot][1], '')
+        source_lines = source.split('\n')
+        if bot == 'manager':
+            for old_line, new_line in MANAGER_REPLACEMENTS:
+                if old_line in new or old_line not in old:
+                    continue  # this pair is not being replaced
+                if old.count(old_line) != 1 or new.count(old_line) != 0 or new_line not in source_lines:
+                    problems.append(f'{bot}: a line replacement is ambiguous or not in the signed public release')
+                    bad = True
+                    break
+                old = [new_line if line == old_line else line for line in old]
+        if bad:
+            continue
         for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(None, old, new, autojunk=False).get_opcodes():
             if tag == 'equal':
                 continue
@@ -137,9 +175,8 @@ def preflight(root, plan, proposed_dir, signed):
                 problems.append(f'{bot}: the change deletes or rewrites existing lines')
                 bad = True
                 break
-            block = '\n'.join(new[j1:j2])
             added += j2 - j1
-            if block not in source:
+            if not contiguous_lines(new[j1:j2], source_lines):
                 problems.append(f'{bot}: an inserted block is not in the signed public release')
                 bad = True
                 break

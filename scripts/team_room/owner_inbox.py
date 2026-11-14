@@ -1,7 +1,8 @@
-"""Read-only owner dependencies over approved summaries and explicit requests.
+"""Read-only owner dependencies over approved summaries, explicit requests and GitHub needs-owner issues.
 
-No chat, STATE, memory, network access or visibility filtering. A missing source
-is incomplete coverage, never evidence that the owner has nothing to do.
+No chat, STATE, memory or visibility filtering. GitHub is read from a cache that a background refresh keeps current
+(owner_issues), so building the inbox never waits for the network. A missing source is incomplete coverage, never
+evidence that the owner has nothing to do.
 """
 from datetime import datetime, timezone
 import hashlib
@@ -9,7 +10,7 @@ import json
 from pathlib import Path
 import re
 
-from . import project_status, registry, roster
+from . import owner_issues, project_status, registry, roster
 
 MAX_BYTES = 256 * 1024
 LEDGER_BYTES = 2 * 1024 * 1024  # request ledgers keep every answered record; 256 KiB rejected a real 340 KiB ledger
@@ -136,6 +137,46 @@ def pending_teams(scopes, warnings):
     return found
 
 
+def github_issue_candidates(root, projects, at, warnings, candidates, ensure=None):
+    """Rows for open needs-owner issues from the cache. Starts a background refresh when the cache is due."""
+    ensure = ensure or owner_issues.ensure_fresh
+    every = sorted({repo for _pid, _name, _scope, repos, _reg in projects for repo in repos})
+    if every:
+        ensure(root, every)
+    cache = owner_issues.read_cache(root)
+    for pid, name, _scope, repos, registered in projects:
+        if not repos:
+            if registered:
+                warnings.append('A registered project has no GitHub repository, so its owner issues are not read')
+            continue
+        for repo in repos:
+            entry = cache['repos'].get(repo)
+            fetched = (entry or {}).get('fetched_at')
+            if not entry or not fetched:
+                warnings.append('GitHub owner issues are not loaded yet for ' + repo if not (entry or {}).get('error')
+                                else f"GitHub owner issues unavailable for {repo}: {entry['error']}")
+                continue
+            if entry.get('error'):
+                warnings.append(f"GitHub owner issues for {repo} could not be refreshed: {entry['error']}")
+            age = owner_issues.age_seconds(fetched, at)
+            if age is None or age > owner_issues.STALE_SECONDS:
+                warnings.append('GitHub owner issues for ' + repo + ' are stale')
+            for issue in entry.get('issues', []):
+                url = issue_url(issue.get('url'))
+                if len(candidates) >= MAX_ITEMS:
+                    warnings.append('Owner inbox collection limit reached')
+                    return
+                candidates.append({
+                    'project_id': pid, 'project_name': name,
+                    'agent': text((issue.get('assignees') or ['GitHub'])[0], 80), 'kind': 'issue',
+                    'title': text(issue.get('title'), 280), 'blocked_work': '', 'due': None,
+                    'urgent': any(label in ('priority:high', 'priority:urgent', 'urgent') for label in issue.get('labels', [])),
+                    'issue_url': url, 'source_at': issue.get('updated_at'),
+                    'freshness': freshness(fetched, at),
+                    'source': {'kind': 'github_issue', 'id': f"{repo}#{issue.get('number')}", 'project_id': pid,
+                               'url': url, 'due': None}})
+
+
 def build(project_root, *, now=None):
     root = Path(project_root).resolve(strict=True)
     observed = now or datetime.now(timezone.utc).isoformat()
@@ -150,7 +191,7 @@ def build(project_root, *, now=None):
         registered = registry.load_registry(config)
     except (OSError, ValueError):
         registered = {'status': 'invalid_config', 'projects': []}
-    scopes = []
+    scopes, github_projects = [], []
     registered_projects = registered.get('projects', [])
     if len(registered_projects) > MAX_SCOPES:
         warnings.append('Project scope limit reached')
@@ -159,12 +200,16 @@ def build(project_root, *, now=None):
             project_root = Path(project['root']).resolve(strict=True)
             if project_root.is_dir():
                 scopes.append((project['id'], text(project.get('name')) or project['id'], project_root))
+                github_projects.append((project['id'], text(project.get('name')) or project['id'], project_root,
+                                        owner_issues.repos_for(project, project_root),
+                                        not isinstance(project.get('repositories'), list)))  # repositories: [] = no tracker
             else:
                 warnings.append('A registered project root is not a directory')
         except OSError:
             warnings.append('A registered project root is unavailable')
     if not any(scope[2] == root for scope in scopes):
         scopes.append(('current', root.name, root))
+        github_projects.append(('current', root.name, root, owner_issues.repos_for({}, root), False))
     if registered.get('status') == 'invalid_config':
         warnings.append('Project registry is invalid')
 
@@ -173,6 +218,11 @@ def build(project_root, *, now=None):
     if not model.get('available'):
         warnings.append('Approved project summaries are unavailable')
     snapshot = model.get('snapshot') or {}
+    recorded = {'pending': 0, 'answered': 0, 'other': 0}
+    for project in snapshot.get('projects', []):
+        for decision in project.get('decisions', []):
+            state = decision.get('state') if isinstance(decision, dict) else None
+            recorded[state if state in ('pending', 'answered') else 'other'] += 1
     for project in snapshot.get('projects', []):
         source = project.get('source') or {}
         if not source.get('available'):
@@ -239,6 +289,7 @@ def build(project_root, *, now=None):
                                'due': stamp(due).isoformat() if stamp(due) else None}})
         except (OSError, ValueError, AttributeError, UnicodeError):
             warnings.append('An owner request ledger is unavailable or invalid')
+    github_issue_candidates(root, github_projects, at, warnings, candidates)
     for pending in pending_teams(scopes, warnings):
         candidates.append({
             'project_id': pending['project_id'], 'project_name': pending['project_name'], 'agent': 'project setup',
@@ -287,4 +338,5 @@ def build(project_root, *, now=None):
         warnings.append('Owner inbox result limit reached')
     return {'schema': 1, 'observed_at': observed, 'items': items[:MAX_ITEMS],
             'complete': not warnings, 'warnings': sorted(set(warnings)),
-            'coverage': 'Explicit open owner requests and pending approved project decisions only; no remote issue synchronization.'}
+            'recorded': {'decisions': recorded, 'source': 'approved project summaries'},
+            'coverage': 'Open GitHub issues labelled state:needs-owner (cached, refreshed in the background), explicit open owner requests and pending approved project decisions.'}

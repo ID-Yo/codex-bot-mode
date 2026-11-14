@@ -58,6 +58,27 @@ requester cannot see it. Reply also when work is blocked, failed, refused or
 partial, and say which. Include the task or issue link and the request ID when
 one was given. If delivery fails, state it in your own chat and tell the owner.
 
+## Shared handoff and pickup rules
+
+After an assigned stage completes or is blocked, answer the requester in their
+channel and ensure the responsible project Manager receives the outcome, evidence,
+request and task links, blocker and next action. If the Manager is the requester,
+one reply is enough. Use authorized project channels; report delivery failures.
+Update the linked request with its actual outcome; a finished stage alone does not
+close the task. Preserve existing partial reply and verdict procedures.
+
+Before ending a productive turn, check your own open requests. Start the next
+eligible assigned request in the same turn, or report its concrete blocker.
+Honor priority, prerequisites, future dates, pauses, approvals and single-writer
+boundaries; do not start ineligible or superseded requests. This eligibility rule
+qualifies any older instruction to start every open request. Do not invent work.
+
+A Manager handles each completed stage by starting the next eligible owner or
+recording the blocker, responsible owner, resume condition and next check.
+Specialists do not assign work unless their existing role authority permits it.
+These instructions do not start a new turn when a request arrives after a chat
+is idle; the existing Monitor and Manager routing handle that separately.
+
 ## Working with others
 
 - Find any participant's current chat in the project roster:
@@ -71,6 +92,10 @@ one was given. If delivery fails, state it in your own chat and tell the owner.
   task or message (do not retell it), and your chat as the reply target. Track it
   in `agent/STATE.md` until the reply arrives, and record it in the request ledger:
   `python -B {{host}}/.bot-mode/requests.py --project {{host}} open <id> --from <you> --to <bot> --summary "<goal>" --link <link>`.
+- Manager: every work assignment goes through the request ledger. Open it with
+  `requests.py open <id> --from <you> --to <bot> --summary "<goal>" --link <issue link>`
+  before or together with the message. A direct message without a ledger entry is not an
+  assignment: the Monitor cannot see it and it does not count as assigned work.
 - After you send a reply, close the request:
   `python -B {{host}}/.bot-mode/requests.py --project {{host}} reply <id> --by <you> --link <reply link> [--outcome blocked|failed|refused|partial]`.
   Closing a GitHub or tracker issue includes closing the linked request record in the request ledger in the same turn.
@@ -84,6 +109,29 @@ one was given. If delivery fails, state it in your own chat and tell the owner.
 - Messaging other roster participants is allowed for assigned work. Messages to
   anyone outside the project, new chats, merges, releases, deployments and other
   sensitive actions need the owner's approval.
+
+## End of every turn
+
+Before you stop, list the open requests addressed to you:
+`python -B {{host}}/.bot-mode/requests.py --project {{host}} list --to <your bot id>`.
+If one is open, start it in the same turn; do not wait for a periodic check or a reminder.
+A request you cannot start now gets a reply with the blocker (see Mandatory blocker and decision issues).
+
+## Owner requests
+
+Everything that waits for the owner (a decision, approval, access, payment or blocker) must be visible in Office
+"Waiting for me". Only the Manager records it; other agents send the need to the Manager.
+
+- Make sure a GitHub issue holds the question. If the owner's decision blocks the issue, set `state:needs-owner` in place of its
+  current state label (an open issue keeps exactly one lifecycle label) and note the previous state in the issue. Office reads
+  `state:needs-owner` issues automatically. If work continues while you wait, keep the state label and record the question
+  with the command below.
+- For anything without an issue, or to add context, record it once:
+  `python -B ./.bot-mode/requests.py --project . owner "<what the owner must decide or do>" --link <issue link>`.
+  Recording the same link again changes nothing.
+- When the owner answers: restore the previous state label (it replaces `state:needs-owner`) and run
+  `python -B ./.bot-mode/requests.py --project . owner-done <request id or issue link> --note "<answer>"`.
+- Do not wait silently for the owner: if an owner item is still open at the end of your turn, it must already be recorded.
 
 ## Approvals
 

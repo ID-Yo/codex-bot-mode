@@ -288,6 +288,26 @@ class DesktopLifecycleTests(unittest.TestCase):
         self.assertNotIn('abc123', combined)
         self.assertNotIn('liveSecret', combined)
 
+    def test_exit_waits_for_a_pending_shutdown_response_and_never_longer_than_the_bound(self):
+        lifecycle = self.lifecycle()
+        self.assertTrue(lifecycle.wait_for_shutdown_replies(0.01), 'no pending response: no wait')
+        entered, release, waited = threading.Event(), threading.Event(), []
+
+        def reply():
+            with lifecycle.shutdown_reply():
+                entered.set()
+                release.wait(5)
+        worker = threading.Thread(target=reply, daemon=True)
+        worker.start()
+        self.assertTrue(entered.wait(2))
+        self.assertFalse(lifecycle.wait_for_shutdown_replies(0.05), 'a response still being written is reported at the bound')
+        threading.Timer(0.2, release.set).start()
+        started = time.monotonic()
+        self.assertTrue(lifecycle.wait_for_shutdown_replies(5))
+        self.assertGreaterEqual(time.monotonic() - started, 0.15, 'waited for the response, not a fixed grace')
+        worker.join(2)
+        self.assertTrue(lifecycle.wait_for_shutdown_replies(0.01))
+
     def test_begin_drain_returns_false_when_already_draining_or_stopped(self):
         lifecycle = self.lifecycle()
         self.assertTrue(lifecycle.begin_drain())

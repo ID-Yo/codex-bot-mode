@@ -62,6 +62,23 @@ remain protected. Shared references must map to exactly
 
 ## Plan and apply
 
+For an existing `agent/BASE.md`, a path resolution may request
+`{"action":"append-signed","expected_sha256":"<current hash>","blocks":["<rendered signed lines>"]}`.
+Each block must contain complete consecutive nonempty lines from the profile's
+verified and rendered signed BASE. The updater appends them to the current bytes
+and refuses duplicate blocks, stale inputs, and ambiguous signed line endings.
+Existing mixed LF/CRLF bytes are preserved. Reviewers
+must check for equivalent existing rules expressed differently; exact matching
+cannot establish semantic equivalence. The decision, source hash, resulting bytes
+and inventory projection are bound to the plan and rebuilt under the transaction
+locks. This is limited to existing BASE files and does not prove activation.
+An additive-only component keeps its existing source and version. It updates a
+known owned baseline only when the pre-update bytes matched that baseline; it
+never claims ownership or upgrades an unknown/customized baseline to known.
+Additive updates cannot delete files or mix in replacements for the same component.
+Their pending activation record carries the unchanged installed inventory version;
+the signed release remains separately identified in the transaction record.
+
 The library API is:
 
 ```python
