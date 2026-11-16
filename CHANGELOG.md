@@ -8,6 +8,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/). Versions follow [SemVer
 - Office 0.1.10 (patch over 0.1.9): truthful agent status (working, idle, waiting from a fresh runtime read; unknown only without one), a concise project summary from the report or its own counts, owner inbox reads request ledgers up to 2 MiB, atomic request ledger writes with a lock and route_stage updates, Monitor triage and ready-work findings with auditable start approval, and one retry on a GitHub HTTP 5xx.
 
 ### Added
+- BASE rules for cross-chat assignments: the message names the requester chat, thread ID and direct reply channel, and a report counts as delivered only after a verified send; a missing or ambiguous address is never guessed.
 - Zero-token handoff outbox: an agent queues its report to the project Manager with one local command and ends its turn; a local pump delivers the reports one at a time, quarantines ambiguous deliveries, expires old rows and reports health with `outbox.py status [--heal]`.
 - Relay watchdog (`scripts/relay_watchdog.py`): zero-token check of the Desktop relay, project outboxes and Office, with optional restart, a health file and a notification when work waits.
 - Owner inbox shows open GitHub issues labelled `state:needs-owner` from a cache refreshed in the background, and `requests.py owner` / `owner-done` let a Manager record and close owner items.

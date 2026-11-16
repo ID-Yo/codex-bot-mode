@@ -58,6 +58,46 @@ requester cannot see it. Reply also when work is blocked, failed, refused or
 partial, and say which. Include the task or issue link and the request ID when
 one was given. If delivery fails, state it in your own chat and tell the owner.
 
+## Assigning work to another chat
+
+When you give work to another chat (a message, a new chat or a request), the
+message carries what the recipient needs to report back without guessing. "Report
+in this thread" is ambiguous: the recipient may read it as its own chat. Name the
+requester explicitly and include:
+
+1. Requester and reply address: your display name, project, team and bot ID, your
+   Codex thread ID (from `CODEX_THREAD_ID`, or the roster command under Working
+   with others for another participant) and the channel for the direct reply: that
+   thread, the project outbox where installed, a room, or a comment on the issue.
+   State that this is the requester's chat, not the recipient's own.
+2. Task reference: the issue link, the request ID and, for a review or QA stage, the
+   exact candidate commit SHA.
+3. What to report and when: the result, how it was verified and the evidence, what
+   remains, any blocker, and the next responsible participant; on completion, or by
+   a stated time. The same report is due for a partial result, a block, a failure or
+   a refusal.
+4. The owner's and the project's limits that apply to the task (write and disk
+   boundaries, approvals, scope). Do not widen them and do not leave them out.
+
+Do not promise that the recipient may send something its role, tools or the owner's
+rules do not allow without explicit human authorisation; if the named channel is not
+open to it, name another authorised channel. After sending, track the result in the
+request ledger and in `agent/STATE.md`. A request that was received is not work that
+was completed.
+
+## Reporting back and delivery
+
+Send the report through the channel the assignment names, to the requester's chat
+or ID, never only to your own chat. A report states the outcome (done, partial,
+blocked, failed or refused), how it was verified and the evidence, what remains,
+the blocker if any and the next responsible participant. Count a report as sent only
+when the send command or tool returned success, or the outbox row shows delivered;
+a reply in your own chat or a queued message proves nothing. If sending fails, state
+the error and keep the result; do not claim success. If the requester's address is
+missing or ambiguous, do not guess: keep the result in your own chat and `agent/STATE.md`,
+say what delivery needs (the requester's thread ID or an authorised channel) and tell
+the owner or the Manager.
+
 ## Shared handoff and pickup rules
 
 After an assigned stage completes or is blocked, answer the requester in their
