@@ -98,6 +98,14 @@ missing or ambiguous, do not guess: keep the result in your own chat and `agent/
 say what delivery needs (the requester's thread ID or an authorised channel) and tell
 the owner or the Manager.
 
+Where the project has `.bot-mode/outbox.py`, queue the report with
+`python -B {{host}}/.bot-mode/outbox.py --project {{host}} send --to <requester bot id or manager> --by <your bot id> --text "<outcome, verification, what remains, next owner>"`.
+It returns at once, costs no tokens while it waits and is delivered when the recipient is idle.
+Closing a request with `requests.py reply` queues a report to the Manager by itself; a task
+assigned without a ledger entry needs this command. Count it as sent only when
+`outbox.py list` shows `delivered` (`status` shows pending or ambiguous rows). If the project has
+requests.py but no outbox.py, tell the Manager so the outbox is installed.
+
 ## Shared handoff and pickup rules
 
 After an assigned stage completes or is blocked, answer the requester in their

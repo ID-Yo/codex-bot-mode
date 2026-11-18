@@ -19,6 +19,18 @@ import tempfile
 from . import installation_inventory, manifest, roster
 
 REPO = Path(__file__).resolve().parents[2]
+
+
+def _relay_root():
+    """The Office relay directory this install should use, or None when no relay host is known.
+
+    REPO is the tooling root (a plugin or a checkout), not necessarily the Office host, so an unknown relay is left
+    unconfigured (outbox status reports it) instead of persisting a guessed path (#415)."""
+    configured = os.environ.get('CODEX_RELAY_ROOT')
+    for candidate in (Path(configured) if configured else None, REPO / '.bot-mode' / 'desktop-relay'):
+        if candidate is not None and candidate.is_dir():
+            return candidate
+    return None
 PLACEHOLDER = re.compile(r'\{\{([a-z_]+)\}\}')
 SLUG = re.compile(r'[^a-z0-9]+')
 KINDS = ('team', 'catalog-agent', 'custom-agent', 'director')
@@ -631,12 +643,14 @@ def install(plan):
     created = []
     inventory_created = []
     inventory_expected = {}
-    shared_tools = ('.bot-mode/roster.py', '.bot-mode/requests.py')
-    shared_tools_preexisting = {rel for rel in shared_tools if (project / rel).exists()}
-    from . import requests
+    shared_tools = ('.bot-mode/roster.py', '.bot-mode/requests.py', '.bot-mode/outbox.py')
+    outbox_config = '.bot-mode/outbox-config.json'
+    shared_tools_preexisting = {rel for rel in shared_tools + (outbox_config,) if (project / rel).exists()}
+    from . import outbox, requests
     shared_expected = {
         '.bot-mode/roster.py': hashlib.sha256(Path(roster.__file__).read_bytes()).hexdigest(),
         '.bot-mode/requests.py': hashlib.sha256(Path(requests.__file__).read_bytes()).hexdigest(),
+        '.bot-mode/outbox.py': hashlib.sha256(Path(outbox.__file__).read_bytes()).hexdigest(),
     }
     inventory_before = installation_inventory.snapshot(project)
     inventory_before_digest = (hashlib.sha256(inventory_before).hexdigest()
@@ -685,6 +699,11 @@ def install(plan):
         data['project'].setdefault('tooling', str(REPO))
         roster.install_cli(project)
         requests.install_cli(project)
+        created.extend(project / rel for rel in ('.bot-mode/outbox.py', outbox_config) if rel not in shared_tools_preexisting)
+        outbox.install_cli(project, _relay_root())
+        if outbox_config not in shared_tools_preexisting and (project / outbox_config).is_file():
+            inventory_created.append(outbox_config)
+            inventory_expected[outbox_config] = hashlib.sha256((project / outbox_config).read_bytes()).hexdigest()
         inventory_created.extend(rel for rel in shared_tools if rel not in shared_tools_preexisting)
         inventory_expected.update({rel: shared_expected[rel] for rel in shared_tools if rel not in shared_tools_preexisting})
         inventory_written_digest = installation_inventory.record_new_install(

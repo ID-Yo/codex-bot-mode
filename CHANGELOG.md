@@ -6,6 +6,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/). Versions follow [SemVer
 
 ### Changed
 - Office 0.1.10 (patch over 0.1.9): truthful agent status (working, idle, waiting from a fresh runtime read; unknown only without one), a concise project summary from the report or its own counts, owner inbox reads request ledgers up to 2 MiB, atomic request ledger writes with a lock and route_stage updates, Monitor triage and ready-work findings with auditable start approval, and one retry on a GitHub HTTP 5xx.
+- Every team, Director or agent install now also installs `.bot-mode/outbox.py` and, when an Office relay folder is known (`CODEX_RELAY_ROOT` or `.bot-mode/desktop-relay` of the tooling checkout), `.bot-mode/outbox-config.json`; both are tracked as tool components and removed again when the install is rolled back. Closing a request in a project without an outbox now prints a warning, the relay watchdog reports registered projects that have `requests.py` but no `outbox.py`, BASE "Reporting back and delivery" gives the `outbox.py send` command, and the pump delivers to a Manager chat that Desktop has not loaded (failing closed on unreadable thread data).
 
 ### Added
 - BASE rules for cross-chat assignments: the message names the requester chat, thread ID and direct reply channel, and a report counts as delivered only after a verified send; a missing or ambiguous address is never guessed.

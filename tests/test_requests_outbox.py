@@ -90,11 +90,16 @@ class TestRequestOutbox(unittest.TestCase):
         self.assertEqual(self.state(project), before)
         self.assertIn("request:REQ-1:developer:done", run.call_args.args[0])
 
-    def test_reply_without_a_project_outbox_queues_nothing_and_warns_nothing(self):
+    def test_reply_without_a_project_outbox_queues_nothing_and_says_so(self):
         project = self.project(with_outbox=False)
         with patch("scripts.team_room.requests.subprocess.run") as run:
             code, out, err = run_main(["--project", str(project), "reply", "REQ-1", "--by", "developer"])
-        self.assertEqual((code, err), (0, ""))
+        self.assertEqual(code, 0)
+        self.assertEqual(self.state(project)["state"], "answered")  # the closeout still happened
+        self.assertEqual(json.loads(out)["state"], "answered")
+        self.assertIn("warning: request REQ-1 is closed", err)
+        self.assertIn("no .bot-mode/outbox.py", err)
+        self.assertIn("Do not repeat the closeout", err)
         run.assert_not_called()
 
     def test_verdict_closeout_survives_an_outbox_failure(self):

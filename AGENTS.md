@@ -15,7 +15,7 @@ Instructions for coding agents working on this repository. README.md explains th
 
 - `catalog/`: `base/` (BASE.md shared rules, workspace and skill templates, memory contract and helper), `agents/<role>/` (agent.yaml, SOUL, PROFILE, PLAYBOOK), `teams/<team>/` (team.yaml, ROOM.md), `index.yaml`
 - `scripts/team.py`, `scripts/team_room/teams.py`: catalog, questions, dry-run plans, install, approvals
-- `scripts/team_room/roster.py`, `requests.py`: standalone modules, copied into each project's `.bot-mode/`
+- `scripts/team_room/roster.py`, `requests.py`, `outbox.py`: standalone modules, copied into each project's `.bot-mode/`
 - `scripts/team_room/manifest.py`: YAML subset reader and writer (stdlib)
 - `scripts/team_room/` (other modules and `static/`): Codex Office
 - `.agents/skills/`: `codex-team-launch`, `codex-replace-chat`

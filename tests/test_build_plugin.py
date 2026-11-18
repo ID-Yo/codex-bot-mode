@@ -1,4 +1,5 @@
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -19,10 +20,17 @@ class PluginBuildTests(unittest.TestCase):
             self.assertTrue((out / 'skills/codex-team-launch/SKILL.md').exists())
             project = Path(tmp) / 'demo'
             project.mkdir()
+            plain_env = {k: v for k, v in os.environ.items() if k != 'CODEX_RELAY_ROOT'}  # a plugin is not an Office host
             run = subprocess.run([sys.executable, '-B', str(out / 'scripts/team.py'), 'install-team', 'sales',
                                   '--project', str(project), '--approval', 'once', '--confirm', '--tracking-mode', 'local'],
-                                 capture_output=True, text=True)
+                                 capture_output=True, text=True, env=plain_env)
             self.assertEqual(run.returncode, 0, run.stderr)
+            self.assertTrue((project / '.bot-mode/outbox.py').is_file())
+            # The plugin is not an Office host: no relay path is guessed, and the outbox reports it has no relay.
+            self.assertFalse((project / '.bot-mode/outbox-config.json').exists())
+            status = subprocess.run([sys.executable, '-B', str(project / '.bot-mode/outbox.py'), '--project', str(project),
+                                     'status'], capture_output=True, text=True, env=plain_env)
+            self.assertIs(json.loads(status.stdout)['relay_reachable'], False, status.stderr)
             roster = (project / '.bot-mode/roster.json').read_bytes()
             build_plugin.build(out)
             self.assertEqual((project / '.bot-mode/roster.json').read_bytes(), roster)

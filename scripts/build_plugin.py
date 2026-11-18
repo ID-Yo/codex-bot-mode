@@ -13,8 +13,8 @@ import shutil
 
 ROOT = Path(__file__).resolve().parents[1]
 NAME = 'codex-bot-mode'
-VERSION = '0.1.0'
-MODULES = ('__init__.py', 'manifest.py', 'roster.py', 'requests.py', 'teams.py', 'installation_inventory.py', 'dreamdocs_offer.py')
+VERSION = '0.1.5'
+MODULES = ('__init__.py', 'manifest.py', 'roster.py', 'requests.py', 'teams.py', 'installation_inventory.py', 'dreamdocs_offer.py', 'outbox.py')
 SKILLS = ('codex-team-launch', 'codex-replace-chat')
 
 

@@ -14,6 +14,7 @@ SCHEMA = 1
 MAX_FILES = 500
 MAX_FILE_BYTES = 2 * 1024 * 1024
 _UNSET = object()
+TOOL_FILES = ('.bot-mode/roster.py', '.bot-mode/requests.py', '.bot-mode/outbox.py', '.bot-mode/outbox-config.json')
 PROTECTED = ('STATE.md', 'memory', 'bindings.json', 'requests.json', 'approvals.yaml')
 PROFILE_FILES = ('agent/agent.yaml', 'agent/BASE.md', 'agent/SOUL.md', 'agent/PROFILE.md',
                  'agent/PLAYBOOK.md', 'AGENTS.md', '.gitignore')
@@ -329,7 +330,7 @@ def record_new_install(project, agents, references, source, created_paths, expec
         record['unsafe_paths'].extend(ref_unsafe)
         record['dependents'] = sorted({agent['role'] for agent in agents if ref in agent.get('references', [])})
         records.append(record)
-    for rel in ('.bot-mode/roster.py', '.bot-mode/requests.py'):
+    for rel in TOOL_FILES:
         if (root / rel).is_file():
             records.append(_component(root, cid='tool:' + rel, kind='tool', relroot=rel,
                                       source=source, source_revision=source_revision, version=1, owned=[rel],
@@ -487,7 +488,7 @@ def _current_components(root):
                           'source':None,'source_revision':None,'version':version,'component_schema':1,
                           'identity':{'name':name},'dependents':[],'owned_paths':paths,
                           'unsafe_paths':ref_unsafe,'current':_hashes(root,paths)})
-    for rel in ('.bot-mode/roster.py','.bot-mode/requests.py'):
+    for rel in TOOL_FILES:
         if (root/rel).is_file() and not _linked(root/rel):
             found.append({'id':'tool:'+rel,'kind':'tool','path':rel,'source':None,'source_revision':None,
                           'version':None,'component_schema':1,'identity':{},'owned_paths':[rel],
