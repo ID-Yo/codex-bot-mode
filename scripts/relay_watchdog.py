@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 
 REPO = Path(__file__).resolve().parents[1]
 OFFICE = REPO  # the checkout that owns the relay directory; the relay program refuses a root outside its working directory
-SYNCED = ("outbox.py",)  # requests.py is patched per project until #404 is merged
+SYNCED = ("outbox.py", "requests.py")
 
 
 def sha(path):
@@ -36,23 +36,91 @@ def office_ok(url, timeout=8):
 
 def restart_office():
     """Office does not need the Manager chat: start it hidden (-NoBrowser). Returns (ok, detail)."""
-    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
-    r = subprocess.run(["powershell", "-NoProfile", "-File", str(OFFICE / "scripts" / "start_codex_office.ps1"), "-NoBrowser"],
-                       cwd=str(OFFICE), capture_output=True, text=True, timeout=120, creationflags=flags)
-    return r.returncode == 0, (r.stdout + r.stderr).strip()[-300:]
+    return run_starter(["powershell", "-NoProfile", "-File", str(OFFICE / "scripts" / "start_codex_office.ps1"), "-NoBrowser",
+                        "-Project", str(OFFICE)])
+
+
+def run_starter(command, timeout=120):
+    """Run a launcher that leaves a long-lived child (relay, Office) behind. Its output goes to a file:
+    with pipes the child inherits them and subprocess.run never returns, not even after its timeout,
+    which kept the watchdog lock held and silenced every later pass. Returns (ok, last 300 chars)."""
+    import tempfile
+    with tempfile.TemporaryFile() as out:
+        try:
+            code = subprocess.run(command, cwd=str(OFFICE), stdout=out, stderr=subprocess.STDOUT, timeout=timeout,
+                                  creationflags=hidden_flags()).returncode
+        except subprocess.TimeoutExpired:
+            code = None
+        out.seek(0)
+        tail = out.read().decode("utf-8", "replace").strip()[-300:]
+    return code == 0, tail if code is not None else "launcher timed out; " + tail
 
 
 def hidden_flags():
     return getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
 
 
+def pid_alive(pid):
+    if not isinstance(pid, int):
+        return None
+    if os.name == "nt":
+        r = subprocess.run(["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"], capture_output=True, text=True,
+                           timeout=20, creationflags=hidden_flags())
+        return f'"{pid}"' in r.stdout
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        return False
+    return True
+
+
+def tail(path, lines=8):
+    try:
+        return Path(path).read_text(encoding="utf-8", errors="replace").splitlines()[-lines:]
+    except OSError:
+        return []
+
+
+def record_incident(relay_root, now=None):
+    """Append what is known about a dead relay to relay-incidents.jsonl, once per dead relay process (#401)."""
+    relay_root = Path(relay_root)
+    try:
+        descriptor = json.loads((relay_root / "relay.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        descriptor = {}
+    pid = descriptor.get("pid")
+    log = relay_root.parent / "relay-incidents.jsonl"
+    try:
+        if pid is not None and any(json.loads(l).get("relay_pid") == pid for l in log.read_text(encoding="utf-8").splitlines() if l.strip()):
+            return None
+    except (OSError, ValueError):
+        pass
+    try:
+        alive = json.loads((relay_root / "relay-alive.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        alive = None
+    processes = []
+    if os.name == "nt":
+        r = subprocess.run(["powershell", "-NoProfile", "-Command",
+                            "Get-CimInstance Win32_Process | Where-Object { $_.Name -match '^(Codex|codex|node|pwsh|python)\\.exe$' -and $_.CommandLine -match 'app-server|codex|desktop_relay' } "
+                            "| ForEach-Object { '{0}|{1}|{2}|{3}' -f $_.ProcessId,$_.ParentProcessId,$_.Name,$_.CreationDate.ToString('s') }"],
+                           capture_output=True, text=True, timeout=40, creationflags=hidden_flags())
+        processes = [l.strip() for l in r.stdout.splitlines() if l.strip()][:30]
+    entry = {"at": (now or datetime.now(timezone.utc)).isoformat(), "relay_pid": pid, "relay_pid_alive": pid_alive(pid),
+             "bridge_pid": descriptor.get("bridge_pid"), "bridge_pid_alive": pid_alive(descriptor.get("bridge_pid")),
+             "last_proof_of_life": alive, "parent_alive_at_last_proof": (alive or {}).get("parent_alive"),
+             "stdout_tail": tail(relay_root / "stdout.log"), "stderr_tail": tail(relay_root / "stderr.log"),
+             "codex_processes": processes}
+    with log.open("a", encoding="utf-8") as stream:
+        stream.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    return entry
+
+
 def restart_relay():
     """Only the appointed Manager chat can register the relay (it needs that chat's own app tools pipe)."""
     if not (os.environ.get("CODEX_THREAD_ID") and os.environ.get("CODEX_APP_TOOLS_PIPE_PATH")):
         return False, "not in a Manager chat: cannot register the relay here"
-    r = subprocess.run(["powershell", "-NoProfile", "-File", str(OFFICE / "scripts" / "start_codex_office.ps1"), "-RelayOnly"],
-                       cwd=str(OFFICE), capture_output=True, text=True, timeout=120, creationflags=hidden_flags())
-    return r.returncode == 0, (r.stdout + r.stderr).strip()[-300:]
+    return run_starter(["powershell", "-NoProfile", "-File", str(OFFICE / "scripts" / "start_codex_office.ps1"), "-RelayOnly"])
 
 
 def manager_busy(project):
@@ -102,12 +170,33 @@ def project_report(project):
     return out
 
 
+def registered_projects(office):
+    """Roots of the projects in the Office registry that have an installed outbox."""
+    try:
+        data = json.loads((Path(office) / ".bot-mode" / "local" / "office-project-roots.json").read_text(encoding="utf-8"))
+        roots = [Path(p["root"]) for p in data.get("projects", []) if p.get("root")]
+    except (OSError, ValueError, AttributeError, TypeError):
+        return []
+    return [str(root) for root in roots if (root / ".bot-mode" / "outbox.py").is_file()]
+
+
+def projects_missing_outbox(office):
+    """Roots of registered projects that have the request helper but no outbox: their closed requests report nowhere (#415)."""
+    try:
+        data = json.loads((Path(office) / ".bot-mode" / "local" / "office-project-roots.json").read_text(encoding="utf-8"))
+        roots = [Path(p["root"]) for p in data.get("projects", []) if p.get("root")]
+    except (OSError, ValueError, AttributeError, TypeError):
+        return []
+    return [str(r) for r in roots if (r / ".bot-mode" / "requests.py").is_file() and not (r / ".bot-mode" / "outbox.py").is_file()]
+
+
 def main(argv=None):
     import argparse
     ap = argparse.ArgumentParser(description="Zero-token health check of the Desktop relay and the project outboxes (#401).")
     ap.add_argument("--office-root", default=str(REPO), help="Checkout that owns the relay (default: this one)")
     ap.add_argument("--relay-root", default=None)
     ap.add_argument("--project", action="append", default=[], help="Project root with an outbox (repeatable)")
+    ap.add_argument("--all-projects", action="store_true", help="Also check every registered project that has an outbox")
     ap.add_argument("--restart", action="store_true", help="Restart the relay when it is down (works only in the Manager chat)")
     ap.add_argument("--health-file", default=None)
     ap.add_argument("--office-url", default="http://localhost:24242")
@@ -118,8 +207,15 @@ def main(argv=None):
     OFFICE = Path(a.office_root).resolve()
     a.relay_root = a.relay_root or str(OFFICE / ".bot-mode" / "desktop-relay")
     a.health_file = a.health_file or str(OFFICE / ".bot-mode" / "relay-health.json")
+    if a.all_projects:
+        a.project = list(dict.fromkeys(a.project + registered_projects(OFFICE)))
 
     report = {"at": datetime.now(timezone.utc).isoformat(), "relay_ok": relay_ok(a.relay_root), "problems": []}
+    if not report["relay_ok"]:
+        try:
+            record_incident(a.relay_root)
+        except Exception:
+            pass
     if not report["relay_ok"] and a.restart:
         try:
             ok, detail = restart_relay()
@@ -139,6 +235,9 @@ def main(argv=None):
         report["office_ok"] = ok and office_ok(a.office_url)
     if not report["office_ok"]:
         report["problems"].append("Codex Office does not answer on " + a.office_url)
+    for root in projects_missing_outbox(OFFICE):
+        report["problems"].append(f"{Path(root).name}: .bot-mode/requests.py is installed but .bot-mode/outbox.py is missing, "
+                                  "so completion reports are not delivered; install outbox.py and outbox-config.json (#415)")
     report["projects"] = []
     for project in a.project:
         try:

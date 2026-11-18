@@ -27,6 +27,7 @@ import socket
 import subprocess
 import sys
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
@@ -157,8 +158,16 @@ class RelayClient:
             }
         )
         opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoRedirect)
-        with opener.open(req, timeout=timeout) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
+        try:
+            resp = opener.open(req, timeout=timeout)
+        except urllib.error.HTTPError as error:
+            try:
+                detail = json.loads(error.read(2000).decode("utf-8")).get("error", "")
+            except (OSError, ValueError, AttributeError):
+                detail = ""
+            raise RuntimeError(f"HTTP Error {error.code}: {error.reason}" + (f" ({str(detail)[:200]})" if detail else "")) from None
+        with resp as response:
+            data = json.loads(response.read().decode("utf-8"))
             if "error" in data:
                 raise RuntimeError(data["error"])
             return data.get("result", {})
@@ -251,9 +260,13 @@ class OutboxDB:
     def pending_count(self):
         return self.conn.execute("SELECT COUNT(*) FROM outbox WHERE state = 'pending'").fetchone()[0]
 
-    def next_pending(self):
-        """The next pending row; an ambiguous earlier row may be overtaken."""
-        row = self.conn.execute("SELECT * FROM outbox WHERE state = 'pending' ORDER BY rowid ASC LIMIT 1").fetchone()
+    def next_pending(self, exclude_targets=()):
+        """The next pending row; an ambiguous earlier row may be overtaken. Rows for the excluded targets are
+        skipped, so a busy recipient cannot hold up messages to others (order within one target is unchanged)."""
+        marks = ",".join("?" * len(exclude_targets))
+        row = self.conn.execute(
+            "SELECT * FROM outbox WHERE state = 'pending'" + (f" AND target_bot NOT IN ({marks})" if marks else "") +
+            " ORDER BY rowid ASC LIMIT 1", tuple(exclude_targets)).fetchone()
         return dict(row) if row else None
 
     def mark_delivered(self, msg_id):
@@ -373,10 +386,21 @@ def queue_status(project_root):
 def is_thread_busy(history):
     if not isinstance(history, dict):
         return True
-    thread_info = history.get("thread", {})
-    status_type = thread_info.get("status", {}).get("type")
+    thread_info = history.get("thread")
+    status = thread_info.get("status") if isinstance(thread_info, dict) else None
+    status_type = status.get("type") if isinstance(status, dict) else None
+    if not isinstance(status_type, str):
+        return True  # an unreadable or non-text status never reaches the status checks below
     turns = history.get("turns", [])
-    turn_in_prog = bool(turns and turns[0].get("status") == "inProgress")
+    newest = turns[0] if isinstance(turns, list) and turns else None
+    newest_status = newest.get("status") if isinstance(newest, dict) else None
+    turn_in_prog = newest_status == "inProgress"
+    if status_type == "notLoaded":
+        # A chat that Desktop has not loaded has no running turn. It is deliverable only when its history is readable:
+        # no turns at all, or a newest turn with a known finished status. Anything else fails closed (#415).
+        if "turns" not in history or not isinstance(turns, list):
+            return True
+        return bool(turns) and not (isinstance(newest_status, str) and newest_status in ("completed", "interrupted", "failed"))
     if status_type not in {"active", "idle"}:
         return True
     return status_type == "active" or turn_in_prog
@@ -510,14 +534,18 @@ def pump_outbox(project_root, max_wait_sec=600, poll_interval=3.0, turn_timeout=
             client = None
             reconciled = False
             resolved = {}
+            busy_until = {}  # target -> time until which it is not asked again; the queue moves on to other targets
             relay_wait = poll_interval
             warned = False
             last_beat = 0.0
             start_time = time.time()
             while time.time() - start_time < max_wait_sec:
                 db.expire_stale(ttl_hours)
-                item = db.next_pending()
-                if not item and (reconciled or not db.held_by()):
+                now = time.time()
+                busy_until = {key: until for key, until in busy_until.items() if until > now}
+                any_pending = db.next_pending()
+                item = db.next_pending(busy_until) if busy_until else any_pending
+                if not any_pending and (reconciled or not db.held_by()):
                     break  # Nothing pending
 
                 if time.time() - last_beat >= HEARTBEAT_EVERY:
@@ -546,6 +574,9 @@ def pump_outbox(project_root, max_wait_sec=600, poll_interval=3.0, turn_timeout=
                     reconcile_ambiguous(db, client)
                     reconciled = True
                 if not item:
+                    if any_pending:
+                        time.sleep(poll_interval)  # every pending recipient is busy: ask again shortly
+                        continue
                     break
 
                 # Resolve logical roles at delivery time, including legacy rows with a cached ID.
@@ -571,8 +602,8 @@ def pump_outbox(project_root, max_wait_sec=600, poll_interval=3.0, turn_timeout=
                 relay_wait = poll_interval
 
                 if is_thread_busy(history):
-                    # Destination is busy; wait for idle
-                    time.sleep(poll_interval)
+                    # Destination is busy: set it aside for a moment and deliver to the others meanwhile.
+                    busy_until[key] = time.time() + poll_interval
                     continue
 
                 # Thread is idle: resolve the target afresh (a replaced Manager must win), then deliver.
@@ -745,6 +776,17 @@ def main(argv=None):
         if more:
             spawn_background_pump(project_root)
         return 0
+
+
+def install_cli(project, relay_root=None):
+    """Install this file as <project>/.bot-mode/outbox.py and, when missing, the relay config next to it (#415)."""
+    target = Path(project) / ".bot-mode" / "outbox.py"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(Path(__file__).read_bytes())
+    config = target.with_name("outbox-config.json")
+    if relay_root and not config.exists():
+        config.write_text(json.dumps({"relay_root": Path(relay_root).as_posix()}) + "\n", encoding="utf-8")
+    return target
 
 
 if __name__ == "__main__":

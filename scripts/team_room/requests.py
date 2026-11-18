@@ -281,6 +281,11 @@ def enqueue_outbox_report_after_closeout(project, item, by, outcome, link=None, 
 
     Any error or timeout becomes a warning with the command to queue the report by hand; the caller still prints the
     closed item and exits 0, so the agent does not repeat a closeout that already happened."""
+    if _outbox_send_args(project, item, by, outcome, link, successor) is None:
+        print(f"warning: request {item.get('id')} is closed, but this project has no .bot-mode/outbox.py, so no report was "
+              "queued to the Manager. Do not repeat the closeout; send the report to the requester by hand and ask the "
+              "Manager or owner to install the outbox (outbox.py and outbox-config.json).", file=sys.stderr)
+        return False
     try:
         return enqueue_outbox_report(project, item, by, outcome, link, successor)
     except Exception as error:  # includes subprocess.TimeoutExpired and OSError

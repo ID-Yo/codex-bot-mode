@@ -8,14 +8,14 @@ Source files: `scripts/team_room/outbox.py` (queue, pump and CLI) and `scripts/t
 
 1. `requests.py reply` or `requests.py verdict` closes the request in the ledger first. After that it queues one short report (request id, who closed it, outcome, task summary, evidence link, next owner) with `.bot-mode/outbox.py send` and starts a background pump.
 2. The queue is a SQLite file, `.bot-mode/outbox/queue.sqlite`, with the rows in arrival order.
-3. The pump reads the Manager thread through the local Desktop Relay. It sends the next report only when the thread is idle, then waits until that message shows up as a new Manager turn (a new turn id, or the thread reported active) and until that turn has finished, before it considers the next report. Reports from several agents therefore arrive as separate Manager turns and never as steers inside a running turn.
+3. The pump reads the Manager thread through the local Desktop Relay. It sends the next report only when the thread is idle (a chat that Desktop has not loaded, status `notLoaded`, counts as idle when its newest turn is not in progress), then waits until that message shows up as a new Manager turn (a new turn id, or the thread reported active) and until that turn has finished, before it considers the next report. Reports from several agents therefore arrive as separate Manager turns and never as steers inside a running turn.
 4. Anything the pump cannot prove is treated as not safe to send: an unknown thread status, a read error (it backs off), or no new Manager turn within `--turn-timeout` seconds (default 120). In the last case the report counts as delivered, the pump stops with exit code 4 and leaves the remaining rows pending; run the pump again after looking at the Manager thread.
 
 The target is always the project Manager, resolved from `roster.json` (or `roster.py links`) when the pump needs it, so a replaced Manager chat is picked up at the next delivery. A report is not routed to the requester of the request: the ledger row and its reply link stay the record for any other requester, and the Manager is the single reader of the queue.
 
 ## A closed request is never reopened by the outbox
 
-If queueing fails after the ledger was closed (the outbox command exits non-zero, times out or cannot start), `reply` and `verdict` still print the closed request and exit 0. They write a warning to stderr that starts with `warning: request <id> is closed` and contains the exact `outbox.py send` command to queue the report by hand. Do not repeat the closeout (for `verdict` that would post a second comment). A repeated `reply` with the same outcome is harmless: it keeps the ledger row and queues the report again under the same dedupe key. A project without `.bot-mode/outbox.py` queues nothing and prints no warning.
+If queueing fails after the ledger was closed (the outbox command exits non-zero, times out or cannot start), `reply` and `verdict` still print the closed request and exit 0. They write a warning to stderr that starts with `warning: request <id> is closed` and contains the exact `outbox.py send` command to queue the report by hand. Do not repeat the closeout (for `verdict` that would post a second comment). A repeated `reply` with the same outcome is harmless: it keeps the ledger row and queues the report again under the same dedupe key. A project without `.bot-mode/outbox.py` queues nothing; `reply` and `verdict` then print `warning: request <id> is closed, but this project has no .bot-mode/outbox.py` (the closed request is never reopened). A task that was assigned without a ledger entry never reaches `reply`; the agent queues its report with `outbox.py send --to <requester or manager> --by <bot> --text ...` (shared BASE, 'Reporting back and delivery').
 
 ## States and rules
 
@@ -46,7 +46,7 @@ python -B .bot-mode/outbox.py --project <project> resolve <id> --as retry       
 
 ## Install and limits
 
-- Installing `outbox.py` and the updated `requests.py` into a project's `.bot-mode/`, and the profile text that tells agents to rely on the outbox, belong to the guarded release procedure after Review and QA. They are not part of the source change that introduced this document.
+- A new project launch (`install-team`, Director or agent install) installs `.bot-mode/outbox.py` and, when missing, `.bot-mode/outbox-config.json` (`relay_root` of the CBM checkout) next to `roster.py` and `requests.py`, and records all of them as tool components in the installation inventory (#415). Existing projects receive the files and the updated BASE through the guarded release procedure after Review and QA; the watchdog reports a registered project that has `requests.py` but no `outbox.py`.
 - Not verified here: a live relay, the real Manager thread, and an installed project. The tests use a fake relay that registers and finishes turns after a number of reads.
 - The Agent Monitor outbox that forwards Monitor reports is a different mechanism (`docs/operations/agent-monitor.md`).
 

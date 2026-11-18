@@ -9,7 +9,7 @@ Office read the same data.
 |---|---|---|
 | `.bot-mode/roster.json` | Project name, teams (sidebar section, room), participants (bot, role, team, workspace, status) | Yes |
 | `.bot-mode/local/bindings.json` | Each participant's current Codex chat and the history of replaced chats | No |
-| `.bot-mode/roster.py`, `.bot-mode/requests.py` | Commands | Yes |
+| `.bot-mode/roster.py`, `.bot-mode/requests.py`, `.bot-mode/outbox.py`, `.bot-mode/outbox-config.json` | Commands | Yes |
 | `.bot-mode/local/requests.json` | Request ledger | No |
 | `.bot-mode/.gitignore` | Keeps `local/`, Office and relay data, locks and derived summaries out of Git | Yes |
 

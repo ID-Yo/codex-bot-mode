@@ -186,6 +186,54 @@ class TeamTests(unittest.TestCase):
         self.assertEqual(list(self.project.iterdir()), [])
         self.assertIsNone(plan['director_proposal'])
 
+    def with_relay_dir(self):
+        self.relay_dir = Path(self.tmp.name) / 'office-relay'
+        self.relay_dir.mkdir()
+        previous = os.environ.get('CODEX_RELAY_ROOT')
+        os.environ['CODEX_RELAY_ROOT'] = str(self.relay_dir)
+        self.addCleanup(lambda: os.environ.__setitem__('CODEX_RELAY_ROOT', previous) if previous is not None
+                        else os.environ.pop('CODEX_RELAY_ROOT', None))
+
+    def test_a_failed_install_removes_the_outbox_files_it_created(self):
+        from unittest.mock import patch
+        self.with_relay_dir()
+        tools = self.project / '.bot-mode'
+        for target, failure in ((teams.installation_inventory, ('record_new_install', OSError('synthetic inventory failure'))),
+                                (teams.roster, ('save', RuntimeError('synthetic roster failure')))):
+            plan = teams.plan_team(self.project, 'development', team_answers={'tracking_mode': 'local'})
+            with patch.object(target, failure[0], side_effect=failure[1]):
+                with self.assertRaises(type(failure[1])):
+                    teams.install(plan)
+            self.assertFalse((tools / 'outbox.py').exists(), failure[0])
+            self.assertFalse((tools / 'outbox-config.json').exists(), failure[0])
+
+    def test_a_failed_install_keeps_an_existing_outbox_config(self):
+        from unittest.mock import patch
+        self.with_relay_dir()
+        tools = self.project / '.bot-mode'
+        tools.mkdir()
+        (tools / 'outbox-config.json').write_text('{"relay_root": "kept"}', encoding='utf-8')
+        plan = teams.plan_team(self.project, 'development', team_answers={'tracking_mode': 'local'})
+        with patch.object(teams.roster, 'save', side_effect=RuntimeError('synthetic roster failure')):
+            with self.assertRaises(RuntimeError):
+                teams.install(plan)
+        self.assertEqual(json.loads((tools / 'outbox-config.json').read_text(encoding='utf-8')), {'relay_root': 'kept'})
+
+    def test_install_team_installs_the_outbox_with_its_config_and_inventory(self):
+        self.with_relay_dir()
+        self.assertEqual(self.run_cli('install-team', 'development', '--tracking-mode', 'local', '--project', str(self.project),
+                                      '--approval', 'once', '--confirm'), 0)
+        tools = self.project / '.bot-mode'
+        self.assertEqual((tools / 'outbox.py').read_bytes(), (ROOT / 'scripts/team_room/outbox.py').read_bytes())
+        config = json.loads((tools / 'outbox-config.json').read_text(encoding='utf-8'))
+        self.assertEqual(config['relay_root'], self.relay_dir.as_posix())
+        components = json.loads((tools / 'local/installations.json').read_text(encoding='utf-8'))['components']
+        ids = {c['id'] for c in components}
+        self.assertTrue({'tool:.bot-mode/outbox.py', 'tool:.bot-mode/outbox-config.json'} <= ids)
+        status = subprocess.run([sys.executable, '-B', str(tools / 'outbox.py'), '--project', str(self.project), 'status'],
+                                capture_output=True, text=True)
+        self.assertEqual(json.loads(status.stdout)['pending'], 0, status.stderr)
+
     def test_install_team_then_second_team_and_director(self):
         self.assertEqual(self.run_cli('install-team', 'development', '--tracking-mode', 'local', '--project', str(self.project),
                                       '--approval', 'once'), 2)  # no --confirm
