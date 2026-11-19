@@ -55,6 +55,8 @@ python -B .bot-mode/outbox.py --project <project> resolve <id> --as retry       
 
 The Desktop relay is a critical component: without it nothing is delivered. It can only be registered from the appointed Manager chat (it needs that chat's own app tools pipe), so a scheduled task cannot restart it. The design is therefore detect-early, heal where possible and never fail silently.
 
+**Recipients.** The relay sends a report only to a chat that is appointed: the relay project's own roster, the registry Manager of each registered project, and every other chat bound in a registered project's roster (a Director, a sub-Manager, a worker; #417). A thread that is bound nowhere is refused with HTTP 400 and its row is quarantined as ambiguous. Waiting on a chat and reading its content keep the stricter rules (appointed chats only; other bound chats are readable as thread status and turn metadata).
+
 - **Pump waits.** While the relay is down the pump keeps running, re-reads the relay descriptor with a capped backoff (a restarted relay has a new port and token) and writes `.bot-mode/outbox/pump.heartbeat.json`.
 - **TTL.** A pending row older than 12 h becomes `expired` (`outbox.py list --state expired`).
 - **Status.** `outbox.py status [--heal]` prints JSON and exits 5 when work waits without a reachable relay or a running pump, or when an ambiguous row needs attention. `--heal` starts a missing pump, including to reconcile ambiguous rows.
