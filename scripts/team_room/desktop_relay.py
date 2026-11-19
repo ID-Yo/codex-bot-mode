@@ -27,7 +27,7 @@ TOOLS = {'list_threads', 'read_thread', 'wait_threads', 'send_message_to_thread'
 
 
 REGISTRY_TARGETS_TTL = 60.0
-_REGISTRY_TARGETS = {'key': None, 'at': 0.0, 'chats': frozenset(), 'readable': frozenset()}
+_REGISTRY_TARGETS = {'key': None, 'at': 0.0, 'chats': frozenset(), 'readable': frozenset(), 'sendable': frozenset()}
 _REGISTRY_TARGETS_LOCK = threading.Lock()
 
 
@@ -88,7 +88,11 @@ def _registry_scan():
                 chats.add(res['thread_id'])
         # Every chat bound in a registry project's roster, from the same overview (containment checks included).
         readable = {b['thread_id'] for b in overview.get('bots', []) if isinstance(b.get('thread_id'), str) and b['thread_id']}
-        _REGISTRY_TARGETS.update(key=key, at=time.monotonic(), chats=frozenset(chats), readable=frozenset(readable | chats))
+        # Chats a report may be sent to: bound in a project roster. Standalone registry entries have no project.
+        sendable = {b['thread_id'] for b in overview.get('bots', [])
+                    if b.get('project_id') and isinstance(b.get('thread_id'), str) and b['thread_id']}
+        _REGISTRY_TARGETS.update(key=key, at=time.monotonic(), chats=frozenset(chats), readable=frozenset(readable | chats),
+                                 sendable=frozenset(sendable | chats))
         return _REGISTRY_TARGETS['chats'], _REGISTRY_TARGETS['readable']
 
 
@@ -111,6 +115,21 @@ def targets():
 READ_ONLY_TURN_LIMIT = 10
 
 
+def sendable_targets():
+    """Chats bound in a registered project's roster, which may receive a report in addition to targets() (#417).
+
+    Standalone registry entries (no project roster) are not included. Waiting and reading keep their own rules."""
+    try:
+        from . import registry
+        if not registry.registry_path(project.PROJECT):
+            return frozenset()
+        _registry_scan()
+        with _REGISTRY_TARGETS_LOCK:
+            return _REGISTRY_TARGETS['sendable']
+    except Exception:
+        return frozenset()
+
+
 def read_only_targets():
     """Chats that read_thread may read in addition to targets(): every chat bound in a registry project's roster.
 
@@ -130,7 +149,9 @@ def validate(name, arguments):
     thread = arguments.get('threadId')
     if name == 'read_thread' and thread not in allowed and thread not in read_only_targets():
         raise ValueError('Unappointed Desktop recipient refused')
-    if name == 'send_message_to_thread' and thread not in allowed:
+    if name == 'send_message_to_thread' and thread not in allowed and thread not in sendable_targets():
+        # Every chat bound in a registry project's roster may receive a report (owner decision, #417): directors and
+        # sub-managers are not "the" registry Manager. Unbound threads stay refused; waiting and reading keep their rules.
         raise ValueError('Unappointed Desktop recipient refused')
     if name == 'wait_threads' and any(t.get('threadId') not in allowed or t.get('hostId', 'local') != 'local' for t in arguments.get('targets', [])):
         raise ValueError('Unappointed Desktop recipient refused')
@@ -611,6 +632,60 @@ def _pid_alive(pid):
     return True
 
 
+def start_diagnostics(root, bridge, say=print, interval=60.0, log_every=900.0, clock=time.time):
+    """Leave evidence for the next relay death (#401). A process ended with TerminateProcess leaves no stop line, so:
+    relay-alive.json is rewritten every interval (last proof of life, parent and bridge state), a log line is written when
+    the parent or the bridge changes state and every log_every seconds, fatal errors and Windows console events are
+    logged, and faulthandler writes native crashes to stderr. The watchdog reads relay-alive.json when the relay is down."""
+    import faulthandler, sys
+    try: faulthandler.enable()
+    except (RuntimeError, ValueError, OSError): pass
+    def log_exception(kind, value, trace):
+        say('%s Desktop relay fatal %s: %s' % (datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'), kind, safe_error(repr(value))[:300]), flush=True)
+    previous_hook = sys.excepthook
+    def excepthook(kind, value, trace):
+        log_exception(kind.__name__, value, trace); previous_hook(kind, value, trace)
+    sys.excepthook = excepthook
+    threading.excepthook = lambda args: log_exception('thread ' + (args.thread.name if args.thread else '?'), args.exc_value, args.exc_traceback)
+    if os.name == 'nt':
+        try:
+            import ctypes
+            handler_type = ctypes.WINFUNCTYPE(ctypes.c_int, ctypes.c_uint)
+            names = {0: 'CTRL_C', 1: 'CTRL_BREAK', 2: 'CLOSE', 5: 'LOGOFF', 6: 'SHUTDOWN'}
+            def on_console(event):
+                say('%s Desktop relay console event %s' % (datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'), names.get(event, event)), flush=True)
+                return 0
+            diagnostics_handlers.append(handler_type(on_console))
+            ctypes.windll.kernel32.SetConsoleCtrlHandler(diagnostics_handlers[-1], True)
+        except (OSError, AttributeError): pass
+    started, parent = clock(), os.getppid()
+    def snapshot():
+        bridge_pid = getattr(bridge, 'pid', None)
+        return {'at': datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'), 'pid': os.getpid(), 'parent_pid': parent,
+                'parent_alive': _pid_alive(parent), 'bridge_pid': bridge_pid,
+                'bridge_alive': _pid_alive(bridge_pid) if isinstance(bridge_pid, int) else None,
+                'uptime_seconds': int(clock() - started)}
+    def loop():
+        last_state, last_log = None, 0.0
+        while True:
+            try:
+                data = snapshot()
+                temporary = root / 'relay-alive.json.tmp'
+                temporary.write_text(json.dumps(data), encoding='utf-8'); temporary.replace(root / 'relay-alive.json')
+                state = (data['parent_alive'], data['bridge_alive'])
+                if state != last_state or clock() - last_log >= log_every:
+                    say('%s Desktop relay alive: parent %s %s, bridge %s %s, up %d s' % (
+                        data['at'], data['parent_pid'], 'alive' if data['parent_alive'] else 'GONE', data['bridge_pid'],
+                        {True: 'alive', False: 'GONE', None: 'unknown'}[data['bridge_alive']], data['uptime_seconds']), flush=True)
+                    last_state, last_log = state, clock()
+            except OSError: pass
+            time.sleep(interval)
+    threading.Thread(target=loop, daemon=True, name='relay-diagnostics').start()
+
+
+diagnostics_handlers = []
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--codex-path', type=Path)
@@ -636,6 +711,7 @@ def main():
         bridge.call('list_threads', {'limit':1})
         server = create_relay(bridge, root)
         trace_lifecycle()
+        start_diagnostics(root, bridge)
         print('Desktop relay ready on 127.0.0.1:24243.', flush=True)
         worker = threading.Thread(target=server.serve_forever, daemon=True)
         worker.start()
