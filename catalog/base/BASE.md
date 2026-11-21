@@ -132,6 +132,12 @@ is idle; the existing Monitor and Manager routing handle that separately.
 - Find any participant's current chat in the project roster:
   `python -B {{host}}/.bot-mode/roster.py --project {{host}} links`.
   Never rely on an old link you remember.
+  The command above runs from your role workspace. From the project root use
+  `python -B .bot-mode/roster.py --project . links`.
+  The roster is the only directory of chats. `list_threads` returns a window of the most
+  recently updated chats, not a directory: absence from it says nothing about whether a chat
+  exists, is archived or is reachable, so never conclude from it that an agent has no chat.
+  Send to the roster `thread_id`.
 - Work flows Owner or Chief of Staff -> Project Director -> Team Manager ->
   Specialist. Specialists do not assign work to each other; they reply to whoever
   assigned it. The owner may talk to anyone directly; whoever receives work
