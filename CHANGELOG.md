@@ -10,6 +10,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/). Versions follow [SemVer
 - The Desktop relay now accepts outbox reports for every chat bound in a registered project's roster (Directors, sub-Managers, workers), not only the one registry Manager; unbound threads and standalone registry entries are still refused, and waiting and reading keep their stricter rules. The relay also writes a proof-of-life file for the watchdog.
 
 ### Added
+- BASE "Working with others": the roster is the only directory of chats and `list_threads` is only a window of recently updated chats, so absence from it proves nothing about a chat; both roster command forms (role workspace and project root) are documented. Existing installs receive it with the next profile update.
 - BASE rules for cross-chat assignments: the message names the requester chat, thread ID and direct reply channel, and a report counts as delivered only after a verified send; a missing or ambiguous address is never guessed.
 - Zero-token handoff outbox: an agent queues its report to the project Manager with one local command and ends its turn; a local pump delivers the reports one at a time, quarantines ambiguous deliveries, expires old rows and reports health with `outbox.py status [--heal]`.
 - Relay watchdog (`scripts/relay_watchdog.py`): zero-token check of the Desktop relay, project outboxes and Office, with optional restart, a health file and a notification when work waits.
