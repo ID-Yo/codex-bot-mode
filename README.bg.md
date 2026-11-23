@@ -36,7 +36,7 @@
 
 ## Бърз старт
 
-Изисквания: Codex Desktop (тествано на Windows), Python 3.10+, Git.
+Изисквания: Codex Desktop (тествано на Windows), Python 3.12+, Git.
 
 1. Клонирайте repo-то.
 2. `python -B scripts/build_plugin.py`, после в Codex: **Plugins > Personal > Codex Bot Mode > Install**.

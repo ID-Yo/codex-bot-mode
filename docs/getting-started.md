@@ -7,10 +7,20 @@ project folder.
 ## 1. Check requirements
 
 ```text
-python --version        # 3.10 or newer
+python --version        # 3.12 or newer
 git --version
 gh auth status          # optional, needed for GitHub issues and catalog fetches
 ```
+
+Then run the doctor. It checks everything agents need to report back to their Manager and says what to do for each problem:
+
+```text
+python -B scripts/doctor.py          # read-only: Python, Git, Codex Desktop, relay, supervisor task, project outboxes and relay routes
+python -B scripts/doctor.py --fix    # also installs the supervisor task, restarts the relay, installs a MISSING outbox (an installed one is never overwritten)
+python -B scripts/doctor.py --project <project> --canary   # also delivers one real test message to that project's Manager (it wakes the Manager)
+```
+
+Expected on a healthy setup: every line `[ ok ]` and `OK: everything needed works.` Warnings are allowed, `[FAIL]` lines carry a `fix:` command. The plain check changes nothing: it reads the queue file read-only and never starts a pump. `--canary` always names its project; `--canary-all-projects` opts in to one test message per checked project.
 
 ## 2. Install the plugin
 
@@ -39,6 +49,14 @@ python -B <project>/.bot-mode/roster.py --project <project> links
 ```
 
 Expected: one entry per agent with a `codex://threads/...` link.
+
+Check that the agents can report back to the Manager (run once after the team exists, and again after any problem):
+
+```text
+python -B scripts/doctor.py --fix --project <project> --canary
+```
+
+Expected: `<project>: canary: delivered to the Manager in <n> s` and a short test message in the Manager chat.
 
 Without the plugin, the same launch works from the command line:
 
@@ -76,5 +94,6 @@ Open http://localhost:24242: team rooms, personal chats with each agent, setting
 | `Team ... already exists` | Choose another team name or use `add-agent` |
 | `Workspace already exists` | A folder is in the way; nothing was overwritten. Rename or remove it |
 | Plugin not listed | Rerun `build_plugin.py`, restart Codex |
+| Agents finish but the Manager hears nothing | Run `python -B scripts/doctor.py --fix`; the supervisor task (`scripts/supervisor_task.ps1`) restarts the relay and the outbox pumps by itself every 2 minutes |
 | Agent did not move to its sidebar section | Ask it to place itself again (BASE.md, Sidebar) or move it by hand |
 | Office will not start | Read `<project>/.bot-mode/team-room-v1/office/office.stderr.log` |
