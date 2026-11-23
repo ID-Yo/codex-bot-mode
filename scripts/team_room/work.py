@@ -12,6 +12,7 @@ import time
 import uuid
 
 from . import roster
+from . import desktop_pipe
 from .transport import safe_error
 
 
@@ -65,19 +66,52 @@ def digest(data):
 
 class DesktopBridge:
     """Use the unchanged packaged MCP server with naturally inherited caller context."""
-    def __init__(self, node, server):
-        self.origin = os.environ.get('CODEX_THREAD_ID')
-        if self.origin != MANAGER or not os.environ.get('CODEX_APP_TOOLS_PIPE_PATH'):
-            raise ValueError('Run task host must be launched by the appointed Manager executor')
+    def __init__(self, node, server, standalone=False):
+        self.standalone = standalone
+        self.pipe = None
+        if standalone:
+            # No Manager chat: the Manager is the roster's lead and the tool pipe is found by name (#421).
+            if not MANAGER or MANAGER.startswith('00000000-'):
+                raise ValueError('No appointed Manager chat in the roster')
+            self.origin = MANAGER
+        else:
+            self.origin = os.environ.get('CODEX_THREAD_ID')
+            if self.origin != MANAGER or not os.environ.get('CODEX_APP_TOOLS_PIPE_PATH'):
+                raise ValueError('Run task host must be launched by the appointed Manager executor')
         self.lock = threading.RLock()
         self.command = [str(node), str(server)]
         self._start()
 
     def _start(self):
+        if not self.standalone:
+            return self._launch(None)
+        # A standalone relay finds the Desktop tool pipe again on every start, so a Desktop restart that changed
+        # its name heals on the next reconnect. Each candidate must answer a real read call before it is used.
+        candidates = desktop_pipe.tool_pipes()
+        inherited = os.environ.get('CODEX_APP_TOOLS_PIPE_PATH')
+        if inherited in candidates: candidates.insert(0, candidates.pop(candidates.index(inherited)))
+        if not candidates:
+            raise ValueError('Codex Desktop tool pipe not found; is Codex Desktop running?')
+        failure = None
+        for pipe in candidates:
+            environment = dict(os.environ, CODEX_APP_TOOLS_PIPE_PATH=pipe)
+            environment.pop('CODEX_THREAD_ID', None)
+            try:
+                self._launch(environment)
+                self.call('list_threads', {'limit': 1})
+                self.pipe = pipe
+                return
+            except Exception as error:
+                failure = error
+                try: self.close()
+                except Exception: pass
+        raise failure
+
+    def _launch(self, environment):
         responses = self.responses = queue.Queue()
         self.next_id = 0
         self.process = subprocess.Popen(self.command,stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True,encoding='utf-8',errors='replace',
+            stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True,encoding='utf-8',errors='replace',env=environment,
             creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0)
         self.pid = self.process.pid
         self.stderr_tail = tail = collections.deque(maxlen=8)  # the last lines say why a bridge stopped answering

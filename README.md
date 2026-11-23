@@ -67,7 +67,7 @@ Each role is also available on its own. See [catalog/](catalog/README.md).
 
 **New computer, or moving an existing setup?** Follow [Set up on a new computer](docs/new-machine.md) first: one ordered guide (Chief of Staff, project teams, Office, relay, Monitor), for a fresh setup and for a move.
 
-Requirements: Codex Desktop (Windows tested; other platforms untested), Python 3.10+ (standard library only), Git. Optional: GitHub CLI, Chrome or Edge for Office voice features.
+Requirements: Codex Desktop (Windows tested; other platforms untested), Python 3.12+ (standard library only), Git. Optional: GitHub CLI, Chrome or Edge for Office voice features.
 
 1. Clone this repository.
 2. Build and register the plugin: `python -B scripts/build_plugin.py`. In Codex open **Plugins > Personal** and install **Codex Bot Mode**.

@@ -4,6 +4,7 @@ import time
 """Keep naturally inherited Desktop context outside the Office host lifecycle."""
 import argparse
 import atexit
+import hashlib
 import hmac
 from http.server import BaseHTTPRequestHandler
 import json
@@ -17,7 +18,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
 from urllib.request import Request, build_opener, ProxyHandler
 
-from . import project, work
+from . import desktop_pipe, project, work
 from .work import DesktopBridge, TooLarge, Uncertain
 from .transport import safe_error
 from .relay_url import relay_base_url
@@ -470,7 +471,8 @@ def create_relay(bridge, root, port=24243):
     server.daemon_threads = True
     server.bridge_token = token
     descriptor = {'url':f'http://127.0.0.1:{server.server_port}', 'token':token,
-                  'origin':work.MANAGER, 'pid':os.getpid(), 'bridge_pid':getattr(bridge, 'pid', None)}
+                  'origin':work.MANAGER, 'pid':os.getpid(), 'bridge_pid':getattr(bridge, 'pid', None),
+                  'standalone':bool(getattr(bridge, 'standalone', False))}
     path = root / 'relay.json'
     temporary = root / 'relay.tmp'
     temporary.write_text(json.dumps(descriptor), encoding='utf-8')
@@ -517,7 +519,8 @@ class RelayBridge(DesktopBridge):
 
 RELAY_REMEDY = ("restart the Desktop relay from the appointed Manager chat: run "
                 "'powershell -File scripts/start_codex_office.ps1 -RelayOnly' (it replaces an unhealthy relay and works while "
-                "Office is running); see docs/operations/team-room.md, 'Restart the Desktop relay'")
+                "Office is running); the supervisor task also restarts it without the Manager chat "
+                "(python -B scripts/relay_watchdog.py --restart); see docs/operations/team-room.md, 'Restart the Desktop relay'")
 RECHECKS = 3
 RECHECK_GAP = 5.0
 
@@ -664,6 +667,8 @@ def start_diagnostics(root, bridge, say=print, interval=60.0, log_every=900.0, c
         return {'at': datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'), 'pid': os.getpid(), 'parent_pid': parent,
                 'parent_alive': _pid_alive(parent), 'bridge_pid': bridge_pid,
                 'bridge_alive': _pid_alive(bridge_pid) if isinstance(bridge_pid, int) else None,
+                'standalone': bool(getattr(bridge, 'standalone', False)),
+                'pipe': _fingerprint(getattr(bridge, 'pipe', None)),
                 'uptime_seconds': int(clock() - started)}
     def loop():
         last_state, last_log = None, 0.0
@@ -686,11 +691,31 @@ def start_diagnostics(root, bridge, say=print, interval=60.0, log_every=900.0, c
 diagnostics_handlers = []
 
 
+def open_bridge(codex_path, standalone, parser):
+    """Start the MCP bridge. A standalone start that cannot reach Desktop (closed, pipe refused, tool error) ends with an
+    actionable message and exit code 2 so the supervisor retries; the Manager-chat start keeps raising as before."""
+    try:
+        codex = codex_path or desktop_pipe.find_codex_binary()
+        resources = Path(codex).resolve(strict=True).parent
+        return DesktopBridge(resources / 'cua_node/bin/node.exe', resources / 'plugins/openai-bundled/plugins/codex-app-tools/server.mjs',
+                             standalone=standalone)
+    except Exception as error:
+        if not standalone: raise
+        parser.exit(2, 'Desktop relay cannot start yet (%s): %s\n' % (type(error).__name__, safe_error(str(error))[:300]))
+
+
+def _fingerprint(pipe):
+    """Short hash of the Desktop pipe name: shows in the log when it changed, without printing the name."""
+    return hashlib.sha256(pipe.encode('utf-8')).hexdigest()[:10] if pipe else None
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--codex-path', type=Path)
     parser.add_argument('--root', type=Path, required=True)
     parser.add_argument('--probe', action='store_true', help='Check the registered relay without executor context')
+    parser.add_argument('--standalone', action='store_true',
+                        help='Start without the Manager chat: Manager from the roster, Desktop pipe found by name, never gives up')
     args = parser.parse_args()
     from .controller import ROOT
     root = args.root.resolve()
@@ -703,10 +728,9 @@ def main():
         if args.probe: parser.exit(1, 'Desktop relay is unavailable. Remedy: ' + RELAY_REMEDY + '\n')
         if not sustained_failure(lambda: RelayBridge(root).health(), RECHECKS, RECHECK_GAP):
             print('Registered Desktop relay answered again; keeping it.'); return
-    if not args.codex_path: parser.error('--codex-path is required to register a relay')
+    if not args.codex_path and not args.standalone: parser.error('--codex-path is required to register a relay')
     replace_unhealthy(root)
-    resources = args.codex_path.resolve(strict=True).parent
-    bridge = DesktopBridge(resources / 'cua_node/bin/node.exe', resources / 'plugins/openai-bundled/plugins/codex-app-tools/server.mjs')
+    bridge = open_bridge(args.codex_path, args.standalone, parser)
     try:
         bridge.call('list_threads', {'limit':1})
         server = create_relay(bridge, root)
@@ -716,7 +740,7 @@ def main():
         worker = threading.Thread(target=server.serve_forever, daemon=True)
         worker.start()
         stop = root / 'shutdown.flag'; stop.unlink(missing_ok=True)
-        finished = watch(bridge, stop.exists)
+        finished = watch(bridge, stop.exists, abandon=float('inf') if args.standalone else ABANDON_SECONDS)
         server.shutdown(); server.server_close(); worker.join()
         if not finished:
             (root / 'relay.json').unlink(missing_ok=True)
