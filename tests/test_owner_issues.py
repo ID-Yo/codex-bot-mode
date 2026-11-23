@@ -81,7 +81,11 @@ class OwnerIssues(unittest.TestCase):
 
     def test_ensure_fresh_skips_recent_and_fetches_missing(self):
         run = gh([ROW])
-        self.assertTrue(owner_issues.ensure_fresh(self.root, ['example-org/alpha'], run, background=False))
+        # A fixed clock 30 seconds in the past keeps the age strictly positive and inside the TTL: on the Windows 3.12
+        # runners datetime.now() ticks every ~15 ms, so a real clock can report an age of exactly 0.0 (#433).
+        recent = (datetime.now(timezone.utc) - timedelta(seconds=30)).isoformat()
+        with patch.object(owner_issues, 'now', return_value=recent):
+            self.assertTrue(owner_issues.ensure_fresh(self.root, ['example-org/alpha'], run, background=False))
         self.assertFalse(owner_issues.ensure_fresh(self.root, ['example-org/alpha'], run, background=False))
         self.assertEqual(len(run.calls), 1)
 

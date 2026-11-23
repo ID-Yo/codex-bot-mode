@@ -19,6 +19,7 @@ permissions:
 jobs:
   test:
     strategy:
+      fail-fast: false
       matrix:
         os: [windows-latest]  # profile updates and several safety checks are Windows-only; other platforms are untested
         python: ["3.12", "3.13"]

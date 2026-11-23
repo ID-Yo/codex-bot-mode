@@ -16,6 +16,7 @@ import isolation
 isolation.isolate()
 
 from scripts.team_room import project as served
+from scripts.team_room import store, work
 from scripts.team_room.settings import BotSettings, version
 from scripts.team_room.web import create_server
 from scripts.team_room.controller import Controller
@@ -310,6 +311,9 @@ class MultiProjectWebAPITests(unittest.TestCase):
         self.c = Controller(str(self.base / "runtime"), bots=["manager"], profile_project=self.proj_a, transport=FakeTransport(), start_worker=False)
         self.c.registry_file = self.reg_file
         # The server's read model worker writes under the served project; never under the real repository root.
+        # served.configure() rewrites the process-wide participant list and appointed Manager; configure(ROOT) cannot
+        # restore them where ROOT has no roster (the public export), so put them back explicitly (#433).
+        self.addCleanup(self._restore_participants, list(store.BOTS), work.MANAGER, work.WORKERS)
         served.configure(self.proj_a)
         self.addCleanup(served.configure)
         self.server = create_server(self.c)
@@ -317,6 +321,11 @@ class MultiProjectWebAPITests(unittest.TestCase):
         self.thread.start()
         self.port = self.server.server_port
         self.token = re.search(r'name="room-token" content="([^"]+)"', self.request("GET", "/")[1].decode()).group(1)
+
+    @staticmethod
+    def _restore_participants(bots, manager, workers):
+        store.BOTS[:] = bots
+        work.MANAGER, work.WORKERS = manager, workers
 
     def test_server_never_serves_or_writes_the_real_repository_root(self):
         self.assertEqual(served.PROJECT, self.proj_a.resolve())
