@@ -1,5 +1,5 @@
 
-import json,os,subprocess,sys,hashlib,time,urllib.request
+import json,os,sqlite3,subprocess,sys,hashlib,time,urllib.request
 from pathlib import Path
 from datetime import datetime, timezone
 
@@ -16,6 +16,22 @@ def team_room():
         sys.path.insert(0, str(REPO))
     from scripts.team_room import desktop_pipe, roster
     return desktop_pipe, roster
+
+
+def status_module():
+    """scripts.team_room.supervisor_status of this checkout (the status file schema, #424)."""
+    if str(REPO) not in sys.path:
+        sys.path.insert(0, str(REPO))
+    from scripts.team_room import supervisor_status
+    return supervisor_status
+
+
+def incidents_module():
+    """scripts.team_room.incidents of this checkout: stable problem keys, one alert per incident (#424)."""
+    if str(REPO) not in sys.path:
+        sys.path.insert(0, str(REPO))
+    from scripts.team_room import incidents
+    return incidents
 
 
 def desktop_running():
@@ -492,14 +508,21 @@ def main(argv=None):
     ap.add_argument("--all-projects", action="store_true", help="Also check every registered project that has an outbox")
     ap.add_argument("--restart", action="store_true", help="Restart the relay when it is down (works only in the Manager chat)")
     ap.add_argument("--health-file", default=None)
+    ap.add_argument("--status-file", default=None, help="Supervisor status file (default: supervisor-status.json next to the health file)")
+    ap.add_argument("--interval-seconds", type=int, default=120, help="How often the scheduled task runs; a status file older than three of these is Unknown")
+    ap.add_argument("--incident-file", default=None, help="Open incidents (default: local/incidents.json next to the health file)")
     ap.add_argument("--office-url", default="http://localhost:24242")
     ap.add_argument("--restart-office", action="store_true", help="Start Codex Office when it does not answer")
-    ap.add_argument("--notify", action="store_true", help="Show a Windows message when health turns bad")
+    ap.add_argument("--notify", action="store_true",
+                    help="Show ONE Windows message per incident that needs the owner (the relay is down and could not be restarted), after 10 minutes")
     a = ap.parse_args(argv)
     global OFFICE
     OFFICE = Path(a.office_root).resolve()
     a.relay_root = a.relay_root or str(OFFICE / ".bot-mode" / "desktop-relay")
     a.health_file = a.health_file or str(OFFICE / ".bot-mode" / "relay-health.json")
+    a.status_file = a.status_file or str(Path(a.health_file).with_name("supervisor-status.json"))
+    started = time.monotonic()
+    a.incident_file = a.incident_file or str(Path(a.health_file).parent / "local" / "incidents.json")
     if a.all_projects:
         a.project = list(dict.fromkeys(a.project + registered_projects(OFFICE)))
 
@@ -566,20 +589,79 @@ def main(argv=None):
         if any(p["outbox"].get("pending") for p in report["projects"]):
             report["problems"].append("Codex Desktop is not running and reports are waiting; they are delivered when Desktop starts")
     health = Path(a.health_file)
-    was_bad = False
-    if health.is_file():
-        try:
-            was_bad = bool(json.loads(health.read_text(encoding="utf-8")).get("problems"))
-        except ValueError:
-            pass
+    try:
+        report["incidents"] = run_incidents(a, report)
+    except Exception as error:  # incident bookkeeping must never stop the pass: the health and status files still have to be written
+        report["incidents"] = []
+        report["incidents_error"] = f"{type(error).__name__}: {error}"[:300]
     health.parent.mkdir(parents=True, exist_ok=True)
     temporary = health.with_suffix(".tmp")
     temporary.write_text(json.dumps(report, ensure_ascii=False, indent=1), encoding="utf-8")
     temporary.replace(health)
-    if report["problems"] and a.notify and not was_bad and os.name == "nt":
-        subprocess.run(["msg", "*", "/TIME:600", "Codex relay/outbox: " + "; ".join(report["problems"])[:400]], capture_output=True, timeout=10, creationflags=hidden_flags())
+    write_status(a, report, started)
     print(json.dumps({"ok": not report["problems"], "relay_ok": report["relay_ok"], "office_ok": report["office_ok"], "problems": report["problems"]}, ensure_ascii=False))
     return 1 if report["problems"] else 0
+
+
+def write_status(a, report, started):
+    """Write the supervisor status file for this pass; a failure here never fails the pass (readers treat a stale file as Unknown)."""
+    try:
+        module = status_module()
+        reason = "Manager chat replaced" if report.get("manager_changed") else "relay down"
+        data = module.build(report, module.load(a.status_file), at=datetime.now(timezone.utc), pass_seconds=time.monotonic() - started,
+                            interval_seconds=a.interval_seconds, pid=os.getpid(), version=sha(__file__), restart_reason=reason)
+        module.write(a.status_file, data)
+    except OSError:
+        pass
+
+
+def show_owner_message(incident):
+    """One Windows message for an incident that needs the owner. A machine without msg.exe simply shows none."""
+    text = f"Codex relay/outbox needs you: {incident['text']} {incident['remedy']}"[:400]
+    if os.name != "nt":
+        return False
+    try:
+        subprocess.run(["msg", "*", "/TIME:600", text], capture_output=True, timeout=10, creationflags=hidden_flags())
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return True
+
+
+def run_incidents(a, report, now=None):
+    """Fold this pass's problems into the open incidents and carry out what is due: one Manager row per incident, one Windows
+    message for an owner incident after 10 minutes. Returns the open incidents for the health file."""
+    now = now or datetime.now(timezone.utc)
+    module = incidents_module()
+    state_path = Path(a.incident_file)
+    log_path = state_path.with_name("incidents.jsonl")
+    roots = {Path(project).name: project for project in a.project}
+    state, dropped = module.read(state_path)
+    if dropped:  # damaged records were removed; their problems open again as new incidents
+        module.log_event(log_path, {"at": now.isoformat(), "event": "state_repaired", "dropped": dropped})
+    events, actions = module.step(state, [module.classify(text, list(roots)) for text in report["problems"]], now)
+    for event in events:
+        module.log_event(log_path, event)
+    for action in actions:
+        incident = state["incidents"][action["key"]]
+        if action["do"] == "manager_row":
+            root = roots.get(incident.get("project")) or OFFICE
+            try:
+                ok, detail = module.queue_row(root, module.row_text(incident, action["n"]), module.dedupe_key(incident, action["n"]))
+            except (OSError, sqlite3.Error):
+                continue  # tried again in the next pass; the outbox dedupe key makes a repeated row harmless
+            if not ok:  # no row can be queued: say why once; an outbox that is not installed is final, a missing Manager is tried again
+                done = incident.setdefault("done", {})
+                if done.get("skipped") != detail:
+                    module.log_event(log_path, {"at": now.isoformat(), "event": "row_skipped", "key": incident["key"], "detail": detail})
+                    done["skipped"] = detail
+                if not detail.startswith(module.NO_OUTBOX):
+                    continue
+            module.mark(state, incident["key"], "row", now, action["upto"])
+        elif action["do"] == "popup" and a.notify and show_owner_message(incident):
+            module.mark(state, incident["key"], "popup", now)
+            module.log_event(log_path, {"at": now.isoformat(), "event": "owner_message", "key": incident["key"]})
+    module.save(state_path, state)
+    return module.summary(state)
 
 
 def supervise(argv, interval=600):

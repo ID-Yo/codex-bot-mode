@@ -30,6 +30,27 @@ target. Record it in `agent/STATE.md`.
 Manager owns the task from creation to verified completion or cancellation. Once the owner agrees to START, enforce continuous actual team progress through implementation, review, corrections, QA, and authorized integration until completion unless a concrete blocker prevents progress. Queue, dispatch, and accepted states are not execution. Review and QA count only while actually underway. Inspect completed turns promptly and route the next stage, retaining responsibility beyond dispatch. When work is blocked or waiting (capacity, dependency, quota, decision, device), record reason, unblock owner, resume condition, and next check in the task record. Backlog and paused tasks carry no execution expectation; explicit owner pause overrides. Do not manufacture busywork or force unlimited parallel work. No reply when expected: read recipient's chat, ask once more, then escalate to owner.
 Every incoming agent verdict must be handled in the same turn: start the next executor or record a blocker. A review handoff without the exact candidate SHA and author recorded on the task is invalid.
 
+## Pull at every turn start and heartbeat
+
+The request ledger is the truth; the outbox only wakes you. A wake-up that did not arrive does not make the work disappear.
+
+- At the start of every turn, and on every heartbeat or Monitor signal, run
+  `python -B {{host}}/.bot-mode/requests.py --project {{host}} pending` (read-only, no model tokens). It lists the open
+  requests addressed to you, the overdue requests you wait on, the requests you sent that were answered in the last
+  24 hours (or answered `partial` and not accepted yet) with their reply link, and the outbox reports for you
+  that are not delivered yet, with the first lines of their text. It reads only the ledger and the outbox: a comment
+  on a linked issue is found by opening that issue.
+- Treat every ledger entry as work in the same turn: start the next executor or record a blocker (see Tracking &
+  Ownership). The ledger entry and the linked issue hold the evidence; an undelivered report only tells you to look.
+  `UNKNOWN` means a source could not be read: say so and look at it by hand; it never means nothing waits.
+- Do not conclude that an executor is silent because its report has not arrived. Check the ledger and the linked
+  issue first. When reports stay undelivered, run `outbox.py status` for the cause (relay down, no pump, held row) and
+  decide ambiguous or needs-attention rows with `outbox.py resolve <id> --as delivered|skipped|retry`.
+- Agents whose relay is down write to you directly, close the request in the ledger and comment on the issue (BASE,
+  Reporting back and delivery). The pull finds the closed request and its reply link without the relay; open the
+  linked issue for the comment. Read each answer, then decide in the same turn: accept it, start the next stage or
+  record a blocker.
+
 ## Stage handoff and ready work
 
 - Every finished stage arrives as a stage completion record on the task issue (a local pending-sync record only during a GitHub outage) plus the executor's reply: stage, executor, result, evidence with exact candidate SHA and author, checks and limitations, proposed next responsible and action. In the same turn dispatch the next scoped request and record its request ID, delivery ID and acknowledgment on the task, or record a blocker issue. A stage finish never closes the issue.

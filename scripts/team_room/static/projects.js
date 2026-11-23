@@ -161,7 +161,7 @@
     const items=inboxData?.items||[],urgent=items.filter(item=>item.urgent),shown=(urgent.length?urgent:items).slice(0,5);
     const list=el('ul','owner-inbox-list');shown.forEach(item=>list.append(inboxRow(item)));parent.append(list);
     if(!items.length)parent.append(empty(officeI18n.t(inboxComplete()?'No recorded owner items.':inboxFailed?'Status unavailable':!inboxData?'Loading…':'Owner wait count is unknown.')));
-    const all=el('button','secondary',officeI18n.t('View all owner items'));all.type='button';all.onclick=()=>open('inbox');parent.append(all);
+    const all=el('button','secondary',officeI18n.t('View all owner items'));all.type='button';all.onclick=()=>open('inbox');parent.append(all);window.officeDelivery?.paint(parent);
   }
   function renderInbox(body){
     inboxCoverage(body);

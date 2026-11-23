@@ -38,6 +38,8 @@ if ($Status) {
     } | Format-List
     $health = Join-Path $officeRoot '.bot-mode/relay-health.json'
     if (Test-Path $health) { Write-Output "Health file: $health"; Get-Content $health -Raw }
+    $statusFile = Join-Path $officeRoot '.bot-mode/supervisor-status.json'
+    if (Test-Path $statusFile) { Write-Output "Status file: $statusFile"; Get-Content $statusFile -Raw }
     exit 0
 }
 
@@ -52,7 +54,7 @@ if ($Uninstall) {
 if ($Interval -lt 1) { throw 'Interval must be at least 1 minute.' }
 if (-not (Test-Path $script)) { throw "Missing $script" }
 $python = Get-PythonW
-$arguments = '-B "{0}" --office-root "{1}" --all-projects --restart' -f $script, $officeRoot
+$arguments = '-B "{0}" --office-root "{1}" --all-projects --restart --interval-seconds {2}' -f $script, $officeRoot, ($Interval * 60)
 if ($RestartOffice) { $arguments += ' --restart-office' }
 if (-not $NoNotify) { $arguments += ' --notify' }
 $action = New-ScheduledTaskAction -Execute $python -Argument $arguments -WorkingDirectory $officeRoot
