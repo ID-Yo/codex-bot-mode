@@ -18,7 +18,7 @@ Placeholders: `<cbm>` is your clone of this repository, `<cos>` the private Chie
 
 ## 1. Prerequisites
 
-Install Codex Desktop and sign in, Python 3.10 or newer, Git, and the GitHub CLI.
+Install Codex Desktop and sign in, Python 3.12 or newer, Git, and the GitHub CLI.
 
 ```text
 python --version
@@ -27,7 +27,7 @@ gh auth login
 gh auth status
 ```
 
-Expected: Python 3.10+, a Git version, and `gh auth status` reports you as logged in. Check that Codex Desktop starts and shows your account.
+Expected: Python 3.12+, a Git version, and `gh auth status` reports you as logged in. Check that Codex Desktop starts and shows your account.
 
 Suggested layout (any location works): the Codex Bot Mode clone, the Chief of Staff folder and your projects as siblings, for example `C:\work\codex-bot-mode`, `C:\work\chief-of-staff`, `C:\work\<project>`. If the drive letters differ from the old computer, you will edit a few absolute paths in Steps 3, 4 and 7.
 

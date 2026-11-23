@@ -24,7 +24,7 @@ Instructions for coding agents working on this repository. README.md explains th
 
 ## Conventions
 
-- Python 3.10+, standard library only. A dependency needs a strong reason and an issue first.
+- Python 3.12+, standard library only. A dependency needs a strong reason and an issue first.
 - Documentation, templates and code comments in English. Agents answer users in the user's language.
 - Templates contain no memory, chat IDs, personal data or credentials. Every template parameter has a `question` and a `default` or `required: true`.
 - Versions follow SemVer; add a CHANGELOG entry for user-visible changes.

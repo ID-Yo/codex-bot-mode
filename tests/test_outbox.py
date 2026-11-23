@@ -11,7 +11,8 @@ from unittest.mock import MagicMock, patch
 
 from scripts.team_room import outbox
 
-THREAD = "00000000-0000-0000-0000-000000000001"
+THREAD = "00000000-0000-7000-8000-000000000001"
+BUSY_THREAD = "00000000-0000-7000-8000-000000000002"
 IDLE_DONE = {"thread": {"status": {"type": "idle"}}, "turns": [{"id": "t0", "status": "completed", "startedAt": 1}]}
 
 
@@ -82,6 +83,7 @@ class OutboxCase(unittest.TestCase):
     def pump(self, client, **kwargs):
         kwargs.setdefault("max_wait_sec", 5)
         kwargs.setdefault("poll_interval", 0.001)
+        kwargs.setdefault("digest_max", 1)  # these tests check the order of single messages; digests are tested in test_outbox_delivery_422
         self.db.close()
         with patch("scripts.team_room.outbox.RelayClient", return_value=client), \
              patch("scripts.team_room.outbox.find_relay_descriptor", return_value=(self.tmp, {"url": "http://127.0.0.1:1", "token": "t"})):
@@ -114,8 +116,8 @@ class TestOutbox(OutboxCase):
     def test_target_thread_resolution(self):
         roster_data = {
             "participants": [
-                {"bot": "manager", "role": "Manager", "thread_id": "00000000-0000-0000-0000-000000000001"},
-                {"bot": "developer", "role": "Developer", "thread_id": "00000000-0000-0000-0000-000000000002"}
+                {"bot": "manager", "role": "Manager", "thread_id": "00000000-0000-7000-8000-000000000001"},
+                {"bot": "developer", "role": "Developer", "thread_id": "00000000-0000-7000-8000-000000000003"}
             ]
         }
         roster_path = self.tmp / ".bot-mode" / "roster.json"
@@ -123,10 +125,10 @@ class TestOutbox(OutboxCase):
         roster_path.write_text(json.dumps(roster_data), encoding="utf-8")
 
         tid = outbox.resolve_target_thread(self.tmp, "manager")
-        self.assertEqual(tid, "00000000-0000-0000-0000-000000000001")
+        self.assertEqual(tid, "00000000-0000-7000-8000-000000000001")
 
-        direct = outbox.resolve_target_thread(self.tmp, "00000000-0000-0000-0000-000000000002")
-        self.assertEqual(direct, "00000000-0000-0000-0000-000000000002")
+        direct = outbox.resolve_target_thread(self.tmp, "00000000-0000-7000-8000-000000000003")
+        self.assertEqual(direct, "00000000-0000-7000-8000-000000000003")
 
     def test_thread_busy_detection(self):
         self.assertTrue(outbox.is_thread_busy({"thread": {"status": {"type": "active"}}}))
@@ -140,6 +142,36 @@ class TestOutbox(OutboxCase):
         }))
         self.assertFalse(outbox.is_thread_busy({"thread": {"status": {"type": "idle"}}}))
         self.assertTrue(outbox.is_thread_busy({"thread": {"status": {"type": "unknown"}}}))
+
+    def test_a_chat_that_desktop_has_not_loaded_is_deliverable_unless_a_turn_runs(self):
+        not_loaded = {"thread": {"status": {"type": "notLoaded"}}}
+        self.assertFalse(outbox.is_thread_busy({**not_loaded, "turns": [{"status": "completed"}]}))
+        self.assertFalse(outbox.is_thread_busy({**not_loaded, "turns": []}))
+        self.assertTrue(outbox.is_thread_busy({**not_loaded, "turns": [{"status": "inProgress"}]}))
+        self.assertTrue(outbox.is_thread_busy(not_loaded))  # no readable history: not proof of an idle chat
+        for status in ("completed", "interrupted", "failed"):
+            self.assertFalse(outbox.is_thread_busy({**not_loaded, "turns": [{"status": status}]}), status)
+        for turns in ([{}], [None], [{"status": "weird"}], [{"status": None}], ["completed"], [{"status": []}], [{"status": {"x": 1}}], {"status": "completed"}, "x", 7):
+            self.assertTrue(outbox.is_thread_busy({**not_loaded, "turns": turns}), repr(turns))
+        for status in ([], {"x": 1}, 7):
+            self.assertTrue(outbox.is_thread_busy({"thread": {"status": status}, "turns": []}), repr(status))
+        for status_type in ([], ["idle"], {"x": 1}, {"idle": True}, 7, None):  # the type itself malformed
+            self.assertTrue(outbox.is_thread_busy({"thread": {"status": {"type": status_type}}, "turns": []}), repr(status_type))
+            self.assertTrue(outbox.is_thread_busy({"thread": {"status": {"type": status_type}}}), repr(status_type))
+        for history in (None, [], {"thread": None}, {"thread": {"status": None}}, {"thread": {"status": {"type": "idle"}}, "turns": [None]}):
+            outbox.is_thread_busy(history)  # malformed answers never raise
+
+    def test_install_cli_writes_the_outbox_and_a_missing_config_but_keeps_an_existing_one(self):
+        with tempfile.TemporaryDirectory() as folder:
+            project = Path(folder)
+            target = outbox.install_cli(project, "D:/Office/.bot-mode/desktop-relay")
+            self.assertEqual(target, project / ".bot-mode" / "outbox.py")
+            self.assertEqual(target.read_bytes(), Path(outbox.__file__).read_bytes())
+            config = project / ".bot-mode" / "outbox-config.json"
+            self.assertEqual(json.loads(config.read_text(encoding="utf-8")), {"relay_root": "D:/Office/.bot-mode/desktop-relay"})
+            config.write_text('{"relay_root": "kept"}', encoding="utf-8")
+            outbox.install_cli(project, "D:/Other")
+            self.assertEqual(json.loads(config.read_text(encoding="utf-8")), {"relay_root": "kept"})
 
     def test_sending_row_is_recovered_to_ambiguous_only_by_the_pump_recovery(self):
         msg_id = self.db.enqueue("dev", "manager", "thread-mgr", "Report text")
@@ -256,7 +288,7 @@ class TestOutbox(OutboxCase):
     def test_cli_send_and_list(self):
         project_dir = self.tmp / "proj"
         project_dir.mkdir(parents=True, exist_ok=True)
-        roster_data = {"participants": [{"bot": "manager", "role": "Manager", "thread_id": "00000000-0000-0000-0000-000000000001"}]}
+        roster_data = {"participants": [{"bot": "manager", "role": "Manager", "thread_id": "00000000-0000-7000-8000-000000000001"}]}
         (project_dir / ".bot-mode").mkdir(parents=True, exist_ok=True)
         (project_dir / ".bot-mode" / "roster.json").write_text(json.dumps(roster_data), encoding="utf-8")
 
@@ -270,7 +302,7 @@ class TestOutbox(OutboxCase):
         self.assertIsNotNone(item)
         self.assertEqual(item["sender_bot"], "developer")
         self.assertEqual(item["target_bot"], "manager")
-        self.assertEqual(item["target_thread_id"], "00000000-0000-0000-0000-000000000001")
+        self.assertEqual(item["target_thread_id"], "00000000-0000-7000-8000-000000000001")
         self.assertEqual(item["text"], "Finished stage 1")
         db.close()
 
@@ -321,16 +353,15 @@ class TestPumpOrderAndTurns(OutboxCase):
         self.assertEqual(self.pump(failing), 0)
         self.assertEqual(self.state(a)["state"], "ambiguous")
         self.assertIn("timed out", self.state(a)["error"])
-        self.assertEqual(self.state(b)["state"], "ambiguous")
-        # A new pump never replays either uncertain delivery.
+        self.assertEqual(self.state(b)["state"], "pending")  # B waits behind the unconfirmed A (same recipient)
+        # A new pump never replays the uncertain delivery, and B keeps waiting.
         relay = FakeRelay()
-        self.assertEqual(self.pump(relay), 0)
+        self.assertEqual(self.pump(relay, max_wait_sec=0.3), 0)
         self.assertEqual(relay.sent, [])
         self.db.resolve(a, "retry", "checked the thread: not delivered")
         relay = FakeRelay()
         self.assertEqual(self.pump(relay), 0)
-        self.assertEqual(relay.sent, ["A"])
-        self.assertEqual(self.state(b)["state"], "ambiguous")
+        self.assertEqual(relay.sent, ["A", "B"])
 
     def test_skipping_the_ambiguous_row_releases_the_rest(self):
         a = self.db.enqueue("dev", THREAD, THREAD, "A")
@@ -342,19 +373,20 @@ class TestPumpOrderAndTurns(OutboxCase):
         self.assertEqual(relay.sent, ["B"])
         self.assertEqual(self.state(a)["state"], "skipped")
 
-    def test_a_stopped_pump_quarantines_sending_and_allows_later_work(self):
+    def test_a_stopped_pump_quarantines_sending_and_holds_only_later_rows_of_that_recipient(self):
         a = self.db.enqueue("dev", THREAD, THREAD, "A")
-        self.db.enqueue("rev", THREAD, THREAD, "B")
+        b = self.db.enqueue("rev", THREAD, THREAD, "B")
+        c = self.db.enqueue("rev", BUSY_THREAD, BUSY_THREAD, "C")
         self.db.mark_sending(a)
-        relay = FakeRelay()
-        self.assertEqual(self.pump(relay), 0)
-        self.assertEqual(relay.sent, ["B"])
-        self.assertEqual(self.state(a)["state"], "ambiguous")
+        relay = MultiRelay(busy_reads=0)
+        self.assertEqual(self.pump(relay, max_wait_sec=0.3), 0)
+        self.assertEqual(relay.sent, [(BUSY_THREAD, "C")])  # B waits behind the unconfirmed A, C is another recipient
+        self.assertEqual([self.state(a)["state"], self.state(b)["state"], self.state(c)["state"]], ["ambiguous", "pending", "delivered"])
 
     def test_unknown_thread_status_and_read_errors_never_send(self):
         a = self.db.enqueue("dev", THREAD, THREAD, "A")
         weird = MagicMock()
-        weird.call.return_value = {"thread": {"status": {"type": "notLoaded"}}, "turns": []}
+        weird.call.return_value = {"thread": {"status": {"type": "systemError"}}, "turns": []}
         self.assertEqual(self.pump(weird, max_wait_sec=0.05), 0)
         self.assertEqual([c.args[0] for c in weird.call.call_args_list if c.args[0] != "read_thread"], [])
         broken = MagicMock()
@@ -372,6 +404,51 @@ class TestPumpOrderAndTurns(OutboxCase):
         # failed is terminal: the same dedupe key is not queued again; only an explicit retry re-queues it
         self.assertEqual(self.state(b)["state"], "delivered")
 
+
+
+class MultiRelay:
+    """Two recipient threads: BUSY is occupied for busy_reads reads of its status, IDLE never is. A send registers a new turn at once."""
+
+    def __init__(self, busy_reads):
+        self.countdown = busy_reads
+        self.turns = {}
+        self.sent = []
+
+    def call(self, name, arguments, timeout=40):
+        thread = arguments["threadId"]
+        if name == "send_message_to_thread":
+            self.turns[thread] = self.turns.get(thread, 0) + 1
+            self.sent.append((thread, arguments["prompt"].split("\n", 1)[1]))
+            return {}
+        assert name == "read_thread", name
+        busy = thread == BUSY_THREAD and self.countdown > 0
+        if thread == BUSY_THREAD:
+            self.countdown -= 1
+        count = self.turns.get(thread, 0)
+        return {"thread": {"status": {"type": "active" if busy else "idle"}},
+                "turns": [{"id": "t%d" % count, "status": "inProgress" if busy else "completed", "startedAt": count + 1}]}
+
+
+class TestBusyRecipientDoesNotBlockOthers(OutboxCase):
+    def test_messages_to_an_idle_thread_pass_a_head_row_for_a_busy_thread(self):
+        self.db.enqueue("a", BUSY_THREAD, BUSY_THREAD, "A1")
+        self.db.enqueue("b", THREAD, THREAD, "M1")
+        self.db.enqueue("a", BUSY_THREAD, BUSY_THREAD, "A2")
+        self.db.enqueue("c", THREAD, THREAD, "M2")
+        relay = MultiRelay(busy_reads=30)
+        self.assertEqual(self.pump(relay), 0)
+        bodies = [body for _, body in relay.sent]
+        self.assertEqual(sorted(bodies), ["A1", "A2", "M1", "M2"])  # all delivered in the end
+        self.assertLess(bodies.index("M1"), bodies.index("A1"))  # the idle thread did not wait for the busy one
+        self.assertLess(bodies.index("M2"), bodies.index("A1"))
+        self.assertLess(bodies.index("M1"), bodies.index("M2"))  # order per recipient is kept
+        self.assertLess(bodies.index("A1"), bodies.index("A2"))
+
+    def test_when_every_recipient_is_busy_nothing_is_sent_until_one_is_free(self):
+        self.db.enqueue("a", BUSY_THREAD, BUSY_THREAD, "A1")
+        relay = MultiRelay(busy_reads=5)
+        self.assertEqual(self.pump(relay), 0)
+        self.assertEqual(relay.sent, [(BUSY_THREAD, "A1")])
 
 class TestResolve(OutboxCase):
     def test_resolve_rules(self):
