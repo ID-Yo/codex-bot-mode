@@ -353,6 +353,11 @@ def create_server(controller, port=0, *, ipv6=False, token=None, desktop_lifecyc
                     return self.reply(403, {'error': 'Local access token required'})
                 from . import project as served, owner_inbox
                 return self.reply(200, owner_inbox.build(served.PROJECT))
+            if url.path == '/api/outbox-health':
+                if not self.origin_ok() or not secrets.compare_digest(self.headers.get('X-Room-Token', ''), token):
+                    return self.reply(403, {'error': 'Local access token required'})
+                from . import project as served, outbox_health
+                return self.reply(200, outbox_health.build(served.ROOT))
             if url.path == '/api/projects':
                 if not secrets.compare_digest(self.headers.get('X-Room-Token',''),token):
                     return self.reply(403, {'error':'Local access token required'})
@@ -469,6 +474,8 @@ def create_server(controller, port=0, *, ipv6=False, token=None, desktop_lifecyc
                      '/agents.js': ('agents.js','text/javascript'),
                      '/updates.js': ('updates.js','text/javascript'),
                      '/updates.css': ('updates.css','text/css'),
+                     '/delivery.js': ('delivery.js','text/javascript'),
+                     '/delivery.css': ('delivery.css','text/css'),
                      '/agents.css': ('agents.css','text/css'),
                      '/avatars.js': ('avatars.js','text/javascript'),
                      '/avatars.css': ('avatars.css','text/css'),

@@ -106,6 +106,16 @@ assigned without a ledger entry needs this command. Count it as sent only when
 `outbox.py list` shows `delivered` (`status` shows pending or ambiguous rows). If the project has
 requests.py but no outbox.py, tell the Manager so the outbox is installed.
 
+The ledger is the truth; the outbox only wakes the Manager. If `send` says the relay is down, or
+`outbox.py status` shows your report waiting, the result is kept but the Manager has not seen it. Do not
+wait for the relay and do not retry in a loop. In the same turn: (1) write the outcome directly in the
+Manager's chat with the thread tool (find the chat with `roster.py links`; an absent chat in
+`list_threads` proves nothing); (2) close your request with `requests.py reply --link <evidence>`, which keeps the
+closeout in the ledger even when no outbox report can be queued; (3) comment the outcome and evidence on the
+linked issue. Then say in your final answer which of the three reached the Manager. The Manager reads the
+ledger at every turn start and heartbeat (`requests.py pending`), so a closed request and its reply link
+are found without the relay; the issue comment is found by opening the linked issue.
+
 ## Shared handoff and pickup rules
 
 After an assigned stage completes or is blocked, answer the requester in their

@@ -352,6 +352,20 @@ class OutboxDB:
     def count_state(self, state):
         return self.conn.execute("SELECT COUNT(*) FROM outbox WHERE state = ?", (state,)).fetchone()[0]
 
+    def last_delivered_at(self):
+        """ISO time of the newest delivered row, or None when nothing was delivered yet (#424)."""
+        row = self.conn.execute("SELECT MAX(delivered_at) FROM outbox WHERE state = 'delivered'").fetchone()
+        return row[0] if row and row[0] else None
+
+    def last_delivered_age(self):
+        stamp = self.last_delivered_at()
+        if not stamp:
+            return None
+        try:
+            return max(0.0, time.time() - datetime.fromisoformat(stamp).timestamp())
+        except ValueError:
+            return None
+
     def pending_count(self):
         return self.conn.execute("SELECT COUNT(*) FROM outbox WHERE state = 'pending'").fetchone()[0]
 
@@ -519,8 +533,8 @@ def queue_status(project_root):
     outbox_dir = Path(project_root) / ".bot-mode" / "outbox"
     db_path = outbox_dir / "queue.sqlite"
     status = {"project": str(project_root), "pending": 0, "oldest_pending_seconds": None, "ambiguous": 0,
-              "needs_attention": 0, "recheckable": 0, "expired": 0, "relay_reachable": relay_reachable(project_root), "pump_alive": False,
-              "problems": []}
+              "needs_attention": 0, "recheckable": 0, "expired": 0, "last_delivered_at": None,
+              "relay_reachable": relay_reachable(project_root), "pump_alive": False, "problems": []}
     if not db_path.is_file():
         return status
     status["pump_alive"] = pump_alive(outbox_dir)
@@ -534,6 +548,7 @@ def queue_status(project_root):
         status["needs_attention"] = db.count_state("needs-attention")
         status["recheckable"] = db.recheckable_count(DEFAULT_TTL_HOURS)
         status["expired"] = db.count_state("expired")
+        status["last_delivered_at"] = db.last_delivered_at()
     finally:
         db.close()
     waiting = status["pending"] > 0
@@ -551,6 +566,44 @@ def queue_status(project_root):
             and not status["ambiguous"]):
         status["problems"].append(f"oldest pending row is {round(age)} s old although relay and pump are up; check the Manager thread")
     return status
+
+
+def human_age(seconds):
+    """'45 s', '12 min', '3 h 05 min' or '2 d 4 h'; None means no such event yet."""
+    if seconds is None:
+        return None
+    seconds = int(round(seconds))
+    if seconds < 120:
+        return f"{seconds} s"
+    if seconds < 7200:
+        return f"{seconds // 60} min"
+    if seconds < 172800:
+        return f"{seconds // 3600} h {seconds % 3600 // 60:02d} min"
+    return f"{seconds // 86400} d {seconds % 86400 // 3600} h"
+
+
+SEND_FALLBACKS = ("Fallbacks, so the Manager still gets your result: (1) write it directly in the Manager thread with the thread tool; "
+                  "(2) keep the closed request in the ledger (requests.py reply); (3) comment on the linked issue.")
+
+
+def send_feedback(depth, oldest, last_delivery, relay_up, pump_running, held=None):
+    """What `send` tells the sender after queueing: (lines for stdout, lines for stderr). The first two stdout lines keep
+    their original wording because other tools read them (doctor reads the receipt)."""
+    out = [f"Queue: {depth} pending, oldest {0 if oldest is None else round(oldest)} s.",
+           "Relay: {}. Pump: {}. Last delivery: {}.".format(
+               "up" if relay_up else "DOWN", "running" if pump_running else "started now",
+               (human_age(last_delivery) + " ago") if last_delivery is not None else "none recorded")]
+    err = []
+    if not relay_up:
+        err.append("WARNING: the Desktop relay is not reachable, so this report is NOT delivered yet. It stays queued and is sent "
+                   "when the relay is back (the supervisor restarts it; outbox.py status shows the state).")
+        err.append(SEND_FALLBACKS)
+    elif oldest is not None and oldest > STALE_SECONDS:
+        err.append(f"WARNING: the oldest report has waited {human_age(oldest)} although the relay is up; check the Manager thread. "
+                   + SEND_FALLBACKS)
+    if held:
+        err.append(held_message(held))
+    return out, err
 
 
 def is_thread_busy(history):
@@ -1019,16 +1072,16 @@ def main(argv=None):
             held = db.held_by()
             depth = db.pending_count()
             age = db.oldest_pending_age()
+            last = db.last_delivered_age()
         finally:
             db.close()
 
         print(f"Queued outbox handoff {msg_id} for {args.to}. Turn complete.")
-        print(f"Queue: {depth} pending, oldest {0 if age is None else round(age)} s.")
-        if not relay_reachable(project_root):
-            print("WARNING: the Desktop relay is not reachable, so this report is NOT delivered yet. "
-                  "Also write your result directly in the Manager thread with the thread tool.", file=sys.stderr)
-        if held:
-            print(held_message(held), file=sys.stderr)
+        lines, warnings = send_feedback(depth, age, last, relay_reachable(project_root), pump_alive(outbox_dir), held)
+        for line in lines:
+            print(line)
+        for line in warnings:
+            print(line, file=sys.stderr)
         spawn_background_pump(project_root)
         return 0
 

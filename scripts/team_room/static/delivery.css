@@ -1,0 +1,11 @@
+/* Delivery panel (#424): read-only supervisor status inside the dashboard's right column. */
+.delivery-panel{margin-top:18px;padding-top:12px;border-top:1px solid var(--line);min-width:0}
+.delivery-panel h2{font-size:14px;margin:0 0 6px}.delivery-panel h3{font-size:12px;margin:10px 0 4px}
+.delivery-state{font-size:12px;font-weight:600;margin:4px 0}
+.delivery-panel[data-state=problems] .delivery-state{color:var(--hot)}
+.delivery-panel[data-state=unknown] .delivery-state{color:var(--muted)}
+.delivery-reason,.delivery-note,.delivery-relay,.delivery-text{font-size:10px;color:var(--muted);margin:4px 0;overflow-wrap:anywhere}
+.delivery-problems{padding-left:16px;margin:6px 0;color:var(--hot);font-size:10px;overflow-wrap:anywhere}
+.delivery-projects,.delivery-incidents{list-style:none;margin:8px 0;padding:0}
+.delivery-project,.delivery-incident{padding:7px 0;border-bottom:1px solid var(--line);min-width:0;font-size:11px;overflow-wrap:anywhere}
+.delivery-meta{display:flex;flex-wrap:wrap;gap:4px 8px;align-items:center;font-size:9px;color:var(--muted);margin-top:3px}

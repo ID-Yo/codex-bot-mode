@@ -13,6 +13,7 @@ import os
 from pathlib import Path
 import re
 import shlex
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -469,6 +470,131 @@ def summary(data, at=None):
     return out
 
 
+UNDELIVERED = ('pending', 'sending', 'ambiguous', 'needs-attention', 'failed')
+SHOWN_ROWS = 10
+
+
+def _age(seconds):
+    seconds = max(0, round(seconds))
+    if seconds < 120:
+        return f'{seconds} s'
+    if seconds < 7200:
+        return f'{seconds // 60} min'
+    if seconds < 172800:
+        return f'{seconds // 3600} h {seconds % 3600 // 60:02d} min'
+    return f'{seconds // 86400} d {seconds % 86400 // 3600} h'
+
+
+def _undelivered_rows(project, bot):
+    """(rows not delivered to bot, expired count) from the project outbox, or None when it has no queue file.
+    Reads only; the connection refuses writes."""
+    file = path(project).parent.parent / 'outbox' / 'queue.sqlite'
+    if not file.is_file():
+        return None
+    conn = sqlite3.connect(str(file), timeout=3)
+    try:
+        conn.execute('PRAGMA query_only = ON')
+        marks = ','.join('?' * len(UNDELIVERED))
+        rows = conn.execute('SELECT id, created_at, sender_bot, state, text FROM outbox '
+                            f'WHERE target_bot = ? AND state IN ({marks}) ORDER BY rowid', (bot,) + UNDELIVERED).fetchall()
+        expired = conn.execute("SELECT COUNT(*) FROM outbox WHERE target_bot = ? AND state = 'expired'", (bot,)).fetchone()[0]
+        return rows, expired
+    finally:
+        conn.close()
+
+
+ANSWERED_HOURS = 24
+
+
+def _answered_for(entries, bot, at):
+    """Requests bot sent that were answered in the last ANSWERED_HOURS, or answered 'partial' and not accepted yet (the
+    requester's decision is still open): (request, seconds since the answer or None, partial and open). Ledger order."""
+    found = []
+    for item in entries:
+        if item.get('state') != 'answered' or item.get('from') != bot:
+            continue
+        try:
+            age = (at - datetime.fromisoformat(item['answered'])).total_seconds()
+        except (KeyError, TypeError, ValueError):
+            age = None  # no usable answer time: shown rather than hidden
+        open_partial = item.get('outcome') == 'partial' and not item.get('accepted')
+        if age is None or age <= ANSWERED_HOURS * 3600 or open_partial:
+            found.append((item, age, open_partial))
+    return found
+
+
+def pending_lines(project, bot='manager', at=None):
+    """What waits for bot: open ledger requests (the truth) and outbox rows that did not arrive (they only wake).
+    Unknown stays unknown: an unreadable ledger or outbox is said so and never shown as empty."""
+    at = at or now()
+    lines = [f'Pending for {bot} at {at.isoformat()}']
+    waiting = 0
+    unknown = []
+    try:
+        part = []
+        entries = load(project)['requests']
+        items = [i for i in entries if i['state'] == 'open']
+        mine = [i for i in items if i['to'] == bot]
+        late = [i for i in items if i['from'] == bot and datetime.fromisoformat(i['due']) <= at]
+        asked = sum(1 for i in items if i['from'] == bot)
+        part.append(f'Ledger: {len(mine)} open request(s) addressed to {bot}.')
+        for item in mine:
+            due = datetime.fromisoformat(item['due'])
+            when = f'OVERDUE by {_age((at - due).total_seconds())}' if due <= at else f'due in {_age((due - at).total_seconds())}'
+            part.append(f"  {item['id']}  from {item['from']}  opened {_age((at - datetime.fromisoformat(item['opened'])).total_seconds())} ago  {when}  {item.get('link') or ''}".rstrip())
+            part.append(f"    {item['summary']}")
+        part.append(f'Waiting on others: {asked} open request(s) from {bot}, {len(late)} overdue.')
+        for item in late:
+            part.append(f"  {item['id']}  to {item['to']}  OVERDUE by {_age((at - datetime.fromisoformat(item['due'])).total_seconds())}  {item.get('link') or ''}".rstrip())
+        answered = _answered_for(entries, bot, at)
+        part.append(f'Answered: {len(answered)} request(s) from {bot} answered in the last {ANSWERED_HOURS} h or partial and not accepted yet.')
+        for item, age, open_partial in answered[-SHOWN_ROWS:]:
+            when = 'at an unknown time' if age is None else _age(age) + ' ago'
+            part.append(f"  {item['id']}  by {item['to']}  {item.get('outcome') or '?'}  {when}  {item.get('reply_link') or 'no reply link'}"
+                        + ('  partial, not accepted yet (requests.py accept)' if open_partial else ''))
+            part.append(f"    {item.get('summary', '')}")
+        if len(answered) > SHOWN_ROWS:
+            part.append(f'  ... and {len(answered) - SHOWN_ROWS} older answered request(s) not shown')
+        part.append('  An answer is read through its reply link; a comment on the linked issue is not read here, open the issue.')
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        lines.append(f'Ledger: UNKNOWN (cannot read the request ledger: {error!r})')
+        unknown.append('the request ledger')
+    else:
+        waiting += len(mine) + len(late) + len(answered)
+        lines.extend(part)
+    try:
+        found = _undelivered_rows(project, bot)
+    except sqlite3.Error as error:
+        lines.append(f'Outbox: UNKNOWN (cannot read the outbox queue: {error})')
+        unknown.append('the outbox queue')
+    else:
+        if found is None:
+            lines.append('Outbox: no queue file in this project; only the ledger is shown.')
+        else:
+            rows, expired = found
+            waiting += len(rows)
+            lines.append(f'Outbox: {len(rows)} report(s) for {bot} not delivered yet (they only wake you; the ledger is the truth).')
+            for row_id, created, sender, state, body in rows[:SHOWN_ROWS]:
+                try:
+                    old = _age((at - datetime.fromisoformat(created)).total_seconds())
+                except ValueError:
+                    old = 'unknown age'
+                lines.append(f'  {row_id}  from {sender}  {state}  {old} old')
+                lines.append('    ' + ' '.join(str(body).split())[:200])
+            if len(rows) > SHOWN_ROWS:
+                lines.append(f'  ... and {len(rows) - SHOWN_ROWS} more: outbox.py list')
+            if rows:
+                lines.append('  Relay and pump state: outbox.py status. A pending row is delivered by the pump; an ambiguous or '
+                             'needs-attention row is decided with outbox.py resolve <id> --as delivered|skipped|retry.')
+            if expired:
+                lines.append(f'  {expired} expired row(s) were never delivered: outbox.py list --state expired')
+    if unknown:
+        lines.append(f"Cannot tell what waits for {bot}: {' and '.join(unknown)} {'is' if len(unknown) == 1 else 'are'} UNKNOWN; look by hand.")
+    elif not waiting:
+        lines.append(f'Nothing waiting for {bot}.')
+    return lines
+
+
 def main(argv=None):
     import argparse
     import sys
@@ -517,8 +643,14 @@ def main(argv=None):
     c.add_argument('--reason', required=True)
     lst = sub.add_parser('list', help='Open requests, optionally only those for one bot.')
     lst.add_argument('--to')
+    pend = sub.add_parser('pending', help='Read-only, no model tokens: what waits for a bot (default manager): open ledger '
+                                          'requests and outbox reports not delivered yet.')
+    pend.add_argument('--for', dest='bot', default='manager')
     args = parser.parse_args(argv)
     try:
+        if args.action == 'pending':
+            print('\n'.join(pending_lines(args.project, args.bot)))
+            return 0
         if args.action == 'verdict':
             if args.body_file:
                 comment = post_verdict(args.project, args.id, args.by, args.verdict, args.candidate,
