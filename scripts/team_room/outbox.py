@@ -28,6 +28,7 @@ from datetime import datetime, timezone
 import json
 import os
 from pathlib import Path
+import re
 import sqlite3
 import socket
 import subprocess
@@ -59,6 +60,9 @@ STALE_SECONDS = 600  # a pending row older than this although relay and pump are
 RELAY_WAIT_MAX = 30.0  # longest pause between relay descriptor checks while the relay is down
 HEARTBEAT_EVERY = 10.0
 RESOLVE_CACHE_SECONDS = 1800  # the Manager thread rarely changes; the send re-resolves it anyway
+CANARY_KEEP = 20  # canary records kept in the queue file
+DEFAULT_CANARY_EVERY_MINUTES = 10.0  # a new canary is queued when the last one is older than this
+DEFAULT_CANARY_LIMIT_MINUTES = 5.0  # a canary that waited longer than this without being processed is a problem
 
 
 def now_iso():
@@ -242,6 +246,20 @@ class OutboxDB:
             if "ambiguous_at" not in columns:
                 self.conn.execute("ALTER TABLE outbox ADD COLUMN ambiguous_at TEXT")
             self.conn.execute("CREATE INDEX IF NOT EXISTS idx_outbox_state ON outbox(state, created_at)")
+            # The canary (#426) is not an outbox row: it is never a report, never in a digest and never in the counts of the queue.
+            self.conn.execute("""
+                CREATE TABLE IF NOT EXISTS canary (
+                    id TEXT PRIMARY KEY,
+                    created_at TEXT NOT NULL,
+                    target TEXT NOT NULL,
+                    state TEXT NOT NULL DEFAULT 'pending',
+                    done_at TEXT,
+                    latency REAL,
+                    read_seconds REAL,
+                    chat_status TEXT,
+                    error TEXT
+                )
+            """)
 
     def enqueue(self, sender_bot, target_bot, target_thread_id, text, dedupe_key=None):
         """Queue a row; the same dedupe key returns the existing row, also when two writers race."""
@@ -264,6 +282,38 @@ class OutboxDB:
                 return found
             raise
         return msg_id
+
+    def canary_start(self, target, every_seconds):
+        """Queue a canary for target unless one is pending or the newest one is younger than every_seconds. Returns its id or None."""
+        with self.conn:
+            self.conn.execute("BEGIN IMMEDIATE")  # the check and the insert are one step: two callers at once queue one canary
+            if self.conn.execute("SELECT 1 FROM canary WHERE state = 'pending' LIMIT 1").fetchone():
+                return None
+            newest = self.conn.execute("SELECT MAX(created_at) FROM canary").fetchone()[0]
+            if newest and time.time() - datetime.fromisoformat(newest).timestamp() < every_seconds:
+                return None
+            canary_id = uuid.uuid4().hex
+            self.conn.execute("INSERT INTO canary (id, created_at, target) VALUES (?, ?, ?)", (canary_id, now_iso(), target))
+            self.conn.execute("DELETE FROM canary WHERE state != 'pending' AND id NOT IN "
+                              "(SELECT id FROM canary ORDER BY created_at DESC, rowid DESC LIMIT ?)", (CANARY_KEEP,))
+        return canary_id
+
+    def canary_pending(self):
+        row = self.conn.execute("SELECT * FROM canary WHERE state = 'pending' ORDER BY created_at ASC, rowid ASC LIMIT 1").fetchone()
+        return dict(row) if row else None
+
+    def canary_last_done(self):
+        row = self.conn.execute("SELECT * FROM canary WHERE state = 'done' ORDER BY done_at DESC, rowid DESC LIMIT 1").fetchone()
+        return dict(row) if row else None
+
+    def canary_done(self, canary_id, latency, read_seconds, chat_status):
+        with self.conn:
+            self.conn.execute("UPDATE canary SET state = 'done', done_at = ?, latency = ?, read_seconds = ?, chat_status = ?, error = NULL "
+                              "WHERE id = ?", (now_iso(), latency, read_seconds, chat_status, canary_id))
+
+    def canary_error(self, canary_id, error):
+        with self.conn:
+            self.conn.execute("UPDATE canary SET error = ? WHERE id = ?", (str(error)[:300], canary_id))
 
     def mark_sending(self, msg_id, target_thread=None):
         self.mark_sending_many([msg_id], target_thread)
@@ -393,6 +443,13 @@ class OutboxDB:
     def mark_failed(self, msg_id, error):
         with self.conn:
             self.conn.execute("UPDATE outbox SET state = 'failed', error = ? WHERE id = ?", (str(error)[:500], msg_id))
+
+    def mark_unsent_many(self, ids, note):
+        """Rows that were marked 'sending' go back to pending, in their place, because Desktop refused the message outright (#426).
+        Only rows still in 'sending' change."""
+        with self.conn:
+            self.conn.executemany("UPDATE outbox SET state = 'pending', error = ? WHERE id = ? AND state = 'sending'",
+                                  [(str(note)[:500], msg_id) for msg_id in ids])
 
     def mark_ambiguous(self, msg_id, error):
         self.mark_ambiguous_many([msg_id], error)
@@ -534,7 +591,7 @@ def queue_status(project_root):
     db_path = outbox_dir / "queue.sqlite"
     status = {"project": str(project_root), "pending": 0, "oldest_pending_seconds": None, "ambiguous": 0,
               "needs_attention": 0, "recheckable": 0, "expired": 0, "last_delivered_at": None,
-              "relay_reachable": relay_reachable(project_root), "pump_alive": False, "problems": []}
+              "relay_reachable": relay_reachable(project_root), "pump_alive": False, "canary": None, "problems": []}
     if not db_path.is_file():
         return status
     status["pump_alive"] = pump_alive(outbox_dir)
@@ -549,6 +606,7 @@ def queue_status(project_root):
         status["recheckable"] = db.recheckable_count(DEFAULT_TTL_HOURS)
         status["expired"] = db.count_state("expired")
         status["last_delivered_at"] = db.last_delivered_at()
+        status["canary"] = canary_report(db)  # information only: the canary command raises its own problem
     finally:
         db.close()
     waiting = status["pending"] > 0
@@ -582,6 +640,85 @@ def human_age(seconds):
     return f"{seconds // 86400} d {seconds % 86400 // 3600} h"
 
 
+CANARY_CHAT_STATUSES = ("active", "idle", "notLoaded")
+CANARY_TURN_STATUSES = ("inProgress", "completed", "interrupted", "failed")
+
+
+def canary_chat_status(history):
+    """(chat status, None) when the read_thread answer is one the pump understands, else (status text or None, why not).
+    Understood: a text status of active or idle, or notLoaded with readable turns (none, or a newest turn with a known status)."""
+    info = history.get("thread") if isinstance(history, dict) else None
+    status = info.get("status") if isinstance(info, dict) else None
+    kind = status.get("type") if isinstance(status, dict) else None
+    if not isinstance(kind, str):
+        return None, "no text status"
+    if kind not in CANARY_CHAT_STATUSES:
+        return kind, f"the status {kind!r}, which is not active, idle or notLoaded"
+    if kind == "notLoaded":
+        turns = history.get("turns")
+        newest = turns[0] if isinstance(turns, list) and turns else None
+        newest_status = newest.get("status") if isinstance(newest, dict) else None
+        if not isinstance(turns, list):
+            return kind, "the status 'notLoaded' and no readable turns"
+        if turns and newest_status not in CANARY_TURN_STATUSES:
+            return kind, f"the status 'notLoaded' and a newest turn with the unknown status {newest_status!r}"
+    return kind, None
+
+
+def probe_canary(db, client, project_root, canary):
+    """Process one canary without a model turn (#426): resolve the recipient chat, read its status with the same read-only call
+    the pump uses before every delivery, and record the time from queueing to now. Nothing is sent. It proves the queue, the
+    pump, the relay descriptor and token, the roster and Desktop's answer; it does not prove that Desktop accepts a message.
+    Returns None when the canary is done, else the failure (also recorded on the canary)."""
+    thread = resolve_target_thread(project_root, canary["target"])
+    if not thread:
+        failure = RuntimeError(f"cannot resolve the {canary['target']} chat from the roster")
+        db.canary_error(canary["id"], failure)
+        return failure
+    started = time.time()
+    try:
+        history = client.call("read_thread", {"threadId": thread, "turnLimit": 1, "includeOutputs": False})
+    except Exception as error:
+        db.canary_error(canary["id"], error)
+        return error
+    read_seconds = time.time() - started
+    chat_status, reason = canary_chat_status(history)
+    if reason:
+        # An answer the pump would not deliver into is not a success: the canary stays pending, is tried again and becomes a
+        # problem after the limit, with the status in the text. Unknown never becomes good.
+        failure = RuntimeError(f"the {canary['target']} chat answered with {reason}")
+        db.canary_error(canary["id"], failure)
+        return failure
+    try:
+        latency = max(0.0, time.time() - datetime.fromisoformat(canary["created_at"]).timestamp())
+    except ValueError:
+        latency = read_seconds
+    db.canary_done(canary["id"], round(latency, 3), round(read_seconds, 3), chat_status)
+    return None
+
+
+def canary_report(db, limit_minutes=DEFAULT_CANARY_LIMIT_MINUTES):
+    """What the canary shows: the newest finished one (latency, time, chat status) and, when one waits longer than
+    limit_minutes without being processed, a problem with the last error. Unknown stays unknown: no canary yet is null."""
+    pending, last = db.canary_pending(), db.canary_last_done()
+    report = {"pending_seconds": None, "last_ok_at": None, "last_latency_seconds": None, "last_read_seconds": None,
+              "last_chat_status": None, "last_error": None, "problems": []}
+    if last:
+        report.update(last_ok_at=last["done_at"], last_latency_seconds=last["latency"], last_read_seconds=last["read_seconds"],
+                      last_chat_status=last["chat_status"])
+    if pending:
+        try:
+            report["pending_seconds"] = round(max(0.0, time.time() - datetime.fromisoformat(pending["created_at"]).timestamp()))
+        except ValueError:
+            report["pending_seconds"] = None
+        report["last_error"] = pending["error"]
+        if report["pending_seconds"] is not None and report["pending_seconds"] > limit_minutes * 60:
+            report["problems"].append(f"outbox canary has waited {human_age(report['pending_seconds'])} without being processed"
+                                      + (f" (last error: {pending['error']})" if pending["error"] else "")
+                                      + ": check the relay, the pump and the Manager chat (outbox.py status)")
+    return report
+
+
 SEND_FALLBACKS = ("Fallbacks, so the Manager still gets your result: (1) write it directly in the Manager thread with the thread tool; "
                   "(2) keep the closed request in the ledger (requests.py reply); (3) comment on the linked issue.")
 
@@ -604,6 +741,28 @@ def send_feedback(depth, oldest, last_delivery, relay_up, pump_running, held=Non
     if held:
         err.append(held_message(held))
     return out, err
+
+
+REFUSED_FOR_MISSING_TURN = re.compile(r"HTTP Error 503: [^()]*\(Cannot steer conversation \S+ without an active turn id\)")
+
+
+def refused_for_missing_turn(error):
+    """True only for the one refusal Desktop gives when it tries to steer a turn it believes is running and finds no turn id:
+    HTTP 503 with 'Cannot steer conversation <id> without an active turn id' (#426). It is a definite refusal before anything
+    starts, so the message was not taken (not proven: the Desktop code is not in this repository). Every other failure of a
+    send, including 'outcome unconfirmed', stays unconfirmed. The whole error must be the refusal and nothing else: the text of an
+    unconfirmed outcome can end with a stderr tail that quotes the same line, so a phrase somewhere inside is not enough."""
+    text = str(error)
+    if not isinstance(error, RuntimeError) or "outcome unconfirmed" in text or "do not resend" in text:
+        return False
+    return REFUSED_FOR_MISSING_TURN.fullmatch(text) is not None
+
+
+def relay_answered_about_the_chat(error):
+    """True when the relay itself answered one call with an error (HTTP 400 or 5xx, or an error in the reply): that is about
+    the chat or Desktop, not about us. False when the relay refused us (401 or 403: a restarted relay has a new token) or
+    could not be reached at all: then the descriptor must be read again."""
+    return isinstance(error, RuntimeError) and not str(error).startswith(("HTTP Error 401", "HTTP Error 403"))
 
 
 def is_thread_busy(history):
@@ -864,6 +1023,9 @@ def pump_outbox(project_root, max_wait_sec=600, poll_interval=3.0, turn_timeout=
             idle_passes = 0  # rereads made while nothing was pending
             resolved = {}
             busy_until = {}  # target -> time until which it is not asked again; the queue moves on to other targets
+            unreadable = {}  # target -> consecutive reads of its chat that the relay refused with an error about that chat
+            canary_retry_at = 0.0  # a canary that failed is tried again after this time
+            not_ready = {}  # target -> consecutive sends Desktop refused because the chat had no active turn id to steer
             relay_wait = poll_interval
             warned = False
             last_beat = 0.0
@@ -875,9 +1037,10 @@ def pump_outbox(project_root, max_wait_sec=600, poll_interval=3.0, turn_timeout=
                 busy_until = {key: until for key, until in busy_until.items() if until > now}
                 pending = db.pending_count()
                 unsure = db.recheckable_count(ttl_hours)
+                canary = db.canary_pending()
                 if pending:
                     idle_passes = 0
-                if not pending and (not unsure or (reconciled and idle_passes >= rechecks)):
+                if not pending and not canary and (not unsure or (reconciled and idle_passes >= rechecks)):
                     break  # nothing pending and nothing left to recheck
 
                 if time.time() - last_beat >= HEARTBEAT_EVERY:
@@ -902,6 +1065,20 @@ def pump_outbox(project_root, max_wait_sec=600, poll_interval=3.0, turn_timeout=
                     warned = False
                     relay_wait = poll_interval
 
+                if canary and time.time() >= canary_retry_at:
+                    # The canary (#426) is not a report: it is processed at once, also while the Manager is busy, and sends nothing.
+                    failure = probe_canary(db, client, project_root, canary)
+                    if failure is None:
+                        canary = None
+                    else:
+                        print(f"Outbox pump: canary not processed ({failure})", file=sys.stderr)
+                        canary_retry_at = time.time() + 5 * poll_interval
+                        if not relay_answered_about_the_chat(failure):
+                            client = None  # the relay may have restarted: read its descriptor again
+                            time.sleep(relay_wait)
+                            relay_wait = min(relay_wait * 2, RELAY_WAIT_MAX)
+                            continue
+
                 if not reconciled or (unsure and time.time() - last_reconcile >= reconcile_every):
                     reconcile_ambiguous(db, client, retry_grace_minutes, recheck_hours=ttl_hours)
                     reconciled = True
@@ -910,6 +1087,9 @@ def pump_outbox(project_root, max_wait_sec=600, poll_interval=3.0, turn_timeout=
                     if not pending:
                         idle_passes += 1
                 if not pending:
+                    if canary:
+                        time.sleep(poll_interval)  # only a canary is waiting: it is tried again
+                        continue
                     if db.recheckable_count(ttl_hours) and idle_passes < rechecks:
                         time.sleep(poll_interval)  # only unresolved rows are left: look again after reconcile_every
                         continue
@@ -935,12 +1115,23 @@ def pump_outbox(project_root, max_wait_sec=600, poll_interval=3.0, turn_timeout=
                 try:
                     history = client.call("read_thread", {"threadId": target_thread, "turnLimit": 1, "includeOutputs": False})
                 except Exception as e:
+                    if relay_answered_about_the_chat(e):
+                        # The relay is up and refused this one chat (Desktop answers 503, e.g. thread not found): only this
+                        # recipient is set aside, with a growing pause; the others keep moving. The row stays pending.
+                        unreadable[key] = unreadable.get(key, 0) + 1
+                        if unreadable[key] == 1:
+                            print(f"Outbox pump: read_thread of {item['target_bot']} failed ({e}); setting it aside, "
+                                  "other recipients are not held.", file=sys.stderr)
+                        busy_until[key] = time.time() + min(poll_interval * 2 ** unreadable[key], RELAY_WAIT_MAX)
+                        relay_wait = poll_interval
+                        continue
                     print(f"Outbox pump: read_thread failed ({e}); backing off...", file=sys.stderr)
                     client = None  # the relay may have restarted: read its descriptor again
                     time.sleep(relay_wait)
                     relay_wait = min(relay_wait * 2, RELAY_WAIT_MAX)
                     continue
                 relay_wait = poll_interval
+                unreadable.pop(key, None)
 
                 if is_thread_busy(history):
                     # Destination is busy: set it aside for a moment and deliver to the others meanwhile.
@@ -958,6 +1149,17 @@ def pump_outbox(project_root, max_wait_sec=600, poll_interval=3.0, turn_timeout=
                     db.mark_sending_many(ids, target_thread)
                     client.call("send_message_to_thread", {"threadId": target_thread, "prompt": build_prompt(batch)})
                 except Exception as e:
+                    if refused_for_missing_turn(e):
+                        # Desktop refused before starting anything: the chat is not ready. The rows stay pending in their place,
+                        # only this recipient is set aside with a growing pause, nothing else is held. If Desktop had taken the
+                        # message anyway the next try repeats it with the same delivery marker line (one harmless duplicate).
+                        db.mark_unsent_many(ids, f"not sent: {e}")
+                        not_ready[key] = not_ready.get(key, 0) + 1
+                        pause = min(poll_interval * 2 ** not_ready[key], RELAY_WAIT_MAX)
+                        busy_until[key] = time.time() + pause
+                        print(f"Outbox pump: {item['target_bot']} refused the message because its chat has no active turn id to steer "
+                              f"({e}); the report stays pending, trying again in {pause:g} s.", file=sys.stderr)
+                        continue
                     # The relay may or may not have accepted it: never sent again without proof; it holds later rows of this recipient.
                     print(f"Outbox pump: send_message_to_thread failed ({e})", file=sys.stderr)
                     db.mark_ambiguous_many(ids, e)
@@ -966,6 +1168,7 @@ def pump_outbox(project_root, max_wait_sec=600, poll_interval=3.0, turn_timeout=
                     reconciled = False
                     continue
                 db.mark_delivered_many(ids)
+                not_ready.pop(key, None)
                 print(f"Delivered {', '.join(ids)} to {item['target_bot']} ({target_thread})" + (" as one digest." if len(ids) > 1 else "."))
                 if not await_turn(client, target_thread, before, poll_interval, turn_timeout):
                     for msg_id in ids:
@@ -1054,6 +1257,15 @@ def main(argv=None):
     pr.add_argument("--ttl-hours", type=float, default=DEFAULT_TTL_HOURS, help="Pending rows older than this expire (default 12)")
     pr.add_argument("--dry-run", action="store_true", help="Only report what would change")
 
+    # canary
+    ca = sub.add_parser("canary", help="Zero-token canary: queue a synthetic probe of the whole delivery path (nothing is sent to "
+                                      "the Manager), print its latency and say whether it is processed (exit 5 when not).")
+    ca.add_argument("--to", default="manager", help="Recipient whose chat is probed (default: manager)")
+    ca.add_argument("--every-minutes", type=float, default=DEFAULT_CANARY_EVERY_MINUTES,
+                    help="Queue a new canary when the last one is older than this (default 10)")
+    ca.add_argument("--limit-minutes", type=float, default=DEFAULT_CANARY_LIMIT_MINUTES,
+                    help="A canary not processed within this time is a problem (default 5)")
+
     args = parser.parse_args(argv)
     project_root = Path(args.project).resolve()
 
@@ -1090,6 +1302,21 @@ def main(argv=None):
                            attention_minutes=args.attention_minutes, retry_grace_minutes=args.retry_grace_minutes,
                            digest_max=args.digest_max)
 
+    elif args.action == "canary":
+        outbox_dir = project_root / ".bot-mode" / "outbox"
+        db = OutboxDB(outbox_dir / "queue.sqlite")
+        try:
+            started = db.canary_start(args.to, args.every_minutes * 60)
+            report = canary_report(db, args.limit_minutes)
+            waiting = db.canary_pending() is not None
+        finally:
+            db.close()
+        report["queued"] = started is not None
+        if waiting and (started or not pump_alive(outbox_dir)):
+            spawn_background_pump(project_root)  # a pump that is already running leaves it alone
+        print(json.dumps(report, ensure_ascii=False))
+        return EXIT_UNHEALTHY if report["problems"] else 0
+
     elif args.action == "prune":
         config = load_config(project_root)
         summary = prune_outbox(project_root, int(setting(args.keep, config, "keep_rows", DEFAULT_KEEP_ROWS)), args.ttl_hours,
@@ -1099,7 +1326,7 @@ def main(argv=None):
 
     elif args.action == "status":
         status = queue_status(project_root)
-        if args.heal and (status["pending"] or status["recheckable"]) and not status["pump_alive"]:
+        if args.heal and (status["pending"] or status["recheckable"] or (status["canary"] or {}).get("pending_seconds") is not None) and not status["pump_alive"]:
             spawn_background_pump(project_root)
             status["healed"] = "pump started"
             status["problems"] = [x for x in status["problems"] if "no pump is running" not in x]

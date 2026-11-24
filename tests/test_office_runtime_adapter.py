@@ -140,7 +140,8 @@ class OfficeRuntimeAdapterTests(unittest.TestCase):
 
     def make_adapter(self):
         self.adapter=OfficeRuntimeAdapter(self.install,self.project,self.codex,port=self.port,
-                                          startup_timeout=5,shutdown_timeout=5)
+                                          startup_timeout=30,shutdown_timeout=30)  # real child processes: 5 s is too tight when
+        # two full test runs share the machine (a limit, not a wait: a normal stop takes well under a second)
         def cleanup():
             self.adapter.close()
             child=self.adapter.process

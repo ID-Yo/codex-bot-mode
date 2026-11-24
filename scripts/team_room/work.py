@@ -261,7 +261,10 @@ class DesktopBridge:
         except subprocess.TimeoutExpired:
             self.process.terminate();self.process.wait(timeout=5)
         self.reader.join(timeout=2)
+        self.drain.join(timeout=2)
         self.process.stdout.close()
+        if not self.drain.is_alive():  # a grandchild that still holds the pipe keeps the drain thread reading; closing would wait for it
+            self.process.stderr.close()  # the pipe the drain thread read; left open it is reported when it is collected
 
 
 class GitHubIssues:

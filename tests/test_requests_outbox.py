@@ -5,6 +5,7 @@ from pathlib import Path
 import subprocess
 import tempfile
 import unittest
+import warnings
 from unittest.mock import patch
 
 from scripts.team_room import requests
@@ -14,7 +15,10 @@ def run_main(args):
     """requests.main with its output captured; main reconfigures stdout, so it needs a real text wrapper."""
     out = io.TextIOWrapper(io.BytesIO(), encoding="utf-8")
     err = io.StringIO()
-    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err), warnings.catch_warnings():
+        # A ResourceWarning is printed when the garbage collector frees an unclosed file of an earlier test, so it can land
+        # in this test's stderr at any time. It says nothing about requests.main.
+        warnings.simplefilter("ignore", ResourceWarning)
         code = requests.main(args)
     out.flush()
     return code, out.buffer.getvalue().decode("utf-8"), err.getvalue()

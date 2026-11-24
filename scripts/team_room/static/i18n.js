@@ -456,6 +456,9 @@
     "{n} unconfirmed":"{n} непотвърдени",
     "open since":"отворен от",
     "Remedy":"Действие",
+    "Canary unknown":"Canary е неизвестен",
+    "Canary waiting {age}":"Canary чака {age}",
+    "Canary {latency} s, {age} ago":"Canary {latency} с, преди {age}",
     "Incident bookkeeping failed":"Отчитането на инцидентите е неуспешно",
     "No project outbox is registered with the supervisor.":"Няма проектен outbox, регистриран при надзорника.",
   };

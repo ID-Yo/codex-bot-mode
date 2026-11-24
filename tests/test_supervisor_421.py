@@ -97,6 +97,12 @@ class StandaloneBridgeTests(unittest.TestCase):
         self.assertEqual(answer, {'pipe': 'pipe/codex-app-tools-1-good', 'thread_env': False})
         self.assertEqual(bridge.pipe, 'pipe/codex-app-tools-1-good')
 
+    def test_close_closes_every_pipe_of_the_bridge_process(self):
+        bridge = self.bridge('pipe/codex-app-tools-1-good')
+        bridge.close()
+        process = bridge.process
+        self.assertEqual([process.stdin.closed, process.stdout.closed, process.stderr.closed], [True, True, True])
+
     def test_a_pipe_that_refuses_calls_is_skipped(self):
         bridge = self.bridge('pipe/codex-app-tools-1-dead', 'pipe/codex-app-tools-2-good')
         self.assertEqual(bridge.pipe, 'pipe/codex-app-tools-2-good')

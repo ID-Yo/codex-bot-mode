@@ -454,7 +454,20 @@ def outbox_status(project):
         return {"problems": ["outbox status failed: " + (r.stderr or r.stdout)[-200:]]}
 
 
-def project_report(project, heal_hung=False):
+def outbox_canary(project, every_minutes=10.0, limit_minutes=5.0):
+    """Run the zero-token canary of a project (#426): the report of 'outbox.py canary', or None when the installed outbox.py has
+    no such command yet (the drift check names that) or did not answer. It never raises and never makes the pass fail."""
+    cli = Path(project) / ".bot-mode" / "outbox.py"
+    try:
+        r = subprocess.run([sys.executable, "-B", str(cli), "--project", str(project), "canary", "--every-minutes", str(every_minutes),
+                            "--limit-minutes", str(limit_minutes)], capture_output=True, text=True, timeout=60, creationflags=hidden_flags())
+        report = json.loads(r.stdout.strip().splitlines()[-1])
+    except (OSError, subprocess.TimeoutExpired, ValueError, IndexError):
+        return None
+    return report if isinstance(report, dict) and isinstance(report.get("problems"), list) else None
+
+
+def project_report(project, heal_hung=False, canary_every=0.0, canary_limit=5.0):
     out = {"project": str(project)}
     out["outbox"] = outbox_status(project)
     hung = pump_hung(project, out["outbox"])
@@ -469,6 +482,8 @@ def project_report(project, heal_hung=False):
     elif hung:
         out["outbox"].setdefault("problems", []).append(f"pump {hung['pid']} holds the lock but wrote no heartbeat for {HUNG_PUMP_SECONDS} s")
     classify_wait(project, out["outbox"])
+    if canary_every > 0:
+        out["canary"] = outbox_canary(project, canary_every, canary_limit)
     drift = []
     for name in SYNCED:
         installed = Path(project) / ".bot-mode" / name
@@ -510,6 +525,9 @@ def main(argv=None):
     ap.add_argument("--health-file", default=None)
     ap.add_argument("--status-file", default=None, help="Supervisor status file (default: supervisor-status.json next to the health file)")
     ap.add_argument("--interval-seconds", type=int, default=120, help="How often the scheduled task runs; a status file older than three of these is Unknown")
+    ap.add_argument("--canary-every-minutes", type=float, default=10.0,
+                    help="Zero-token canary of every project's delivery path: queue a new one when the last is older than this (0 = off)")
+    ap.add_argument("--canary-limit-minutes", type=float, default=5.0, help="A canary not processed within this time is a problem")
     ap.add_argument("--incident-file", default=None, help="Open incidents (default: local/incidents.json next to the health file)")
     ap.add_argument("--office-url", default="http://localhost:24242")
     ap.add_argument("--restart-office", action="store_true", help="Start Codex Office when it does not answer")
@@ -577,11 +595,14 @@ def main(argv=None):
     report["projects"] = []
     for project in a.project:
         try:
-            report["projects"].append(project_report(project, heal_hung=a.restart))
+            report["projects"].append(project_report(project, heal_hung=a.restart, canary_every=a.canary_every_minutes,
+                                                     canary_limit=a.canary_limit_minutes))
         except Exception as error:
             report["projects"].append({"project": str(project), "outbox": {"problems": ["health check failed: " + type(error).__name__]}})
     for p in report["projects"]:
         report["problems"] += [f"{Path(p['project']).name}: {x}" for x in p["outbox"].get("problems", []) if "relay is not reachable" not in x]
+        if report["relay_ok"]:  # a dead relay is one incident of its own; a canary stuck behind it would only repeat it
+            report["problems"] += [f"{Path(p['project']).name}: {x}" for x in (p.get("canary") or {}).get("problems", [])]
         if p.get("installed_differs_from_repo"):
             report["problems"].append(f"{Path(p['project']).name}: installed {', '.join(p['installed_differs_from_repo'])} differ from the repo")
     if not report["relay_ok"] and not report["desktop_running"]:
