@@ -8,7 +8,7 @@
 Proposed workflow hypothesis: Developers managing complex features need structured delegation and verifiable quality control without losing execution context or spending hours copying prompts between separate chat windows.
 
 ## Offer and mechanism
-- **Offer**: Reusable catalog of 24 agent templates (including Manager, Director, and blank template), local team room web interface (Codex Office), and verified handoff protocols.
+- **Offer**: Reusable catalog of 25 agent templates (including Manager, Director, and blank template), local team room web interface (Codex Office), and verified handoff protocols.
 - **Mechanism**: Local HTTP server on localhost:24242 and Desktop relay on localhost:24243 coordinating with native desktop threads. Version-checked request tracking with reminders ([scripts/team_room/requests.py](../../scripts/team_room/requests.py)) tracks task assignments, and a prescribed dual-gate review workflow (Code Reviewer + Verifier) requires evidence before completion claims.
 
 ## Evidence and limitations
