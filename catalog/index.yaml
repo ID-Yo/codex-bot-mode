@@ -73,6 +73,9 @@ agents:
   - name: agent-monitor
     version: 1
     description: Metadata-only, task-aware and pause-aware activity monitor for appointed project agents.
+  - name: infrastructure-engineer
+    version: 1
+    description: Provision, deploy and maintain infrastructure inside owner-approved scope and report evidence of the real state.
 teams:
   - name: development
     version: 3

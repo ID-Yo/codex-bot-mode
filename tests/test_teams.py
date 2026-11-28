@@ -43,12 +43,12 @@ class TeamTests(unittest.TestCase):
 
     def test_expanded_inventory_installs_every_bundle_and_new_individual(self):
         inventory = teams.index(CATALOG)
-        self.assertEqual(len(inventory['agents']), 24)
+        self.assertEqual(len(inventory['agents']), 25)
         self.assertEqual(len(inventory['teams']), 13)
         new_roles = ['business-analyst', 'research-analyst', 'product-manager',
                      'data-analyst', 'operations-specialist', 'knowledge-writer',
                      'support-specialist', 'learning-designer', 'career-advisor',
-                     'financial-analyst']
+                     'financial-analyst', 'infrastructure-engineer']
         self.assertNotIn('personal-assistant', [a['name'] for a in inventory['agents']])
         for item in inventory['teams']:
             root = self.project / item['name']
@@ -86,6 +86,116 @@ class TeamTests(unittest.TestCase):
             self.assertEqual(teams.agent_template(CATALOG, item['name'])[1]['version'], item['version'])
         for item in inventory['teams']:
             self.assertEqual(teams.team_template(CATALOG, item['name'])[1]['version'], item['version'])
+
+    def test_infrastructure_engineer_is_planned_and_added_to_an_existing_team_without_secrets_or_chat_ids(self):
+        teams.install(teams.plan_team(self.project, 'development', team_answers={'tracking_mode': 'local'}))
+        before = {p['bot'] for p in roster.load(self.project)['participants']}
+        common = ['--project', str(self.project), '--team', 'Development', '--template', 'infrastructure-engineer']
+        self.assertEqual(self.run_cli('plan-agent', *common), 0)
+        self.assertEqual({p['bot'] for p in roster.load(self.project)['participants']}, before)  # a plan changes nothing
+        self.assertEqual(self.run_cli('add-agent', *common, '--actor', 'manager', '--approval', 'once', '--confirm'), 0)
+        participant = roster.participant(roster.load(self.project), 'infrastructure-engineer')
+        self.assertEqual((participant['role'], participant['thread_id'], participant['status']), ('Infrastructure Engineer', None, 'active'))
+        workspace = self.project / participant['workspace']
+        installed = manifest.load(workspace / 'agent/agent.yaml')
+        self.assertEqual(installed['permissions']['assign_work'], 'none')
+        for key in ('production_changes', 'cloud_spend', 'account_changes', 'dns_changes', 'credential_changes',
+                    'destructive_changes', 'network_exposure_changes', 'external_messages', 'publishing'):
+            self.assertEqual(installed['permissions'][key], 'owner-approval', key)
+        self.assertEqual(installed['permissions']['product_writes'], 'assigned-boundary')
+        secret = re.compile(r'BEGIN [A-Z ]*PRIVATE KEY|ghp_[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16}|password\s*[:=]\s*\S|token\s*[:=]\s*\S', re.I)
+        chat_id = re.compile(r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}')
+        for name in ('AGENTS.md', 'agent/SOUL.md', 'agent/PROFILE.md', 'agent/PLAYBOOK.md', 'agent/agent.yaml'):
+            body = (workspace / name).read_text(encoding='utf-8')
+            self.assertNotIn('{{', body, name)
+            self.assertIsNone(secret.search(body), name)
+            self.assertIsNone(chat_id.search(body), name)
+        profile = (workspace / 'agent/PROFILE.md').read_text(encoding='utf-8')
+        playbook = (workspace / 'agent/PLAYBOOK.md').read_text(encoding='utf-8')
+        for word in ('Spend.', 'Accounts, production and DNS.', 'Destructive and irreversible actions, and network exposure.',
+                     'Credentials.', 'Evidence.', 'No self-acceptance.'):
+            self.assertIn(word, profile)
+        for word in ('Synthetic exercise', 'Boundary exercise', 'Live verification', 'state read back'):
+            self.assertIn(word, playbook)
+        self.assertIn('Infrastructure Engineer in the Development team', profile)
+
+    OLD_CHAT = '00000000-0000-0000-0000-0000000000b1'
+    NEW_CHAT = '00000000-0000-0000-0000-0000000000b2'
+
+    def hand_made_agent(self, workspace=False, chat=None):
+        """A temporary agent added by hand (#461): a roster entry, unbound unless chat is given, and optionally a workspace with memory."""
+        data = roster.load(self.project)
+        folder = 'team/Development/infrastructure-engineer'
+        roster.add_participant(data, 'infrastructure-engineer', 'Infrastructure Engineer', team='Development',
+                               workspace=folder if workspace else None, thread_id=chat)
+        roster.save(self.project, data, roster.version(roster.load(self.project)))
+        if workspace:
+            (self.project / folder / 'agent/memory').mkdir(parents=True)
+            (self.project / folder / 'agent/memory/learned.md').write_text('hand-made learned fact\n', encoding='utf-8')
+            (self.project / folder / 'agent/STATE.md').write_text('hand-made state\n', encoding='utf-8')
+
+    def files_of(self, folder):
+        return {str(p.relative_to(folder)): p.read_bytes() for p in sorted(folder.rglob('*')) if p.is_file()}
+
+    def active_infrastructure_engineers(self):
+        return [p for p in roster.active(roster.load(self.project)) if p['role'] == 'Infrastructure Engineer']
+
+    def replace_hand_made_agent(self):
+        """The documented sequence of docs/operations/teams.md: plan (read only), retire the temporary entry, add. Returns the new bot, or None when the plan refused and the procedure stopped."""
+        common = ['--project', str(self.project), '--team', 'Development', '--template', 'infrastructure-engineer']
+        if self.run_cli('plan-agent', *common) != 0:
+            return None  # the plan refused: the procedure stops before anything is retired
+        self.assertEqual(roster.main(['--project', str(self.project), 'retire', 'infrastructure-engineer',
+                                      '--reason', 'replaced by catalog infrastructure-engineer (#461)']), 0)
+        self.assertEqual(self.run_cli('add-agent', *common, '--actor', 'manager', '--approval', 'once', '--confirm'), 0)
+        return 'development-infrastructure-engineer'
+
+    def test_a_hand_made_unbound_agent_is_replaced_by_the_catalog_role_with_one_active_executor(self):
+        teams.install(teams.plan_team(self.project, 'development', team_answers={'tracking_mode': 'local'}))
+        self.hand_made_agent()
+        plan = teams.plan_agent(self.project, 'Development', 'infrastructure-engineer')
+        self.assertEqual(plan['agents'][0]['bot'], 'development-infrastructure-engineer')  # the used bot ID is prefixed with the team
+        self.assertEqual(len(self.active_infrastructure_engineers()), 1)  # a plan alone would make a second one: the retirement comes first
+        new_bot = self.replace_hand_made_agent()
+        data = roster.load(self.project)
+        old, new = roster.participant(data, 'infrastructure-engineer'), roster.participant(data, new_bot)
+        self.assertEqual((old['status'], old['thread_id']), ('retired', None))
+        self.assertEqual((new['status'], new['thread_id'], new['workspace']), ('active', None, 'team/Development/' + new_bot))
+        self.assertEqual([p['bot'] for p in self.active_infrastructure_engineers()], [new_bot])
+        self.assertEqual(roster.main(['--project', str(self.project), 'set-thread', new_bot, self.NEW_CHAT, '--reason', 'appointed']), 0)
+        links = [item for item in roster.links(roster.load(self.project)) if item['role'] == 'Infrastructure Engineer']
+        self.assertEqual([(item['bot'], item['thread_id']) for item in links], [(new_bot, self.NEW_CHAT)])
+
+    def test_the_workspace_memory_and_chat_of_a_hand_made_agent_are_left_as_they_were(self):
+        teams.install(teams.plan_team(self.project, 'development', team_answers={'tracking_mode': 'local'}))
+        self.hand_made_agent(workspace=True, chat=self.OLD_CHAT)
+        old_folder = self.project / 'team/Development/infrastructure-engineer'
+        before = self.files_of(old_folder)
+        new_bot = self.replace_hand_made_agent()
+        self.assertEqual(self.files_of(old_folder), before)
+        old = roster.participant(roster.load(self.project), 'infrastructure-engineer')
+        self.assertEqual((old['status'], old['thread_id']), ('retired', None))
+        self.assertEqual([(h['thread_id'], h['status']) for h in old['history']], [(self.OLD_CHAT, 'retired')])
+        self.assertNotIn(self.OLD_CHAT, [item['thread_id'] for item in roster.links(roster.load(self.project))])
+        new_folder = self.project / 'team/Development' / new_bot
+        memory = subprocess.run([sys.executable, '-B', str(new_folder / 'scripts/bot_mode.py'), '--project', str(new_folder), '--bot', new_bot, 'memory'],
+                                capture_output=True, text=True)
+        self.assertEqual(json.loads(memory.stdout), [], memory.stderr)  # the new agent starts with empty memory
+        self.assertNotIn(b'hand-made', b''.join(self.files_of(new_folder).values()))
+
+    def test_a_folder_in_the_way_of_the_new_workspace_stops_the_plan_and_is_not_touched(self):
+        teams.install(teams.plan_team(self.project, 'development', team_answers={'tracking_mode': 'local'}))
+        self.hand_made_agent()
+        blocking = self.project / 'team/Development/development-infrastructure-engineer'
+        (blocking / 'agent').mkdir(parents=True)
+        (blocking / 'agent/STATE.md').write_text('somebody made this by hand\n', encoding='utf-8')
+        before, participants = self.files_of(blocking), roster.load(self.project)['participants']
+        self.assertIsNone(self.replace_hand_made_agent())  # the plan is the first step: it refuses, so nothing is retired
+        self.assertEqual(self.files_of(blocking), before)
+        self.assertEqual(roster.load(self.project)['participants'], participants)
+        temporary = roster.participant(roster.load(self.project), 'infrastructure-engineer')
+        self.assertEqual((temporary['status'], temporary['thread_id']), ('active', None))
+        self.assertEqual([p['bot'] for p in self.active_infrastructure_engineers()], ['infrastructure-engineer'])  # still the executor
 
     def test_starter_requires_real_specialist_and_uses_its_identity(self):
         for value in (None, 'blank', 'manager', 'director', 'made-up'):

@@ -36,6 +36,12 @@ Product Manager supplies product outcomes and requirements without dispatch righ
 Chief of Staff is the personal assistant in `packages/chief-of-staff-v1/`; there
 is no duplicate personal-assistant catalog profile or automatic CoS appointment.
 
+Infrastructure Engineer (#461) provisions, deploys and maintains cloud machines, containers, networking, DNS and TLS, with
+monitoring and backups, and reports evidence of the real state. It is an individual role for `plan-agent`/`add-agent`, in no bundle
+and not a Starter choice. Spend, account, production, DNS and credential changes need an owner approval recorded in the task,
+and no secret is ever printed or stored. Replacing a temporary hand-made agent of the same role is described in
+[docs/operations/teams.md](../docs/operations/teams.md#replace-a-temporary-hand-made-agent-with-a-catalog-role-461).
+
 The 12 core bundles are development, marketing, sales, startup, product, research,
 content-studio, operations, customer-support, learning, career and
 business-reporting. They contain 3-5 roles. Starter adds a smaller Manager plus
