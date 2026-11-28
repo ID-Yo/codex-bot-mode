@@ -639,7 +639,8 @@ def start_diagnostics(root, bridge, say=print, interval=60.0, log_every=900.0, c
     """Leave evidence for the next relay death (#401). A process ended with TerminateProcess leaves no stop line, so:
     relay-alive.json is rewritten every interval (last proof of life, parent and bridge state), a log line is written when
     the parent or the bridge changes state and every log_every seconds, fatal errors and Windows console events are
-    logged, and faulthandler writes native crashes to stderr. The watchdog reads relay-alive.json when the relay is down."""
+    logged, and faulthandler writes native crashes to stderr. The watchdog reads relay-alive.json when the relay is down.
+    Returns a function that stops the writer thread and waits for it (the relay itself never calls it; tests do)."""
     import faulthandler, sys
     try: faulthandler.enable()
     except (RuntimeError, ValueError, OSError): pass
@@ -670,9 +671,10 @@ def start_diagnostics(root, bridge, say=print, interval=60.0, log_every=900.0, c
                 'standalone': bool(getattr(bridge, 'standalone', False)),
                 'pipe': _fingerprint(getattr(bridge, 'pipe', None)),
                 'uptime_seconds': int(clock() - started)}
+    stopping = threading.Event()
     def loop():
         last_state, last_log = None, 0.0
-        while True:
+        while not stopping.is_set():
             try:
                 data = snapshot()
                 temporary = root / 'relay-alive.json.tmp'
@@ -684,8 +686,13 @@ def start_diagnostics(root, bridge, say=print, interval=60.0, log_every=900.0, c
                         {True: 'alive', False: 'GONE', None: 'unknown'}[data['bridge_alive']], data['uptime_seconds']), flush=True)
                     last_state, last_log = state, clock()
             except OSError: pass
-            time.sleep(interval)
-    threading.Thread(target=loop, daemon=True, name='relay-diagnostics').start()
+            stopping.wait(interval)
+    writer = threading.Thread(target=loop, daemon=True, name='relay-diagnostics')
+    writer.start()
+    def stop():
+        stopping.set()
+        writer.join()
+    return stop
 
 
 diagnostics_handlers = []

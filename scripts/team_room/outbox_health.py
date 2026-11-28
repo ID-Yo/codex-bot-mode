@@ -45,13 +45,23 @@ def _action(value):
     return row
 
 
+def _canary(value, now):
+    """The zero-token canary of one project (#426): the latency of the last one and its age, or None when the supervisor has no
+    canary for it (an old outbox.py, or switched off): unknown, never a good result."""
+    if not isinstance(value, dict):
+        return None
+    return {"last_ok_age_seconds": _age(value.get("last_ok_at"), now), "last_latency_seconds": _number(value.get("last_latency_seconds")),
+            "last_chat_status": _text(value.get("last_chat_status"), 40), "pending_seconds": _number(value.get("pending_seconds"))}
+
+
 def _project(row, now):
     return {"name": _text(row.get("name")) or "?", "pending": _number(row.get("pending")),
             "oldest_pending_seconds": _number(row.get("oldest_pending_seconds")), "ambiguous": _number(row.get("ambiguous")),
             "needs_attention": _number(row.get("needs_attention")),
             "relay_reachable": row.get("relay_reachable") if isinstance(row.get("relay_reachable"), bool) else None,
             "pump_alive": row.get("pump_alive") if isinstance(row.get("pump_alive"), bool) else None,
-            "last_delivery_age_seconds": _age(row.get("last_delivered_at"), now), "problems": _texts(row.get("problems"))}
+            "last_delivery_age_seconds": _age(row.get("last_delivered_at"), now), "canary": _canary(row.get("canary"), now),
+            "problems": _texts(row.get("problems"))}
 
 
 def _incidents(health_file, limit_seconds, now):

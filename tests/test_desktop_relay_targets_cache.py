@@ -190,13 +190,24 @@ class ColdStatusTests(unittest.TestCase):
         self.assertEqual(len(calls), 2)
 
     def test_stale_safe_is_never_reported_and_stop_check_stays_live(self):
+        import threading
         controller, personal, calls, gate = self.make(0)
         office_desktop.inspect_status(controller, personal, wait=2)
+        office_desktop._STATUS['worker'].join(5)  # the first check has finished and stored its result
         office_desktop._STATUS['at'] -= 100
         office_desktop._NATIVE_CACHE.clear()
-        gate.clear()
+        release = threading.Event()
+        read_thread = personal.native_bridge.call
+
+        def held_read(name, arguments):  # the check started below stays running until the test lets it go
+            release.wait(5)
+            return read_thread(name, arguments)
+
+        personal.native_bridge.call = held_read
         stale = office_desktop.inspect_status(controller, personal, wait=0)
         self.assertNotEqual(stale['safety'], 'safe')
+        release.set()
+        office_desktop._STATUS['worker'].join(5)
         before = len(calls)
         self.assertEqual(office_desktop.inspect_shutdown(controller, personal, None, None)['safety'], 'safe')
         self.assertGreater(len(calls), before)

@@ -26,6 +26,10 @@ def _text(value):
     return str(value)[:TEXT_LIMIT] if value is not None else None
 
 
+def _number(value):
+    return value if isinstance(value, (int, float)) and not isinstance(value, bool) else None
+
+
 def _carry(previous, *path):
     value = previous
     for key in path:
@@ -44,6 +48,16 @@ def pump_action(project_report, at):
     return None
 
 
+def canary_facts(canary):
+    """The canary fields a reader may use (#426): when it last succeeded, its latency, the chat status it saw and how long one
+    has been waiting. None when no canary ran (old outbox.py, or switched off): unknown, never a good result."""
+    if not isinstance(canary, dict):
+        return None
+    return {"last_ok_at": _text(canary.get("last_ok_at")), "last_latency_seconds": _number(canary.get("last_latency_seconds")),
+            "last_read_seconds": _number(canary.get("last_read_seconds")), "last_chat_status": _text(canary.get("last_chat_status")),
+            "pending_seconds": _number(canary.get("pending_seconds"))}
+
+
 def build(report, previous=None, *, at, pass_seconds, interval_seconds=DEFAULT_INTERVAL, pid=None, version=None, restart_reason=None):
     """The status document for one supervisor pass. report is the watchdog's own report dict; previous is the last status
     document (or None): the reasons of earlier restarts are kept until a newer one replaces them."""
@@ -57,6 +71,7 @@ def build(report, previous=None, *, at, pass_seconds, interval_seconds=DEFAULT_I
     for entry in report.get("projects", []):
         outbox = entry.get("outbox") or {}
         projects.append({"project": entry.get("project"), "name": Path(str(entry.get("project", ""))).name,
+                         "canary": canary_facts(entry.get("canary")),
                          **{key: outbox.get(key) for key in PROJECT_FIELDS},
                          "problems": [str(p) for p in outbox.get("problems", [])]})
         action = pump_action(entry, stamp)

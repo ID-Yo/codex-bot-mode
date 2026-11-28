@@ -100,6 +100,16 @@ class ModelTests(unittest.TestCase):
         (self.root / '.bot-mode' / 'relay-health.json').write_text('{broken', encoding='utf-8')
         self.assertEqual(self.build()['incidents'], [])
 
+    def test_the_canary_of_a_project_reaches_the_model_with_unknown_kept_unknown(self):
+        facts = {'last_ok_at': (NOW - timedelta(minutes=3)).isoformat(), 'last_latency_seconds': 1.5, 'last_read_seconds': 0.2,
+                 'last_chat_status': 'idle', 'pending_seconds': None, 'secret': 'x'}
+        self.put(document(projects=[{**PROJECT, 'canary': facts}, {**PROJECT, 'name': 'beta', 'canary': None},
+                                    {**PROJECT, 'name': 'gamma', 'canary': {'last_latency_seconds': 'fast', 'pending_seconds': True}}]))
+        first, second, third = self.build()['projects']
+        self.assertEqual(first['canary'], {'last_ok_age_seconds': 180, 'last_latency_seconds': 1.5, 'last_chat_status': 'idle', 'pending_seconds': None})
+        self.assertIsNone(second['canary'])
+        self.assertEqual((third['canary']['last_latency_seconds'], third['canary']['pending_seconds'], third['canary']['last_ok_age_seconds']), (None, None, None))
+
     def test_a_failed_incident_bookkeeping_reaches_the_model(self):
         self.put(document(incidents_error='KeyError: opened'))
         self.assertEqual(self.build()['incidents_error'], 'KeyError: opened')
@@ -241,6 +251,33 @@ class PanelScriptTests(unittest.TestCase):
         self.assertNotIn('innerHTML', source)
         self.assertNotIn("method:'POST'", source)
         self.assertNotIn('method:"POST"', source)
+
+    def test_the_canary_tag_shows_latency_waiting_or_unknown(self):
+        def project(name, canary):
+            return {'name': name, 'pending': 0, 'oldest_pending_seconds': None, 'ambiguous': 0, 'needs_attention': 0, 'relay_reachable': True,
+                    'pump_alive': True, 'last_delivery_age_seconds': 60, 'problems': [], 'canary': canary}
+        ok = {'last_ok_age_seconds': 180, 'last_latency_seconds': 1.54, 'last_chat_status': 'idle', 'pending_seconds': None}
+        waiting = {**ok, 'pending_seconds': 400}
+        odd_status = {**ok, 'last_chat_status': 'systemError'}
+        no_status = {**ok, 'last_chat_status': None}
+        bad_time = {**ok, 'last_ok_age_seconds': None}
+        rows = self.run_steps([{'name': 'ok', 'reply': self.model(projects=[project('a', ok)])},
+                               {'name': 'waiting', 'reply': self.model(projects=[project('a', waiting)])},
+                               {'name': 'none', 'reply': self.model(projects=[project('a', None)])},
+                               {'name': 'odd', 'reply': self.model(projects=[project('a', odd_status)])},
+                               {'name': 'nostatus', 'reply': self.model(projects=[project('a', no_status)])},
+                               {'name': 'badtime', 'reply': self.model(projects=[project('a', bad_time)])},
+                               {'name': 'notloaded', 'reply': self.model(projects=[project('a', {**ok, 'last_chat_status': 'notLoaded'})])},
+                               {'name': 'empty', 'reply': self.model(projects=[project('a', {'last_ok_age_seconds': None, 'last_latency_seconds': None,
+                                                                                           'last_chat_status': None, 'pending_seconds': None})])}])
+        self.assertIn('Canary 1.5 s, 3 min ago', rows['ok']['text'])
+        self.assertIn('Canary waiting 7 min', rows['waiting']['text'])
+        self.assertNotIn('Canary 1.5', rows['waiting']['text'])
+        self.assertIn('Canary 1.5 s, 3 min ago', rows['notloaded']['text'])
+        for name in ('none', 'empty', 'odd', 'nostatus', 'badtime'):
+            self.assertIn('Canary unknown', rows[name]['text'])
+            self.assertNotIn(' s, ', rows[name]['text'])
+            self.assertNotIn('unknown time', rows[name]['text'])
 
     def test_a_failed_incident_bookkeeping_is_shown_and_a_clean_pass_shows_nothing(self):
         rows = self.run_steps([{'name': 'failed', 'reply': self.model(incidents_error='KeyError: opened')},

@@ -28,6 +28,9 @@
     meta.append(el('span',null,waiting===null?T('Unknown'):waiting===0?T('Nothing waiting'):T('{n} waiting',{n:waiting})+(Number.isFinite(project.oldest_pending_seconds)?' · '+T('oldest {age}',{age:ageText(project.oldest_pending_seconds)}):'')));
     meta.append(el('span',null,Number.isFinite(project.last_delivery_age_seconds)?T('Last delivery {age} ago',{age:ageText(project.last_delivery_age_seconds)}):T('No delivery recorded')));
     meta.append(tag(project.pump_alive===true?T('Pump running'):project.pump_alive===false?T('Pump stopped'):T('Unknown')));
+    const canary=project.canary;
+    const goodCanary=Boolean(canary)&&['active','idle','notLoaded'].includes(canary.last_chat_status)&&Number.isFinite(canary.last_latency_seconds)&&Number.isFinite(canary.last_ok_age_seconds);
+    meta.append(tag(!canary?T('Canary unknown'):Number.isFinite(canary.pending_seconds)?T('Canary waiting {age}',{age:ageText(canary.pending_seconds)}):goodCanary?T('Canary {latency} s, {age} ago',{latency:Math.round(canary.last_latency_seconds*10)/10,age:ageText(canary.last_ok_age_seconds)}):T('Canary unknown')));
     if(Number.isFinite(project.needs_attention)&&project.needs_attention>0)meta.append(tag(T('{n} need attention',{n:project.needs_attention})));
     if(Number.isFinite(project.ambiguous)&&project.ambiguous>0)meta.append(tag(T('{n} unconfirmed',{n:project.ambiguous})));
     row.append(meta);

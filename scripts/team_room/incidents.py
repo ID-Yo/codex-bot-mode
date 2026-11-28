@@ -53,6 +53,9 @@ RULES = (
      "Run outbox.py list --state needs-attention, then outbox.py resolve <id> --as delivered|skipped|retry."),
     (r"no pump is running", "pump-down", MANAGER, "outbox.py status --heal starts a pump; the supervisor does it every pass."),
     (r"oldest pending row is", "pending-stale", INFO, "Check the Manager thread: relay and pump are up but nothing is delivered."),
+    (r"^outbox canary has waited", "outbox-canary", MANAGER,
+     "The zero-token canary is not processed: run outbox.py status in the project and check the relay, the pump and the Manager chat. "
+     "A Manager that is only busy does not cause this."),
     (r"holds the lock but wrote no heartbeat", "pump-stuck", MANAGER, "End the pump process named in the message; the supervisor starts a new one."),
     (r"^health check failed", "check-failed", MANAGER, "Run python -B scripts/relay_watchdog.py --project <project> and read its error."),
     (r"^outbox status failed", "status-failed", MANAGER, "Run outbox.py status in the project and read its error."),
