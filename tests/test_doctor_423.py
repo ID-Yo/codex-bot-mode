@@ -7,8 +7,10 @@ import os
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
 from contextlib import redirect_stdout
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
@@ -48,11 +50,21 @@ class FakeWatchdog:
 
 class FakeOutbox:
     """Stands in for the outbox module: the effective relay descriptor of a project and whether its port answers."""
-    def __init__(self, descriptor=True, reachable=True):
-        self.descriptor, self.reachable = descriptor, reachable
+    def __init__(self, descriptor=True, reachable=True, error=None):
+        self.descriptor, self.reachable, self.error = descriptor, reachable, error
+        self.calls = []
     def find_relay_descriptor(self, project):
         return (Path(project) / 'relay', {'url': 'http://127.0.0.1:1', 'token': 't'}) if self.descriptor else (None, None)
     def relay_reachable(self, project): return self.reachable
+    def RelayClient(self, root):
+        outer = self
+        class Client:
+            def call(self, name, arguments, timeout=40):
+                outer.calls.append((name, arguments))
+                if outer.error:
+                    raise outer.error
+                return {}
+        return Client()
 
 
 class PythonVersionTests(unittest.TestCase):
@@ -151,6 +163,13 @@ class ProjectCase(unittest.TestCase):
         self.relay = self.base / 'relay'
         self.relay.mkdir()
         (self.relay / 'relay.json').write_text('{}')
+        self.office = self.base / 'office'
+        (self.office / '.bot-mode/local').mkdir(parents=True)
+        self.register(str(self.project))
+
+    def register(self, *roots):
+        (self.office / '.bot-mode/local/office-project-roots.json').write_text(
+            json.dumps({'schema': 1, 'projects': [{'id': 'p%d' % i, 'root': root} for i, root in enumerate(roots)]}))
 
     def make_project(self, *parts):
         path = self.base.joinpath(*parts)
@@ -168,7 +187,7 @@ class ProjectCase(unittest.TestCase):
         return {r['name'].split(': ', 1)[1]: r for r in results}
 
     def check(self, project=None, ob=None, wd=None):
-        return d.check_project(project or self.project, ROOT, wd or FakeWatchdog(), ob or FakeOutbox())
+        return d.check_project(project or self.project, self.office, wd or FakeWatchdog(), ob or FakeOutbox())
 
 
 class ProjectTests(ProjectCase):
@@ -260,6 +279,137 @@ class ProjectTests(ProjectCase):
         self.install()
         named = self.by_name(self.check(wd=FakeWatchdog(manager=None)))
         self.assertEqual((named['relay route']['status'], named['Manager chat']['status']), ('ok', 'warn'))
+
+
+class RegistrationTests(ProjectCase):
+    """#454: the doctor says whether the Office registry names the project and whether the relay lets the Manager chat through.
+    It only reads the registry; registering is the owner's step."""
+
+    def named(self, **kwargs):
+        return self.by_name(self.check(**kwargs))
+
+    def test_a_registered_project_passes_and_one_read_only_read_thread_is_made(self):
+        self.install()
+        ob = FakeOutbox()
+        named = self.named(ob=ob)
+        self.assertEqual((named['Office registration']['status'], named['Manager route']['status']), ('ok', 'ok'))
+        self.assertEqual(ob.calls, [('read_thread', {'threadId': '11111111-2222-7333-8444-555555555555', 'turnLimit': 1, 'includeOutputs': False})])
+
+    def test_the_registry_path_may_be_written_with_other_slashes(self):
+        self.install()
+        self.register(str(self.project).replace('\\', '/'))
+        self.assertEqual(self.named()['Office registration']['status'], 'ok')
+
+    def test_an_unregistered_project_is_a_warning_with_the_owner_remedy_and_nothing_to_fix(self):
+        self.install()
+        self.register(str(self.base / 'another'))
+        result = self.named()['Office registration']
+        self.assertEqual(result['status'], 'warn')
+        self.assertIn('not in the Office registry', result['detail'])
+        self.assertIn('owner', result['fix'])
+        self.assertIn('never write', result['fix'])
+        self.assertNotIn('code', result)
+
+    def test_a_missing_registry_file_means_not_registered_and_is_not_created(self):
+        self.install()
+        (self.office / '.bot-mode/local/office-project-roots.json').unlink()
+        self.assertEqual(self.named()['Office registration']['status'], 'warn')
+        self.assertFalse((self.office / '.bot-mode/local/office-project-roots.json').exists())
+
+    def test_an_unreadable_registry_is_unknown_not_registered_and_not_ok(self):
+        self.install()
+        for text in ('{not json', '[]', '{"projects": 5}', '"x"'):
+            with self.subTest(text):
+                (self.office / '.bot-mode/local/office-project-roots.json').write_text(text)
+                result = self.named()['Office registration']
+                self.assertEqual(result['status'], 'warn')
+                self.assertTrue(result['detail'].startswith('unknown'), result['detail'])
+
+    def test_a_registry_entry_without_a_root_is_ignored(self):
+        self.install()
+        (self.office / '.bot-mode/local/office-project-roots.json').write_text(json.dumps({'schema': 1, 'projects': [{'id': 'x'}, 5, {'root': 7}]}))
+        self.assertEqual(self.named()['Office registration']['status'], 'warn')
+
+    def test_the_named_refusal_text_is_a_failure_that_names_the_cause(self):
+        self.install()
+        error = RuntimeError('HTTP Error 400: Bad Request (%s)' % d.RELAY_REFUSAL)
+        result = self.named(ob=FakeOutbox(error=error))['Manager route']
+        self.assertEqual(result['status'], 'fail')
+        self.assertIn('refused the Manager chat', result['detail'])
+        self.assertNotIn('probably', result['detail'])
+        self.assertIn('owner', result['fix'])
+
+    def test_a_plain_400_from_an_older_relay_is_a_failure_that_says_probably(self):
+        self.install()
+        error = RuntimeError('HTTP Error 400: Bad Request (Invalid Desktop relay request)')
+        result = self.named(ob=FakeOutbox(error=error))['Manager route']
+        self.assertEqual(result['status'], 'fail')
+        self.assertIn('probably', result['detail'])
+        self.assertNotIn('refused the Manager chat', result['detail'])
+
+    def test_any_other_error_is_unknown_not_a_refusal(self):
+        self.install()
+        for error in (RuntimeError('HTTP Error 503: Service Unavailable'), RuntimeError('HTTP Error 401: Unauthorized'),
+                      TimeoutError('timed out'), OSError('connection reset'), ValueError('bad json')):
+            with self.subTest(str(error)):
+                result = self.named(ob=FakeOutbox(error=error))['Manager route']
+                self.assertEqual(result['status'], 'warn')
+                self.assertTrue(result['detail'].startswith('unknown'), result['detail'])
+
+    def test_without_a_manager_or_a_reachable_relay_the_route_is_skipped_and_nothing_is_read(self):
+        self.install()
+        ob = FakeOutbox()
+        no_manager = self.named(wd=FakeWatchdog(manager=None), ob=ob)['Manager route']
+        self.assertEqual(no_manager['status'], 'skip')
+        details = {no_manager['detail']}
+        for other in (FakeOutbox(descriptor=False), FakeOutbox(reachable=False)):
+            result = self.named(ob=other)['Manager route']
+            self.assertEqual(result['status'], 'skip')
+            details.add(result['detail'])
+            self.assertEqual(other.calls, [])
+        self.assertEqual(len(details), 3)  # each case says which one it is
+        self.assertEqual(ob.calls, [])
+
+    def test_the_real_client_reads_the_refusal_text_from_a_loopback_relay(self):
+        self.install()
+        answers = {'error': 'Invalid Desktop relay request'}
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self):
+                self.rfile.read(int(self.headers.get('Content-Length', 0)))
+                body = json.dumps(answers).encode()
+                self.send_response(400)
+                self.send_header('Content-Length', str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+            def log_message(self, *args): pass
+
+        server = HTTPServer(('127.0.0.1', 0), Handler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        (self.relay / 'relay.json').write_text(json.dumps({'url': 'http://127.0.0.1:%d' % server.server_port, 'token': 't'}))
+        old = d.check_manager_route('proj', self.project, FakeWatchdog(), OUTBOX)
+        self.assertEqual(old['status'], 'fail')
+        self.assertIn('probably', old['detail'])
+        answers['error'] = d.RELAY_REFUSAL
+        named = d.check_manager_route('proj', self.project, FakeWatchdog(), OUTBOX)
+        self.assertEqual(named['status'], 'fail')
+        self.assertIn('refused the Manager chat', named['detail'])
+        self.assertNotIn('probably', named['detail'])
+
+    def test_neither_the_checks_nor_fix_write_the_registry(self):
+        self.install(config=False)
+        self.register(str(self.base / 'another'))
+        registry = self.office / '.bot-mode/local/office-project-roots.json'
+        before = digest(registry)
+        results = self.check(ob=FakeOutbox(error=RuntimeError('HTTP Error 400: Bad Request (%s)' % d.RELAY_REFUSAL)))
+        d.apply_fixes(results, self.office, [str(self.project)], FakeWatchdog())
+        self.assertEqual(digest(registry), before)
+        self.assertEqual(sorted(p.name for p in registry.parent.iterdir()), ['office-project-roots.json'])
+        registry.unlink()
+        d.apply_fixes(self.check(), self.office, [str(self.project)], FakeWatchdog())
+        self.assertFalse(registry.exists())
 
 
 class FixTests(ProjectCase):

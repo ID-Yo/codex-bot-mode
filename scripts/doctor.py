@@ -314,6 +314,67 @@ def check_route(name, project, ob):
     return check(name + ": relay route", OK, "relay at %s answers" % root)
 
 
+REGISTRY_REMEDY = ("registering a project in Office needs the owner's consent (the project onboarding in the Office panel: the agent prepares it, "
+                   "the owner confirms); the doctor and --fix never write the Office registry")
+RELAY_REFUSAL = "Unappointed Desktop recipient refused"  # the text a relay that names the refusal puts in its HTTP 400
+
+
+def registry_roots(office):
+    """(roots, problem) of the Office registry, read only. A missing registry file is an empty registry; problem is None
+    unless the file exists and cannot be read."""
+    path = Path(office) / ".bot-mode" / "local" / "office-project-roots.json"
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return [], None
+    except (OSError, ValueError) as error:
+        return [], "cannot be read (%s)" % str(error)[:80]
+    projects = data.get("projects") if isinstance(data, dict) else None
+    if not isinstance(projects, list):
+        return [], "cannot be read (it has no list of projects)"
+    return [p["root"] for p in projects if isinstance(p, dict) and isinstance(p.get("root"), str)], None
+
+
+def check_registration(name, project, office):
+    """Whether the Office registry names this project. The relay serves only registered projects. Never writes the registry."""
+    label = name + ": Office registration"
+    roots, problem = registry_roots(office)
+    if problem:
+        return check(label, WARN, "unknown: the Office registry %s, so it is not known whether the project is registered" % problem,
+                     REGISTRY_REMEDY)
+    if any(same_path(root, project) for root in roots):
+        return check(label, OK, "the project is in the Office registry")
+    return check(label, WARN, "the project is not in the Office registry: until the owner approves registering it, the relay refuses "
+                              "its Manager chat and its reports wait", REGISTRY_REMEDY)
+
+
+def check_manager_route(name, project, wd, ob):
+    """One read-only read_thread of the Manager chat through the project's relay, as the pump does before a delivery: would the
+    relay let a report in? Nothing is sent, nobody is woken and the project's own outbox.py is not run."""
+    label = name + ": Manager route"
+    manager = wd.current_manager(project)
+    root, _ = ob.find_relay_descriptor(project)
+    if not manager:
+        return check(label, SKIP, "no Manager chat is bound in this project's roster (see the Manager chat check)")
+    if not root:
+        return check(label, SKIP, "this project has no usable relay descriptor (see the relay route check)")
+    if not ob.relay_reachable(project):
+        return check(label, SKIP, "the relay of this project does not accept connections (see the relay route check)")
+    try:
+        ob.RelayClient(root).call("read_thread", {"threadId": manager, "turnLimit": 1, "includeOutputs": False}, timeout=10)
+    except Exception as error:
+        answer = str(error)
+        if not answer.startswith("HTTP Error 400"):
+            return check(label, WARN, "unknown: the Manager chat could not be read (%s)" % answer[:120],
+                         "run the doctor again, or check the relay")
+        if RELAY_REFUSAL in answer:
+            return check(label, FAIL, "the relay refused the Manager chat: the project is not in the Office registry or the chat is not "
+                                      "bound in its roster", REGISTRY_REMEDY)
+        return check(label, FAIL, "the relay answered HTTP 400 for the Manager chat: probably the project is not in the Office registry "
+                                  "or the chat is not bound in its roster (this relay does not say which)", REGISTRY_REMEDY)
+    return check(label, OK, "the relay lets a report to the Manager chat through")
+
+
 def check_project(project, office, wd, ob=None):
     name = Path(project).name
     full = str(project)
@@ -347,6 +408,8 @@ def check_project(project, office, wd, ob=None):
     results.append(check(name + ": Manager chat", OK if manager else WARN,
                          "bound" if manager else "no Manager chat bound in this project's roster (reports to 'manager' cannot be delivered)",
                          None if manager else "roster.py set-thread manager <thread-id> --reason appointed"))
+    results.append(check_registration(name, project, office))
+    results.append(check_manager_route(name, project, wd, ob))
     results.append(check_queue(name, project))
     return results
 
@@ -515,7 +578,8 @@ def main(argv=None):
         print(render(results))
         for line in fixed:
             print("fixed: " + line)
-        print("\nOK: everything needed works." if not failed else "\n%d check(s) failed. Run with --fix, or follow the fix lines above." % len(failed))
+        print("\nOK: everything needed works." if not failed else "\n%d check(s) failed. --fix repairs only what is safe to repair (the supervisor task, the relay, a missing project "
+              "outbox or config); every other fix line is a step to do by hand." % len(failed))
     return 1 if failed else 0
 
 

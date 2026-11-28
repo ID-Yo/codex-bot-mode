@@ -141,6 +141,14 @@ def read_only_targets():
         return frozenset()
 
 
+REFUSAL_TEXT = 'Unappointed Desktop recipient refused'
+
+
+class UnappointedRecipient(ValueError):
+    """The chat is not appointed or bound in a registered project. The caller is told so in the HTTP 400 text (#454): the
+    other ValueErrors stay the fixed generic answer."""
+
+
 def validate(name, arguments):
     if name not in TOOLS or not isinstance(arguments, dict):
         raise ValueError('Unsupported Desktop relay tool')
@@ -149,13 +157,13 @@ def validate(name, arguments):
     allowed = targets()
     thread = arguments.get('threadId')
     if name == 'read_thread' and thread not in allowed and thread not in read_only_targets():
-        raise ValueError('Unappointed Desktop recipient refused')
+        raise UnappointedRecipient(REFUSAL_TEXT)
     if name == 'send_message_to_thread' and thread not in allowed and thread not in sendable_targets():
         # Every chat bound in a registry project's roster may receive a report (owner decision, #417): directors and
         # sub-managers are not "the" registry Manager. Unbound threads stay refused; waiting and reading keep their rules.
-        raise ValueError('Unappointed Desktop recipient refused')
+        raise UnappointedRecipient(REFUSAL_TEXT)
     if name == 'wait_threads' and any(t.get('threadId') not in allowed or t.get('hostId', 'local') != 'local' for t in arguments.get('targets', [])):
-        raise ValueError('Unappointed Desktop recipient refused')
+        raise UnappointedRecipient(REFUSAL_TEXT)
 
 
 
@@ -462,6 +470,8 @@ def create_relay(bridge, root, port=24243):
                 name, arguments = data.get('name'), data.get('arguments')
                 validate(name, arguments)
                 self.respond(200, {'result':bridge.call(name, prepare(name, arguments))})
+            except UnappointedRecipient:
+                self.respond(400, {'error':REFUSAL_TEXT})
             except (ValueError, TypeError, KeyError):
                 self.respond(400, {'error':'Invalid Desktop relay request'})
             except Exception as error:

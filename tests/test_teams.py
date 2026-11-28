@@ -234,6 +234,41 @@ class TeamTests(unittest.TestCase):
                                 capture_output=True, text=True)
         self.assertEqual(json.loads(status.stdout)['pending'], 0, status.stderr)
 
+    def test_install_team_stores_the_setup_status_with_the_unfinished_steps(self):
+        self.with_relay_dir()
+        self.assertEqual(self.run_cli('install-team', 'development', '--tracking-mode', 'local', '--project', str(self.project),
+                                      '--approval', 'once', '--confirm'), 0)
+        stored = self.project / '.bot-mode/local/setup-status.json'
+        status = json.loads(stored.read_text(encoding='utf-8'))
+        steps = {name: step['state'] for name, step in status['steps'].items()}
+        self.assertEqual((steps['outbox'], steps['roster']), ('done', 'incomplete'))  # the Manager chat is bound after the install
+        self.assertEqual(steps['office_registration'], 'waiting for owner consent')
+        self.assertEqual((status['delivery'], status['complete']), ('not proven', False))
+        stored.unlink()
+        self.assertEqual(self.run_cli('setup-status', '--project', str(self.project)), 0)
+        self.assertTrue(stored.is_file())
+
+    def test_a_status_that_cannot_be_stored_does_not_fail_a_finished_install(self):
+        self.with_relay_dir()
+        (self.project / '.bot-mode/local/setup-status.json').mkdir(parents=True)  # a folder where the file belongs
+        run = subprocess.run([sys.executable, '-B', str(ROOT / 'scripts/team.py'), 'install-team', 'development', '--tracking-mode', 'local',
+                              '--project', str(self.project), '--approval', 'once', '--confirm'], capture_output=True, text=True, encoding='utf-8')
+        self.assertEqual(run.returncode, 0, run.stderr)
+        result = json.loads(run.stdout)
+        self.assertIn('installed', result)
+        self.assertIn('setup_status', result)  # the extra key is documented in docs/operations/teams.md
+        self.assertIn('the setup status was not stored', run.stderr)
+        self.assertTrue((self.project / '.bot-mode/outbox.py').is_file())
+        self.assertFalse((self.project / '.bot-mode/local/setup-status.json.tmp').exists())
+        self.assertEqual(self.run_cli('setup-status', '--project', str(self.project)), 2)  # setup-status itself fails loudly
+
+    def test_setup_status_of_a_path_without_a_setup_creates_nothing_and_fails_clearly(self):
+        missing = Path(self.tmp.name) / 'mistyped'
+        self.assertEqual(self.run_cli('setup-status', '--project', str(missing)), 2)
+        self.assertFalse(missing.exists())
+        self.assertEqual(self.run_cli('setup-status', '--project', str(self.project)), 2)  # an existing folder without .bot-mode
+        self.assertEqual(list(self.project.iterdir()), [])
+
     def test_install_team_then_second_team_and_director(self):
         self.assertEqual(self.run_cli('install-team', 'development', '--tracking-mode', 'local', '--project', str(self.project),
                                       '--approval', 'once'), 2)  # no --confirm

@@ -80,6 +80,10 @@ or `team.py add-agent ... --actor <you> --approval once --confirm`. Use
 `--approval standing:<id>` only when `team.py approvals` shows a matching owner
 record. If you proposed a custom agent, pass `--proposed-by <you>`.
 
+The install prints the setup status (roster, outbox, relay route, Office registration, delivery proof) on stderr and
+stores it in `.bot-mode/local/setup-status.json`. Registering the project in Office is never part of the install: it needs
+the owner's consent and shows as `waiting for owner consent` until it is done. Never register it yourself.
+
 ## 5. Chats
 
 - First team in a project: if this chat has no role yet, it becomes the team
@@ -103,6 +107,8 @@ Reuse the section named in the plan from `list_threads`, or create it once with
 
 ## 7. Report
 
-Reply with `roster.py links`: each agent, role and chat link; the section; the
+Run `team.py setup-status --project <p>` once the chats are recorded and include its text. List every step that is not
+`done` (or `not applicable`) as incomplete, with the owner action it waits for, and say delivery works only when the
+status says so; otherwise say delivery is not proven. Then reply with `roster.py links`: each agent, role and chat link; the section; the
 room; and the Director proposal if any. Codex Office picks up roster changes when
 it restarts. Update your STATE.md.
