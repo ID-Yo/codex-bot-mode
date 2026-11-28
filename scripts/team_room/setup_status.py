@@ -88,7 +88,9 @@ def delivery_proof_step(project):
     except sqlite3.Error as error:
         return _step(UNKNOWN, "the queue cannot be read (%s)" % str(error)[:80])
     try:
-        delivered = _count(connection, "SELECT COUNT(*) FROM outbox WHERE state = 'delivered'")
+        # a row that a person marked delivered by hand is not proof: only the pump or the reconciliation delivers a row without that text
+        delivered = _count(connection, "SELECT COUNT(*) FROM outbox WHERE state = 'delivered' AND COALESCE(error, '') NOT LIKE '%s%%'"
+                                      % outbox.RESOLVED_BY_OPERATOR)
         processed = _count(connection, "SELECT COUNT(*) FROM canary WHERE state = 'done'")  # a queue made before the canary has no such table
     finally:
         connection.close()
@@ -98,7 +100,7 @@ def delivery_proof_step(project):
         return _step(PROOF_CANARY, "the canary was processed (nothing is sent: it proves the path to the chat, not a delivered message)")
     if delivered is None:
         return _step(UNKNOWN, "the queue cannot be read")
-    return _step(PROOF_NONE, "no report was delivered and no canary was processed yet")
+    return _step(PROOF_NONE, "no report was delivered and no canary was processed yet (a row marked delivered by hand does not count)")
 
 
 def collect(project, office=OFFICE):

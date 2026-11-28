@@ -470,7 +470,7 @@ class OutboxDB:
             raise ValueError("action must be one of: " + ", ".join(sorted(RESOLUTIONS)))
         allowed = UNSURE_STATES + (("failed",) if action == "retry" else ())
         new_state = RESOLUTIONS[action]
-        text = ("resolved by operator: " + action + (": " + note if note else ""))[:500]
+        text = (RESOLVED_BY_OPERATOR + ": " + action + (": " + note if note else ""))[:500]
         delivered_at = now_iso() if new_state == "delivered" else None
         with self.conn:
             cur = self.conn.execute(
@@ -752,6 +752,7 @@ def send_feedback(depth, oldest, last_delivery, relay_up, pump_running, held=Non
     return out, err
 
 
+RESOLVED_BY_OPERATOR = "resolved by operator"  # the start of the error text of a row that a person decided by hand
 RELAY_REFUSAL = "Unappointed Desktop recipient refused"  # the relay's HTTP 400 text for a chat that is not appointed (#454)
 ROUTE_STATUS = "route-status.json"
 ROUTE_CONSENT = ("registering a project in Office needs the owner's consent (the project onboarding in the Office panel); "

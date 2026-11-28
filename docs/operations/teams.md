@@ -55,7 +55,8 @@ the owner's explicit step, the project onboarding in the Office panel, and no in
 `real report delivered`. The status says "Delivery works" only when every step is finished and the proof is one of the last two;
 a proof from the past with an unfinished step reads "Delivery was proven earlier ... but a step is unfinished now", and
 without a proof it reads "Delivery not proven". Every step that is not finished is listed as not finished. The proof
-counts delivered rows and processed canaries in the queue, which is opened read-only and never created (a queue from before
+counts delivered rows (not a row that a person marked delivered by hand with `outbox.py resolve`, whose error text starts with
+`resolved by operator`) and processed canaries in the queue, which is opened read-only and never created (a queue from before
 the canary still proves a delivered row). The file is project-local and ignored by Git. `setup-status` refuses a path that
 has no `.bot-mode` folder and creates nothing there. A status that cannot be stored (for example a folder or a locked file
 in its place) is a warning on stderr after `install-team`, which still prints its result and exits 0, and an error for

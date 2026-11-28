@@ -150,6 +150,40 @@ class DeliveryProofTests(Case):
         status = self.collect()
         self.assertEqual((status["delivery_proof"]["state"], status["delivery"]), ("real report delivered", "proven earlier"))
 
+    def test_a_row_marked_delivered_by_hand_is_not_proof(self):
+        db = self.queue()
+        try:
+            row = db.enqueue("developer", "manager", None, "report")
+            db.mark_ambiguous(row, "unknown")
+            db.resolve(row, "delivered", "arrived")
+            self.assertEqual(db.count_state("delivered"), 1)
+        finally:
+            db.close()
+        status = self.collect()
+        self.assertEqual((status["delivery_proof"]["state"], status["delivery"]), ("none", "not proven"))
+
+    def test_a_row_decided_by_hand_to_retry_and_then_delivered_by_the_pump_is_proof(self):
+        db = self.queue()
+        try:
+            row = db.enqueue("developer", "manager", None, "report")
+            db.mark_ambiguous(row, "unknown")
+            db.resolve(row, "retry")
+            db.mark_delivered_many([row])
+        finally:
+            db.close()
+        self.assertEqual(self.collect()["delivery_proof"]["state"], "real report delivered")
+
+    def test_a_hand_decided_row_does_not_hide_a_real_delivery(self):
+        db = self.queue()
+        try:
+            by_hand = db.enqueue("developer", "manager", None, "first")
+            db.mark_ambiguous(by_hand, "unknown")
+            db.resolve(by_hand, "delivered")
+            db.mark_delivered_many([db.enqueue("developer", "manager", None, "second")])
+        finally:
+            db.close()
+        self.assertEqual(self.collect()["delivery_proof"]["state"], "real report delivered")
+
     def test_a_queue_from_before_the_canary_still_proves_a_delivered_report(self):
         db = self.queue()
         try:
