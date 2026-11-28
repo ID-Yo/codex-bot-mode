@@ -1,4 +1,4 @@
-/* Delivery panel (#424): read-only supervisor status inside the dashboard's right column. */
+/* Delivery panel (#424): supervisor status and Retry / Skip for waiting reports, inside the dashboard's right column. */
 .delivery-panel{margin-top:18px;padding-top:12px;border-top:1px solid var(--line);min-width:0}
 .delivery-panel h2{font-size:14px;margin:0 0 6px}.delivery-panel h3{font-size:12px;margin:10px 0 4px}
 .delivery-state{font-size:12px;font-weight:600;margin:4px 0}
@@ -9,3 +9,15 @@
 .delivery-projects,.delivery-incidents{list-style:none;margin:8px 0;padding:0}
 .delivery-project,.delivery-incident{padding:7px 0;border-bottom:1px solid var(--line);min-width:0;font-size:11px;overflow-wrap:anywhere}
 .delivery-meta{display:flex;flex-wrap:wrap;gap:4px 8px;align-items:center;font-size:9px;color:var(--muted);margin-top:3px}
+.delivery-reports{margin-top:6px;min-width:0}.delivery-reports h4{font-size:11px;margin:6px 0 3px}
+.delivery-reports-list{list-style:none;margin:4px 0;padding:0}
+.delivery-report{padding:5px 0;border-top:1px solid var(--line);min-width:0}
+.delivery-report-head{display:flex;flex-wrap:wrap;gap:3px 8px;align-items:center;font-size:10px;color:var(--muted)}
+.delivery-actions{display:flex;flex-wrap:wrap;gap:6px;margin-top:4px}
+.delivery-actions button{font:inherit;font-size:10px;padding:3px 8px;border:1px solid var(--line);border-radius:6px;background:transparent;color:inherit;cursor:pointer}
+.delivery-actions button:disabled{opacity:.5;cursor:default}
+.delivery-confirm{margin-top:4px;padding:6px;border:1px solid var(--line);border-radius:6px}
+.delivery-warning{font-size:10px;margin:0 0 4px;overflow-wrap:anywhere}
+.delivery-notice{font-size:10px;margin:4px 0;overflow-wrap:anywhere}
+.delivery-notice[data-kind=unknown],.delivery-notice[data-kind=refused]{color:var(--hot)}
+.delivery-error{font-size:10px;color:var(--hot);margin:4px 0;overflow-wrap:anywhere}

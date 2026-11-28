@@ -269,7 +269,7 @@ function applyBots(list,lead){if(lead)leadBot=lead;for(const item of list){if(it
       if(item.bot===leadBot)input.disabled=true;else{input.name='room-bot';input.value=item.bot;}label.append(input,' '+botName(item.bot));box.append(label);}}}
 async function api(path, options={}){
   const response=await fetch(path,{...options,headers:{'X-Room-Token':token,...(options.headers||{})}});
-  const result=await response.json();if(!response.ok)throw Error(result.error||'Request failed');return result;
+  const result=await response.json();if(!response.ok){const failure=Error(result.error||'Request failed');failure.status=response.status;throw failure;}return result;
 }
 let directoryBots = [];
 let directoryTeams = [];

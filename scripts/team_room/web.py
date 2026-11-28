@@ -11,6 +11,7 @@ from urllib.parse import urlsplit, parse_qs
 
 from .controller import Conflict
 from .cross_rooms import CrossRoomError
+from . import outbox_actions
 from .store import BOTS
 from .work import WorkConflict
 from .images import Images, MAX_BYTES
@@ -358,6 +359,17 @@ def create_server(controller, port=0, *, ipv6=False, token=None, desktop_lifecyc
                     return self.reply(403, {'error': 'Local access token required'})
                 from . import project as served, outbox_health
                 return self.reply(200, outbox_health.build(served.ROOT))
+            if url.path == '/api/outbox-rows':
+                if not self.origin_ok() or not secrets.compare_digest(self.headers.get('X-Room-Token', ''), token):
+                    return self.reply(403, {'error': 'Local access token required'})
+                from . import project as served
+                project_name = parse_qs(url.query).get('project', [''])[0]
+                try:
+                    rows = outbox_actions.waiting_rows(served.ROOT, project_name)
+                    return self.reply(200, {'project': project_name, 'rows': rows, 'limit': outbox_actions.LIST_LIMIT,
+                                           'cut': outbox_actions.list_is_cut(rows)})
+                except outbox_actions.Refused as error:
+                    return self.reply(error.status, {'error': error.message})
             if url.path == '/api/projects':
                 if not secrets.compare_digest(self.headers.get('X-Room-Token',''),token):
                     return self.reply(403, {'error':'Local access token required'})
@@ -625,6 +637,9 @@ def create_server(controller, port=0, *, ipv6=False, token=None, desktop_lifecyc
                         result = queue.release(data.get('id'), confirmed=data.get('confirmed', False))
                     else:
                         result = queue.cancel(data.get('id'))
+                elif self.path == '/api/outbox-resolve':
+                    from . import project as served
+                    result = outbox_actions.resolve(served.ROOT, data.get('project'), data.get('id'), data.get('action'), data.get('confirm'))
                 elif self.path == '/api/projects/pending-team/issue':
                     from . import project as served, project_onboarding
                     result = project_onboarding.link_pending_issue(served.PROJECT, data.get('project_id'), data.get('issue_url'))
@@ -792,6 +807,8 @@ def create_server(controller, port=0, *, ipv6=False, token=None, desktop_lifecyc
                             '/api/work/reconcile':'reconcile'}[self.path])())
                 else: return self.reply(404, {'error':'Not found'})
                 return self.reply(200, result)
+            except outbox_actions.Refused as error:
+                return self.reply(error.status, {'error': error.message})
             except CrossRoomError as error:
                 return self.reply(error.status, error.payload)
             except (Conflict, WorkConflict) as error:

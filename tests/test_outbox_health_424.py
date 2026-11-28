@@ -12,6 +12,7 @@ from scripts.team_room import outbox_health, supervisor_status
 ROOT = Path(__file__).resolve().parents[1]
 STATIC = ROOT / 'scripts' / 'team_room' / 'static'
 NOW = datetime(2026, 11, 23, 12, 0, 0, tzinfo=timezone.utc)
+A, B = 'a' * 32, 'b' * 32  # row ids of the decision tests
 PROJECT = {'project': 'X:/secret/path/alpha', 'name': 'alpha', 'pending': 2, 'oldest_pending_seconds': 150, 'ambiguous': 1, 'needs_attention': 3,
            'relay_reachable': True, 'pump_alive': True, 'last_delivered_at': (NOW - timedelta(minutes=5)).isoformat(), 'problems': ['p1']}
 
@@ -130,7 +131,8 @@ const fs = require('fs'), path = require('path'), vm = require('vm');
 const staticDir = process.argv[2];
 const spec = JSON.parse(process.argv[3]);
 class FakeNode {
-  constructor(tag) { this.tagName = tag; this.className = ''; this.dataset = {}; this.children = []; this.textContent = ''; this.attrs = {}; this.parent = null; }
+  constructor(tag) { this.tagName = tag; this.className = ''; this.dataset = {}; this.children = []; this.textContent = ''; this.attrs = {}; this.parent = null; this.handlers = {}; }
+  addEventListener(type, fn) { (this.handlers[type] = this.handlers[type] || []).push(fn); }
   append(...items) { for (const item of items) { if (typeof item === 'string') { const t = new FakeNode('#text'); t.textContent = item; item = t; } item.parent = this; this.children.push(item); } }
   setAttribute(k, v) { this.attrs[k] = v; }
   replaceWith(node) { const i = this.parent.children.indexOf(this); node.parent = this.parent; this.parent.children[i] = node; panels.splice(panels.indexOf(this), 1, node); }
@@ -141,6 +143,8 @@ const panels = [];
 const calls = [];
 const store = {};
 let nextReply = null;
+let rowsReply = {};
+let resolveReply = null;
 const context = {
   window: { addEventListener: () => {}, dispatchEvent: () => true },
   document: {
@@ -149,7 +153,16 @@ const context = {
   },
   localStorage: { getItem: k => store[k] ?? null, setItem: (k, v) => { store[k] = String(v); } },
   setInterval: () => 0, console, Event,
-  api: async (url, options) => { calls.push({ url, options: options || null }); const r = nextReply; if (r instanceof Error) throw r; return r; }
+  api: async (url, options) => {
+    calls.push({ url, options: options || null, body: options && options.body ? JSON.parse(options.body) : null });
+    let r;
+    if (url.startsWith('/api/outbox-rows')) { const name = decodeURIComponent(url.split('project=')[1]); r = rowsReply[name] !== undefined ? rowsReply[name] : { project: name, rows: [], cut: false, limit: 20 }; }
+    else if (url === '/api/outbox-resolve') r = resolveReply;
+    else r = nextReply;
+    if (r instanceof Error) throw r;
+    if (r && r.__error) { const failure = new Error(r.__error); if (r.status) failure.status = r.status; throw failure; }
+    return r;
+  }
 };
 context.window.window = context.window;
 vm.createContext(context);
@@ -164,6 +177,8 @@ const results = [];
   for (const step of spec) {
     if (step.language) { context.officeI18n.setLanguage(step.language); }
     if (step.reply !== undefined) nextReply = step.reply === 'ERROR' ? new Error('boom') : step.reply;
+    if (step.rows !== undefined) rowsReply = step.rows;
+    if (step.resolve !== undefined) resolveReply = step.resolve;
     const parent = new FakeNode('aside');
     panels.length = 0;
     const before = panel.build();
@@ -171,9 +186,20 @@ const results = [];
     panel.paint(parent); panels.push(parent.children[0]);
     const loading = text(parent.children[0]);
     await panel.refresh(); await new Promise(r => setTimeout(r, 0));
+    const clickTexts = [];
+    for (const click of step.clicks || []) {
+      const inRow = node => { for (let n = node; n; n = n.parent) if (n.dataset && n.dataset.row === click.row) return true; return false; };
+      const targets = find(parent.children[0], click.cls).filter(node => !click.row || inRow(node));
+      if (!targets.length) throw new Error('no ' + click.cls + ' button to click');
+      for (const fn of targets[0].handlers.click || []) fn();
+      for (let i = 0; i < 4; i++) await new Promise(r => setTimeout(r, 0));
+      clickTexts.push(text(parent.children[0]));
+    }
     const shown = parent.children[0];
+    const count = cls => find(shown, cls).length;
     results.push({ name: step.name, loading, text: text(shown), state: shown.dataset.state, rows: find(shown, 'delivery-project').length,
-                   incidents: find(shown, 'delivery-incident').length, calls: calls.splice(0) });
+                   incidents: find(shown, 'delivery-incident').length, calls: calls.splice(0), clickTexts,
+                   buttons: { retry: count('delivery-retry'), skip: count('delivery-skip'), yes: count('delivery-confirm-yes'), no: count('delivery-confirm-no') } });
   }
   process.stdout.write(JSON.stringify(results));
 })();
@@ -212,8 +238,8 @@ class PanelScriptTests(unittest.TestCase):
                          'Last delivery 5 min ago', 'Pump running', '3 need attention', '1 unconfirmed', 'Nothing waiting', 'No delivery recorded', 'Pump stopped',
                          'Last pump action: pump started'):
             self.assertIn(expected, row['text'])
-        self.assertEqual([c['url'] for c in row['calls']], ['/api/outbox-health'])
-        self.assertIsNone(row['calls'][0]['options'])  # a plain GET: the panel cannot change anything
+        self.assertEqual([c['url'] for c in row['calls']], ['/api/outbox-health', '/api/outbox-rows?project=alpha'])
+        self.assertEqual([c['options'] for c in row['calls']], [None, None])  # plain GETs: showing the panel changes nothing
 
     def test_unknown_shows_the_reason_and_no_numbers_or_projects(self):
         rows = self.run_steps([{'name': 'unknown', 'reply': self.model(state='unknown', reason='the supervisor last ran 900 s ago', age_seconds=900,
@@ -246,11 +272,15 @@ class PanelScriptTests(unittest.TestCase):
             self.assertNotIn('Healthy', rows[name]['text'])
             self.assertEqual(rows[name]['rows'], 0)
 
-    def test_text_comes_from_the_server_as_text_and_the_panel_has_no_dispatch(self):
+    def test_text_comes_from_the_server_as_text_and_the_only_write_is_the_confirmed_decision(self):
         source = (STATIC / 'delivery.js').read_text(encoding='utf-8')
         self.assertNotIn('innerHTML', source)
-        self.assertNotIn("method:'POST'", source)
         self.assertNotIn('method:"POST"', source)
+        self.assertEqual(source.count("method:'POST'"), 1)  # one POST, and it goes only to the decision endpoint
+        self.assertEqual(source.count("'/api/outbox-resolve'"), 1)
+        self.assertEqual(source.count('confirm:true'), 1)
+        for word in ('/desktop', 'send_message', 'fetch(', 'XMLHttpRequest'):
+            self.assertNotIn(word, source)
 
     def test_the_canary_tag_shows_latency_waiting_or_unknown(self):
         def project(name, canary):
@@ -279,6 +309,114 @@ class PanelScriptTests(unittest.TestCase):
             self.assertNotIn(' s, ', rows[name]['text'])
             self.assertNotIn('unknown time', rows[name]['text'])
 
+    def reports(self, count=2, **changes):
+        rows = [{'id': A, 'state': 'ambiguous', 'sender': 'developer', 'target': 'manager', 'age_seconds': 600},
+                {'id': B, 'state': 'needs-attention', 'sender': 'reviewer', 'target': 'manager', 'age_seconds': 7200}][:count]
+        return {'project': 'alpha', 'rows': rows, 'cut': False, 'limit': 20, **changes}
+
+    def posts(self, row):
+        return [call for call in row['calls'] if call['options']]
+
+    def test_waiting_reports_get_retry_and_skip_buttons_and_show_no_report_text(self):
+        rows = self.run_steps([{'name': 'a', 'reply': self.model(), 'rows': {'alpha': self.reports()}}])['a']
+        self.assertEqual(rows['buttons'], {'retry': 2, 'skip': 2, 'yes': 0, 'no': 0})
+        for expected in ('Waiting for a decision', 'aaaaaaaa', 'bbbbbbbb', 'Unconfirmed', 'Needs attention', 'developer → manager', 'Retry', 'Skip'):
+            self.assertIn(expected, rows['text'])
+        self.assertEqual([c['url'] for c in rows['calls']], ['/api/outbox-health', '/api/outbox-rows?project=alpha'])
+        self.assertEqual(self.posts(rows), [])
+
+    def test_a_project_without_waiting_reports_asks_for_no_list(self):
+        rows = self.run_steps([{'name': 'a', 'reply': self.model(projects=[self.model()['projects'][1]])}])['a']
+        self.assertEqual([c['url'] for c in rows['calls']], ['/api/outbox-health'])
+        self.assertEqual(rows['buttons']['retry'], 0)
+
+    def test_retry_asks_first_warns_about_a_duplicate_and_posts_only_after_the_confirmation(self):
+        steps = [{'name': 'a', 'reply': self.model(), 'rows': {'alpha': self.reports()},
+                  'clicks': [{'cls': 'delivery-retry', 'row': A}, {'cls': 'delivery-confirm-no'}, {'cls': 'delivery-retry', 'row': A}]}]
+        row = self.run_steps(steps)['a']
+        asked, cancelled, asked_again = row['clickTexts']
+        for text in (asked, asked_again):
+            self.assertIn('same report twice', text)
+            self.assertIn('wait behind other unconfirmed reports for the same recipient', text)
+            self.assertIn('Confirm retry', text)
+        self.assertNotIn('same report twice', cancelled)
+        self.assertEqual(self.posts(row), [])  # asking and cancelling send nothing
+        self.assertEqual(row['buttons']['yes'], 1)
+
+    def test_a_confirmed_retry_posts_once_with_confirm_true_and_shows_the_servers_answer(self):
+        reply = {'id': A, 'action': 'retry', 'state': 'pending', 'journal_written': True}
+        row = self.run_steps([{'name': 'a', 'reply': self.model(), 'rows': {'alpha': self.reports()}, 'resolve': reply,
+                               'clicks': [{'cls': 'delivery-retry', 'row': A}, {'cls': 'delivery-confirm-yes'}]}])['a']
+        posts = self.posts(row)
+        self.assertEqual([(p['url'], p['options']['method'], p['body']) for p in posts],
+                         [('/api/outbox-resolve', 'POST', {'project': 'alpha', 'id': A, 'action': 'retry', 'confirm': True})])
+        self.assertIn('Report aaaaaaaa is queued to be sent again.', row['text'])
+        self.assertEqual([c['url'] for c in row['calls']].count('/api/outbox-rows?project=alpha'), 2)  # the list is read again
+        self.assertEqual(row['buttons']['yes'], 0)
+
+    def test_a_confirmed_skip_posts_skip_and_shows_skipped(self):
+        reply = {'id': B, 'action': 'skip', 'state': 'skipped', 'journal_written': True}
+        row = self.run_steps([{'name': 'a', 'reply': self.model(), 'rows': {'alpha': self.reports()}, 'resolve': reply,
+                               'clicks': [{'cls': 'delivery-skip', 'row': B}]}])['a']
+        self.assertIn('This report will never be sent.', row['clickTexts'][0])
+        self.assertIn('Confirm skip', row['clickTexts'][0])
+        row = self.run_steps([{'name': 'a', 'reply': self.model(), 'rows': {'alpha': self.reports()}, 'resolve': reply,
+                               'clicks': [{'cls': 'delivery-skip', 'row': B}, {'cls': 'delivery-confirm-yes'}]}])['a']
+        self.assertEqual([p['body']['action'] for p in self.posts(row)], ['skip'])
+        self.assertIn('Report bbbbbbbb was skipped.', row['text'])
+
+    def test_a_refusal_shows_the_servers_reason_and_never_success(self):
+        failure = {'__error': 'That report is not waiting for a decision', 'status': 409}
+        row = self.run_steps([{'name': 'a', 'reply': self.model(), 'rows': {'alpha': self.reports()}, 'resolve': failure,
+                               'clicks': [{'cls': 'delivery-retry', 'row': A}, {'cls': 'delivery-confirm-yes'}]}])['a']
+        self.assertIn('Not done: That report is not waiting for a decision', row['text'])
+        self.assertNotIn('queued', row['text'])
+
+    def test_a_503_a_lost_connection_or_an_odd_answer_is_unknown_and_never_success(self):
+        answers = {'503': {'__error': 'The outcome is unknown', 'status': 503}, 'network': {'__error': 'Failed to fetch'},
+                   'wrong state': {'id': A, 'action': 'retry', 'state': 'delivered', 'journal_written': True},
+                   'wrong row': {'id': B, 'action': 'retry', 'state': 'pending', 'journal_written': True}, 'empty': {}}
+        for name, answer in answers.items():
+            row = self.run_steps([{'name': 'a', 'reply': self.model(), 'rows': {'alpha': self.reports()}, 'resolve': answer,
+                                   'clicks': [{'cls': 'delivery-retry', 'row': A}, {'cls': 'delivery-confirm-yes'}]}])['a']
+            self.assertIn('Unknown outcome. The list was read again', row['text'], name)
+            for success in ('queued', 'was skipped', 'Not done'):
+                self.assertNotIn(success, row['text'], name)
+            self.assertEqual(len(self.posts(row)), 1, name)
+
+    def test_a_journal_that_could_not_be_written_is_said(self):
+        reply = {'id': A, 'action': 'retry', 'state': 'pending', 'journal_written': False}
+        row = self.run_steps([{'name': 'a', 'reply': self.model(), 'rows': {'alpha': self.reports()}, 'resolve': reply,
+                               'clicks': [{'cls': 'delivery-retry', 'row': A}, {'cls': 'delivery-confirm-yes'}]}])['a']
+        self.assertIn('The journal could not be written.', row['text'])
+
+    def test_an_unreadable_list_is_unknown_with_no_buttons_and_an_empty_list_says_so(self):
+        rows = self.run_steps([{'name': 'bad', 'reply': self.model(), 'rows': {'alpha': {'__error': 'x', 'status': 503}}},
+                               {'name': 'odd', 'reply': self.model(), 'rows': {'alpha': {'rows': 'no'}}},
+                               {'name': 'empty', 'reply': self.model(), 'rows': {'alpha': self.reports(0)}}])
+        for name in ('bad', 'odd'):
+            self.assertIn('cannot be read. Unknown is not empty.', rows[name]['text'], name)
+            self.assertEqual(rows[name]['buttons']['retry'], 0, name)
+        self.assertIn('No report is waiting for a decision', rows['empty']['text'])
+
+    def test_a_cut_list_says_how_many_older_reports_cannot_be_decided_from_office(self):
+        row = self.run_steps([{'name': 'a', 'reply': self.model(), 'rows': {'alpha': self.reports(1, cut=True)}}])['a']
+        self.assertIn('Only the newest 20 reports of each state are shown. Older ones cannot be decided from Office.', row['text'])
+        self.assertIn('3 older reports are not shown.', row['text'])
+        whole = self.run_steps([{'name': 'a', 'reply': self.model(), 'rows': {'alpha': self.reports()}}])['a']
+        self.assertNotIn('Only the newest', whole['text'])
+
+    def test_the_decision_labels_have_bulgarian_entries(self):
+        # Bulgarian labels as escapes: the public audit keeps Cyrillic out of test files
+        reply = {'id': A, 'action': 'retry', 'state': 'pending', 'journal_written': True}
+        row = self.run_steps([{'name': 'a', 'language': 'bg', 'reply': self.model(), 'rows': {'alpha': self.reports()}, 'resolve': reply,
+                               'clicks': [{'cls': 'delivery-retry', 'row': A}]}])['a']
+        for expected in ('\u0427\u0430\u043a\u0430\u0442 \u0440\u0435\u0448\u0435\u043d\u0438\u0435', '\u041e\u043f\u0438\u0442\u0430\u0439 \u043f\u0430\u043a', '\u041f\u0440\u043e\u043f\u0443\u0441\u043d\u0438',
+                         '\u0418\u0441\u043a\u0430 \u0432\u043d\u0438\u043c\u0430\u043d\u0438\u0435'):
+            self.assertIn(expected, row['text'])
+        self.assertIn('\u041f\u043e\u0442\u0432\u044a\u0440\u0434\u0438 \u043f\u043e\u0432\u0442\u043e\u0440\u043d\u0438\u044f \u043e\u043f\u0438\u0442', row['clickTexts'][0])
+        self.assertIn('\u0414\u043e\u043a\u043b\u0430\u0434\u044a\u0442 \u043c\u043e\u0436\u0435 \u0432\u0435\u0447\u0435 \u0434\u0430 \u0435 \u043f\u0440\u0438\u0441\u0442\u0438\u0433\u043d\u0430\u043b', row['clickTexts'][0])
+
     def test_a_failed_incident_bookkeeping_is_shown_and_a_clean_pass_shows_nothing(self):
         rows = self.run_steps([{'name': 'failed', 'reply': self.model(incidents_error='KeyError: opened')},
                                {'name': 'clean', 'reply': self.model()}])
@@ -301,6 +439,7 @@ class PanelScriptTests(unittest.TestCase):
         catalogue = (STATIC / 'i18n.js').read_text(encoding='utf-8')
         keys = set(re.findall(r"\bT\(\s*'((?:[^'\\\\]|\\\\.)*)'", script))
         keys |= set(re.findall(r":'([^']*)'", re.search(r"STATE=\{([^}]*)\}", script).group(1)))
+        keys |= set(re.findall(r":'([^']*)'", re.search(r"NOTE=\{(.*?)\};", script, re.S).group(1)))
         self.assertGreater(len(keys), 20)
         self.assertEqual(sorted(k for k in keys if "'" + k + "':" not in catalogue and '"' + k + '":' not in catalogue), [])
 
