@@ -11,6 +11,7 @@ Examples:
   python -B scripts/team.py install-team development --project <project> --tracking-mode github --approval once --confirm
   python -B scripts/team.py add-agent --project <project> --team Development --template blank --answers a.json --actor manager --approval once --confirm
   python -B scripts/team.py dreamdocs-offer --project <project> [--set yes|no|skip] [--owner-change]
+  python -B scripts/team.py setup-status --project <project>
 """
 import argparse
 import json
@@ -18,7 +19,7 @@ from pathlib import Path
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from team_room import dreamdocs_offer, manifest, teams  # noqa: E402
+from team_room import dreamdocs_offer, manifest, setup_status, teams  # noqa: E402
 
 
 def answers(path):
@@ -32,6 +33,22 @@ def answers(path):
 
 def emit(value):
     print(json.dumps(value, ensure_ascii=False, indent=2))
+
+
+def show_setup_status(project, must_store=False):
+    """Check, store and print which steps of the setup are finished. The text goes to stderr so stdout stays JSON.
+    A status that cannot be stored is a warning after an install (the team is installed) and an error for setup-status."""
+    if not (Path(project) / '.bot-mode').is_dir():
+        raise teams.TeamError(f'{project} has no .bot-mode folder: nothing is set up there yet')
+    status = setup_status.collect(project)
+    try:
+        setup_status.write(project, status)
+    except OSError as error:
+        if must_store:
+            raise
+        print(f'warning: the setup status was not stored ({error})', file=sys.stderr)
+    print('\n'.join(setup_status.render(status)), file=sys.stderr)
+    return status
 
 
 def main(argv=None):
@@ -72,6 +89,8 @@ def main(argv=None):
     d.add_argument('--owner-change', action='store_true', help='Change an earlier Yes or No; only when the owner asks.')
     d.add_argument('--adopted-tag', help='Stable release tag adopted after the owner approved the install scope.')
     d.add_argument('--adopted-commit', help='Full commit of that tag.')
+    s = sub.add_parser('setup-status', help='Show which setup steps are finished (roster, outbox, relay, Office registration, delivery proof).')
+    s.add_argument('--project', default='.')
     a = sub.add_parser('approvals', help='List standing approvals.')
     a.add_argument('--project', default='.')
     args = parser.parse_args(argv)
@@ -107,7 +126,7 @@ def main(argv=None):
             result = teams.install(plan)
             teams.record_use(args.project, approval, args.actor, f'team {plan["team"]}')
             emit({'installed': result, 'section': plan['section'], 'room': plan['room'],
-                  'director_proposal': plan['director_proposal']})
+                  'director_proposal': plan['director_proposal'], 'setup_status': show_setup_status(args.project)})
         elif args.action in ('plan-agent', 'add-agent'):
             extra = None
             if args.action == 'add-agent':
@@ -133,6 +152,8 @@ def main(argv=None):
             emit({'record': dreamdocs_offer.load(args.project),
                   'ask_now': dreamdocs_offer.should_offer(args.project, args.place),
                   'already_present': dreamdocs_offer.already_present(args.project)})
+        elif args.action == 'setup-status':
+            emit(show_setup_status(args.project, must_store=True))
         elif args.action == 'approvals':
             file = teams.approvals_path(args.project)
             emit(manifest.load(file) if file.exists() else {'approvals': []})

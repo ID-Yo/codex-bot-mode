@@ -119,6 +119,7 @@ class Relay:
         self.held = threading.Event()
         self.release = threading.Event()
         self.alive = True
+        self.refused_reads = {}  # thread -> the error text of an HTTP 400 for read_thread (a chat the relay does not appoint)
         relay = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -151,6 +152,8 @@ class Relay:
                 name, arguments = body.get("name"), body.get("arguments") or {}
                 try:
                     if name == "read_thread":
+                        if arguments.get("threadId") in relay.refused_reads:
+                            return self.reply(400, {"error": relay.refused_reads[arguments["threadId"]]})
                         return self.reply(200, {"result": relay.desktop.read(arguments)})
                     if name != "send_message_to_thread":
                         return self.reply(400, {"error": "Invalid Desktop relay request"})

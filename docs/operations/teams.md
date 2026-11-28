@@ -44,6 +44,30 @@ back if a step fails. New agents start with empty memory and `thread_id: null`
 until their chats are created and recorded with `roster.py set-thread`. The chat
 that starts the first team becomes its Manager.
 
+**Setup status (#454).** `install-team` ends by printing, and storing in `.bot-mode/local/setup-status.json`, which steps of
+the setup are finished: the roster (a Manager chat is bound), the outbox (`outbox.py` installed), the relay route (a usable
+descriptor whose port answers), the Office registration and the delivery proof. `python -B scripts/team.py setup-status
+--project <p>` checks it again at any time and is what the launching agent runs after the chats are recorded. The Office
+registration is `done` when the project is in the Office registry, `waiting for owner consent` when it is not (registering is
+the owner's explicit step, the project onboarding in the Office panel, and no install, doctor or supervisor does it),
+`not applicable` for the Office's own project and `unknown` when the registry cannot be read. The delivery proof is `none`,
+`canary delivered` (the zero-token canary of the outbox was processed: the path to the chat works, nothing was sent) or
+`real report delivered`. The status says "Delivery works" only when every step is finished and the proof is one of the last two;
+a proof from the past with an unfinished step reads "Delivery was proven earlier ... but a step is unfinished now", and
+without a proof it reads "Delivery not proven". Every step that is not finished is listed as not finished. The proof
+counts delivered rows and processed canaries in the queue, which is opened read-only and never created (a queue from before
+the canary still proves a delivered row). The file is project-local and ignored by Git. `setup-status` refuses a path that
+has no `.bot-mode` folder and creates nothing there. A status that cannot be stored (for example a folder or a locked file
+in its place) is a warning on stderr after `install-team`, which still prints its result and exits 0, and an error for
+`setup-status`.
+
+The JSON that `install-team` prints on stdout keeps `installed`, `section`, `room` and `director_proposal` and has the
+additional key `setup_status` (the same object that is stored; its details name the project and relay paths). Known
+limitation: the registry is read from the checkout that holds `team.py` (or from the file named by `CODEX_OFFICE_REGISTRY`,
+as the relay does). The built plugin has no registry of its own, so there a project that is registered in the real Office
+still reads `waiting for owner consent`, which is the conservative answer, unless `CODEX_OFFICE_REGISTRY` names the
+Office's `.bot-mode/local/office-project-roots.json`.
+
 If `~/.codex-bot-mode/config.json` contains `{"chief_of_staff": "<path>"}`, every
 team launch also adds the project to that Chief of Staff's `knowledge/projects.md`
 (once, with the purpose left for the owner to confirm).

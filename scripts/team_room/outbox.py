@@ -591,7 +591,7 @@ def queue_status(project_root):
     db_path = outbox_dir / "queue.sqlite"
     status = {"project": str(project_root), "pending": 0, "oldest_pending_seconds": None, "ambiguous": 0,
               "needs_attention": 0, "recheckable": 0, "expired": 0, "last_delivered_at": None,
-              "relay_reachable": relay_reachable(project_root), "pump_alive": False, "canary": None, "problems": []}
+              "relay_reachable": relay_reachable(project_root), "pump_alive": False, "canary": None, "route_refused": [], "problems": []}
     if not db_path.is_file():
         return status
     status["pump_alive"] = pump_alive(outbox_dir)
@@ -609,6 +609,9 @@ def queue_status(project_root):
         status["canary"] = canary_report(db)  # information only: the canary command raises its own problem
     finally:
         db.close()
+    status["route_refused"] = [{"recipient": name, **entry} for name, entry in sorted(read_route_status(project_root).items())]
+    for entry in status["route_refused"]:
+        status["problems"].append(route_problem_text(entry["recipient"], entry.get("cause")))
     waiting = status["pending"] > 0
     if status["ambiguous"]:
         status["problems"].append("unconfirmed delivery is being reconciled; later reports for the same recipient wait for it, "
@@ -679,8 +682,12 @@ def probe_canary(db, client, project_root, canary):
     try:
         history = client.call("read_thread", {"threadId": thread, "turnLimit": 1, "includeOutputs": False})
     except Exception as error:
+        refusal = route_refusal_kind(error)
+        if refusal:
+            note_route_refused(project_root, canary["target"], refusal)
         db.canary_error(canary["id"], error)
         return error
+    clear_route_refused(project_root, canary["target"])
     read_seconds = time.time() - started
     chat_status, reason = canary_chat_status(history)
     if reason:
@@ -723,7 +730,7 @@ SEND_FALLBACKS = ("Fallbacks, so the Manager still gets your result: (1) write i
                   "(2) keep the closed request in the ledger (requests.py reply); (3) comment on the linked issue.")
 
 
-def send_feedback(depth, oldest, last_delivery, relay_up, pump_running, held=None):
+def send_feedback(depth, oldest, last_delivery, relay_up, pump_running, held=None, refused=None):
     """What `send` tells the sender after queueing: (lines for stdout, lines for stderr). The first two stdout lines keep
     their original wording because other tools read them (doctor reads the receipt)."""
     out = [f"Queue: {depth} pending, oldest {0 if oldest is None else round(oldest)} s.",
@@ -740,7 +747,76 @@ def send_feedback(depth, oldest, last_delivery, relay_up, pump_running, held=Non
                    + SEND_FALLBACKS)
     if held:
         err.append(held_message(held))
+    if refused:
+        err.append("WARNING: " + route_problem_text(*refused) + ". This report stays queued. " + SEND_FALLBACKS)
     return out, err
+
+
+RELAY_REFUSAL = "Unappointed Desktop recipient refused"  # the relay's HTTP 400 text for a chat that is not appointed (#454)
+ROUTE_STATUS = "route-status.json"
+ROUTE_CONSENT = ("registering a project in Office needs the owner's consent (the project onboarding in the Office panel); "
+                 "this tool, the doctor and the supervisor never write the Office registry, and doctor.py shows the registration state")
+
+
+def route_refusal_kind(error):
+    """'named' when the relay says it refused an unappointed chat, 'probable' for any other HTTP 400 (a relay that does not say
+    so, or another invalid request), None for every other failure."""
+    text = str(error)
+    if not isinstance(error, RuntimeError) or not text.startswith("HTTP Error 400"):
+        return None
+    return "named" if RELAY_REFUSAL in text else "probable"
+
+
+def route_problem_text(recipient, cause):
+    if cause == "named":
+        why = f"the relay refused the {recipient} chat: the project is not in the Office registry or the chat is not bound in its roster"
+    else:
+        why = (f"the relay answered HTTP 400 to a read of the {recipient} chat: probably the project is not in the Office registry or the "
+               "chat is not bound in its roster (this relay does not say which)")
+    return f"reports to {recipient} wait because {why}; {ROUTE_CONSENT}"
+
+
+def route_status_file(project_root):
+    return Path(project_root) / ".bot-mode" / "outbox" / ROUTE_STATUS
+
+
+def read_route_status(project_root):
+    """{recipient: {cause, first_at, last_at, count}} of the recipients whose chat the relay refused at the last read. Empty
+    when there is no record or it cannot be read."""
+    try:
+        recipients = json.loads(route_status_file(project_root).read_text(encoding="utf-8"))["recipients"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return {}
+    return {name: entry for name, entry in recipients.items() if isinstance(entry, dict)} if isinstance(recipients, dict) else {}
+
+
+def write_route_status(project_root, recipients):
+    path = route_status_file(project_root)
+    try:
+        if not recipients:
+            path.unlink(missing_ok=True)
+            return
+        temporary = path.with_suffix(".tmp")
+        temporary.write_text(json.dumps({"schema": 1, "recipients": recipients}), encoding="utf-8")
+        os.replace(temporary, path)
+    except OSError:
+        pass  # the record is information: failing to write it never stops a delivery
+
+
+def note_route_refused(project_root, recipient, cause):
+    recipients = read_route_status(project_root)
+    entry = recipients.get(recipient, {})
+    now = now_iso()
+    count = entry.get("count") if isinstance(entry.get("count"), int) else 0
+    recipients[recipient] = {"cause": cause, "first_at": entry.get("first_at") or now, "last_at": now, "count": count + 1}
+    write_route_status(project_root, recipients)
+
+
+def clear_route_refused(project_root, recipient):
+    """The relay answered a read of this recipient's chat: the refusal is over."""
+    recipients = read_route_status(project_root)
+    if recipients.pop(recipient, None) is not None:
+        write_route_status(project_root, recipients)
 
 
 REFUSED_FOR_MISSING_TURN = re.compile(r"HTTP Error 503: [^()]*\(Cannot steer conversation \S+ without an active turn id\)")
@@ -1119,9 +1195,14 @@ def pump_outbox(project_root, max_wait_sec=600, poll_interval=3.0, turn_timeout=
                         # The relay is up and refused this one chat (Desktop answers 503, e.g. thread not found): only this
                         # recipient is set aside, with a growing pause; the others keep moving. The row stays pending.
                         unreadable[key] = unreadable.get(key, 0) + 1
+                        refusal = route_refusal_kind(e)
+                        if refusal:
+                            note_route_refused(project_root, key, refusal)
                         if unreadable[key] == 1:
                             print(f"Outbox pump: read_thread of {item['target_bot']} failed ({e}); setting it aside, "
                                   "other recipients are not held.", file=sys.stderr)
+                            if refusal:
+                                print("Outbox pump: " + route_problem_text(item["target_bot"], refusal), file=sys.stderr)
                         busy_until[key] = time.time() + min(poll_interval * 2 ** unreadable[key], RELAY_WAIT_MAX)
                         relay_wait = poll_interval
                         continue
@@ -1132,6 +1213,7 @@ def pump_outbox(project_root, max_wait_sec=600, poll_interval=3.0, turn_timeout=
                     continue
                 relay_wait = poll_interval
                 unreadable.pop(key, None)
+                clear_route_refused(project_root, key)
 
                 if is_thread_busy(history):
                     # Destination is busy: set it aside for a moment and deliver to the others meanwhile.
@@ -1289,7 +1371,9 @@ def main(argv=None):
             db.close()
 
         print(f"Queued outbox handoff {msg_id} for {args.to}. Turn complete.")
-        lines, warnings = send_feedback(depth, age, last, relay_reachable(project_root), pump_alive(outbox_dir), held)
+        refusal = read_route_status(project_root).get(args.to)
+        lines, warnings = send_feedback(depth, age, last, relay_reachable(project_root), pump_alive(outbox_dir), held,
+                                        (args.to, refusal.get("cause")) if refusal else None)
         for line in lines:
             print(line)
         for line in warnings:
